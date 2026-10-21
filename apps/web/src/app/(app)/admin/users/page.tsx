@@ -3,7 +3,7 @@ import { requireRole } from "@/server/session";
 import { AdminPage } from "../_components/admin-page";
 import { UsersTabs } from "./users-tabs";
 
-export const metadata: Metadata = { title: "Users · Protoloom" };
+export const metadata: Metadata = { title: "Users" };
 
 /** User administration: the users table and the invites that let new people join. */
 export default async function UsersPage({

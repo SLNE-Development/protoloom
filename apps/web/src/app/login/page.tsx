@@ -9,7 +9,7 @@ import { getEnabledSocialProviders } from "@/server/auth";
 import { getAppSession } from "@/server/session";
 import { INVITE_REQUIRED_MESSAGE } from "@/server/user-gate";
 
-export const metadata: Metadata = { title: "Sign in · Protoloom" };
+export const metadata: Metadata = { title: "Sign in" };
 
 /** Better Auth error codes that mean "no account and no invite". */
 const INVITE_ERRORS = new Set(["invite_required", "signup_disabled"]);

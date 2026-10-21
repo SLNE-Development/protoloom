@@ -8,7 +8,7 @@ type Params = { params: Promise<{ repo: string }> };
 
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const { repo } = await params;
-  return { title: `${repo} settings · Protoloom` };
+  return { title: `${repo} settings` };
 }
 
 /** Settings and cleanup policies of one repository (admins only). */

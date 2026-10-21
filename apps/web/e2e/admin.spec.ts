@@ -249,13 +249,10 @@ test.describe("settings", () => {
 
       await visitor.goto("/dashboard");
       await expect(visitor).toHaveURL("/dashboard");
-      // The repository list page belongs to the browse screens; ask the API the page uses directly.
-      const response = await visitor.request.get("/api/trpc/browse.repositories");
-      expect(response.ok()).toBe(true);
-      const body = (await response.json()) as { result: { data: { json: { name: string }[] } } };
-      const names = body.result.data.json.map((repo) => repo.name);
-      expect(names).toContain(PUBLIC_REPO);
-      expect(names).not.toContain(PRIVATE_REPO);
+      await visitor.goto("/browse");
+      await expect(visitor).toHaveURL("/browse");
+      await expect(visitor.getByRole("link", { name: PUBLIC_REPO, exact: true })).toBeVisible();
+      await expect(visitor.getByRole("link", { name: PRIVATE_REPO, exact: true })).toHaveCount(0);
 
       await toggle.click();
       await expect(toggle).not.toBeChecked();

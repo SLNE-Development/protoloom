@@ -35,6 +35,12 @@ export const INVITES = {
   expired: "e2e-invite-expired-token",
 } as const;
 
+/** Repositories the browse fixtures are published to (see `seed-artifacts.ts`). */
+export const ARTIFACTS = {
+  releases: "releases",
+  snapshots: "snapshots",
+} as const;
+
 /** The seeded session token of `userId`. */
 export function sessionToken(userId: string): string {
   return `e2e-session-${userId}`;

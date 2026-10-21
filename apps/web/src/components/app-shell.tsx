@@ -35,6 +35,7 @@ import {
 import { ThemeToggle } from "@protoloom/ui/components/theme-toggle";
 import { isNavActive, navItemsFor, type NavItem } from "@/lib/navigation";
 import type { SessionUser } from "@/server/session";
+import { ArtifactSearch } from "./artifact-search";
 import { CommandMenuProvider, useCommandMenu } from "./command-actions";
 import { CommandMenu } from "./command-menu";
 import { NAV_ICONS } from "./nav-icons";
@@ -189,7 +190,7 @@ export function AppShell({ user, children }: { user: SessionUser | null; childre
           </header>
           {children}
         </SidebarInset>
-        <CommandMenu role={role} />
+        <CommandMenu role={role} artifactSearch={ArtifactSearch} />
       </SidebarProvider>
     </CommandMenuProvider>
   );

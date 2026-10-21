@@ -19,8 +19,22 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   validation_failed: 422,
 };
 
-/** Domain error carrying a stable machine-readable code and its HTTP status. */
+/** Process-wide brand of {@link RegistryError} instances, shared by every copy of this module. */
+const BRAND = Symbol.for("protoloom.RegistryError");
+
+/**
+ * Domain error carrying a stable machine-readable code and its HTTP status.
+ *
+ * `instanceof RegistryError` checks a process-wide brand instead of the prototype chain: Next.js
+ * bundles this package separately per entry point (instrumentation, route handlers), and the
+ * shared server context hands out a registry from one bundle to code from another.
+ */
 export class RegistryError extends Error {
+  static override [Symbol.hasInstance](value: unknown): boolean {
+    return typeof value === "object" && value !== null && (value as Record<symbol, unknown>)[BRAND] === true;
+  }
+
+  readonly [BRAND] = true;
   readonly code: ErrorCode;
   readonly status: number;
   readonly details?: unknown;

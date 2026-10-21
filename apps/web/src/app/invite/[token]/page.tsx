@@ -13,7 +13,7 @@ import { getInviteStatus } from "@/server/invite-status";
 import { getAppSession } from "@/server/session";
 import { prepareInviteSignIn } from "./actions";
 
-export const metadata: Metadata = { title: "Invite · Protoloom" };
+export const metadata: Metadata = { title: "Invite" };
 
 const ROLE_SUMMARY = {
   admin: "Full control: repositories, users, settings and the audit log.",
