@@ -36,7 +36,8 @@ export function createS3Store(opts: S3StoreOptions): BlobStore {
         if (!res.Body) return null;
         return Buffer.from(await res.Body.transformToByteArray());
       } catch (error) {
-        if (error instanceof S3ServiceException && (error.name === "NoSuchKey" || error.$metadata.httpStatusCode === 404)) {
+        // Only a missing object counts as "not found"; NoSuchBucket (also a 404) is a real error.
+        if (error instanceof S3ServiceException && (error.name === "NoSuchKey" || error.name === "NotFound")) {
           return null;
         }
         throw error;

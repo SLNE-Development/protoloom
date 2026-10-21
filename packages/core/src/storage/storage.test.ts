@@ -13,10 +13,23 @@ function sharedSuite(name: string, make: () => Promise<{ store: BlobStore; clean
     const prefix = `t${Date.now()}`;
     const key = (n: string) => `${prefix}/repo/dev.group/name/1.0.0/${n}.tar.gz`;
 
+    const created = new Set<string>();
+
     beforeAll(async () => {
-      ({ store, cleanup } = await make());
+      const made = await make();
+      cleanup = made.cleanup;
+      store = {
+        ...made.store,
+        put: (k, d) => {
+          created.add(k);
+          return made.store.put(k, d);
+        },
+      };
     });
-    afterAll(async () => cleanup());
+    afterAll(async () => {
+      for (const k of created) await store.delete(k);
+      await cleanup();
+    });
 
     it("put then get returns the same bytes", async () => {
       const data = Buffer.from([0, 1, 2, 255, 128, 7]);
@@ -89,16 +102,22 @@ describe("local store specifics", () => {
 
 const s3Endpoint = process.env.S3_TEST_ENDPOINT;
 describe.skipIf(!s3Endpoint)("s3 store", () => {
-  sharedSuite("s3 (MinIO)", async () => ({
-    store: createS3Store({
-      endpoint: s3Endpoint,
-      bucket: process.env.S3_TEST_BUCKET ?? "protoloom",
-      region: "us-east-1",
-      accessKeyId: process.env.S3_TEST_ACCESS_KEY_ID ?? "minioadmin",
-      secretAccessKey: process.env.S3_TEST_SECRET_ACCESS_KEY ?? "minioadmin",
-    }),
+  const s3Opts = {
+    endpoint: s3Endpoint,
+    bucket: process.env.S3_TEST_BUCKET ?? "protoloom",
+    region: "us-east-1",
+    accessKeyId: process.env.S3_TEST_ACCESS_KEY_ID ?? "minioadmin",
+    secretAccessKey: process.env.S3_TEST_SECRET_ACCESS_KEY ?? "minioadmin",
+  };
+  sharedSuite("s3 (S3-compatible server)", async () => ({
+    store: createS3Store(s3Opts),
     cleanup: async () => {},
   }));
+
+  it("throws (rather than returning null) when the bucket does not exist", async () => {
+    const store = createS3Store({ ...s3Opts, bucket: "protoloom-no-such-bucket" });
+    await expect(store.get("a/b/c.tar.gz")).rejects.toThrow();
+  });
 });
 
 describe("createBlobStoreFromEnv", () => {
