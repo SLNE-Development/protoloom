@@ -65,13 +65,16 @@ export function ConnectedAccounts({
     router.refresh();
   }
 
+  // Only accounts of enabled providers can still sign the user in.
+  const usable = linked.filter((entry) => (providers as string[]).includes(entry.providerId));
+
   return (
     <ul className="divide-y border-t">
       {providers.map((provider) => {
-        const account = linked.find((entry) => entry.providerId === provider);
+        const account = usable.find((entry) => entry.providerId === provider);
         const connected = account !== undefined;
         // Never offer to disconnect the only remaining sign-in method.
-        const lastOne = connected && linked.length <= 1;
+        const lastOne = connected && usable.length <= 1;
         return (
           <li key={provider} data-testid={`provider-${provider}`} className="flex items-center gap-3 px-4 py-3">
             <ProviderIcon provider={provider} className="size-5 shrink-0" />
