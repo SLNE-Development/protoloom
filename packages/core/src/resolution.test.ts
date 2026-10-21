@@ -65,6 +65,61 @@ describe("resolveGraph", () => {
     expect((err as RegistryError).details).toMatchObject({ path: ["g:a:1", "g:missing:1"] });
   });
 
+  it("ignores requests from superseded versions (A: conflicts)", async () => {
+    const lookup = memoryLookup({
+      "g:a:1": ["g:x:2", "g:b:1.0", "g:c:1"],
+      "g:b:1.0": ["g:x:1"],
+      "g:b:2.0": [],
+      "g:c:1": ["g:b:2.0"],
+      "g:x:2": [],
+    });
+    const r = await resolveGraph([c("a", "1")], lookup);
+    expect(r.nodes.map((n) => formatCoordinate(n.coordinate))).toEqual(["g:a:1", "g:b:2.0", "g:c:1", "g:x:2"]);
+    expect(r.conflicts).toEqual([{ group: "g", name: "b", requested: ["1.0", "2.0"], selected: "2.0" }]);
+  });
+
+  it("does not let a superseded version raise a selection (B)", async () => {
+    const lookup = memoryLookup({
+      "g:a:1": ["g:x:2", "g:b:1.0", "g:c:1"],
+      "g:b:1.0": ["g:x:9"],
+      "g:b:2.0": [],
+      "g:c:1": ["g:b:2.0"],
+      "g:x:2": [],
+      "g:x:9": [],
+    });
+    const r = await resolveGraph([c("a", "1")], lookup);
+    expect(r.nodes.map((n) => formatCoordinate(n.coordinate))).toContain("g:x:2");
+    expect(r.nodes.map((n) => formatCoordinate(n.coordinate))).not.toContain("g:x:9");
+  });
+
+  it("does not throw for a missing dep of a superseded version (C)", async () => {
+    const lookup = memoryLookup({
+      "g:a:1": ["g:b:1.0", "g:c:1"],
+      "g:b:1.0": ["g:missing:1"],
+      "g:b:2.0": [],
+      "g:c:1": ["g:b:2.0"],
+    });
+    const r = await resolveGraph([c("a", "1")], lookup);
+    expect(r.nodes.map((n) => formatCoordinate(n.coordinate))).toEqual(["g:a:1", "g:b:2.0", "g:c:1"]);
+  });
+
+  it("is independent of dependency declaration order", async () => {
+    const graph: Record<string, string[]> = {
+      "g:a:1": ["g:x:2", "g:b:1.0", "g:c:1"],
+      "g:b:1.0": ["g:x:9"],
+      "g:b:2.0": [],
+      "g:c:1": ["g:b:2.0"],
+      "g:x:2": [],
+      "g:x:9": [],
+    };
+    const reversed = { ...graph, "g:a:1": [...(graph["g:a:1"] as string[])].reverse() };
+    const r1 = await resolveGraph([c("a", "1")], memoryLookup(graph));
+    const r2 = await resolveGraph([c("a", "1")], memoryLookup(reversed));
+    const ids = (r: { nodes: ResolvedNode[] }) => r.nodes.map((n) => formatCoordinate(n.coordinate));
+    expect(ids(r2)).toEqual(ids(r1));
+    expect(r2.conflicts).toEqual(r1.conflicts);
+  });
+
   it("selects the highest version when roots request two versions", async () => {
     const lookup = memoryLookup({ "g:a:1": [], "g:a:2": [] });
     const r = await resolveGraph([c("a", "1"), c("a", "2")], lookup);

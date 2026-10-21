@@ -28,87 +28,99 @@ export interface Resolution {
 }
 
 const keyOf = (c: Coordinate): string => `${c.group}:${c.name}`;
+const byString = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+const MAX_ITERATIONS = 10_000;
+
+function addRequest(requests: Map<string, Set<string>>, c: Coordinate): void {
+  let versions = requests.get(keyOf(c));
+  if (!versions) requests.set(keyOf(c), (versions = new Set()));
+  versions.add(c.version);
+}
+
+function highest(requests: Map<string, Set<string>>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [key, versions] of requests) {
+    out.set(key, [...versions].sort(compareVersions).at(-1) as string);
+  }
+  return out;
+}
 
 /**
  * Resolves the transitive dependency closure of `roots`, selecting the highest
- * requested version of every `group:name`. Each exact coordinate is looked up at
- * most once; cycles terminate. Throws `RegistryError("not_found")` with
- * `details.path` (root to missing coordinate) when a dependency does not exist.
+ * version of every `group:name` requested by the live graph (the roots plus the
+ * dependencies of live nodes). Requests from superseded versions are ignored, so
+ * the result does not depend on declaration order. Iterates to a fixpoint; each
+ * exact coordinate is looked up at most once and cycles terminate. Throws
+ * `RegistryError("not_found")` with `details.path` (root to missing coordinate)
+ * when a coordinate of the live closure does not exist.
  */
 export async function resolveGraph(roots: Coordinate[], lookup: Lookup): Promise<Resolution> {
-  const selected = new Map<string, string>();
-  const requested = new Map<string, Set<string>>();
-  const parents = new Map<string, string | null>();
-  const nodes = new Map<string, ResolvedNode>();
-  const worklist: Coordinate[] = [];
+  const cache = new Map<string, ResolvedNode | null>();
 
-  const request = (c: Coordinate, parent: string | null): void => {
-    const key = keyOf(c);
-    let versions = requested.get(key);
-    if (!versions) requested.set(key, (versions = new Set()));
-    versions.add(c.version);
-    const current = selected.get(key);
-    if (current === undefined || compareVersions(c.version, current) > 0) {
-      selected.set(key, c.version);
+  let requested = new Map<string, Set<string>>();
+  for (const root of roots) addRequest(requested, root);
+  let selected = highest(requested);
+
+  for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+    // Walk the live closure under the current selection.
+    const live = new Map<string, ResolvedNode>();
+    const parents = new Map<string, string | null>();
+    const seen = new Set<string>();
+    const queue: Coordinate[] = [];
+    const reach = (key: string, parent: string | null): void => {
+      if (seen.has(key)) return;
+      seen.add(key);
+      const sep = key.lastIndexOf(":");
+      const c = { group: key.slice(0, sep), name: key.slice(sep + 1), version: selected.get(key) as string };
       parents.set(formatCoordinate(c), parent);
-      worklist.push(c);
+      queue.push(c);
+    };
+    for (const root of roots) reach(keyOf(root), null);
+    for (let c = queue.shift(); c; c = queue.shift()) {
+      const id = formatCoordinate(c);
+      let node = cache.get(id);
+      if (node === undefined) {
+        node = await lookup(c);
+        cache.set(id, node);
+      }
+      if (!node) {
+        const path: string[] = [];
+        for (let cur: string | null | undefined = id; cur; cur = parents.get(cur)) path.unshift(cur);
+        throw new RegistryError("not_found", `Dependency ${id} was not found`, { path });
+      }
+      live.set(keyOf(c), node);
+      for (const dep of node.dependencies) {
+        if (selected.has(keyOf(dep))) reach(keyOf(dep), id); // new keys are picked up after the recompute
+      }
     }
-  };
 
-  const pathTo = (c: Coordinate): string[] => {
-    const path: string[] = [];
-    let cur: string | null | undefined = formatCoordinate(c);
-    while (cur) {
-      path.unshift(cur);
-      cur = parents.get(cur);
+    // Recompute requests from the roots and live nodes only.
+    requested = new Map();
+    for (const root of roots) addRequest(requested, root);
+    for (const node of live.values()) for (const dep of node.dependencies) addRequest(requested, dep);
+    const next = highest(requested);
+
+    const stable = next.size === selected.size && [...next].every(([k, v]) => selected.get(k) === v);
+    if (stable) {
+      const conflicts: Conflict[] = [];
+      for (const [key, versions] of requested) {
+        if (versions.size < 2) continue;
+        const { group, name } = (live.get(key) as ResolvedNode).coordinate;
+        conflicts.push({
+          group,
+          name,
+          requested: [...versions].sort(compareVersions),
+          selected: selected.get(key) as string,
+        });
+      }
+      return {
+        nodes: [...live.entries()].sort(([a], [b]) => byString(a, b)).map(([, n]) => n),
+        conflicts: conflicts.sort((a, b) => byString(`${a.group}:${a.name}`, `${b.group}:${b.name}`)),
+      };
     }
-    return path;
-  };
-
-  for (const root of roots) request(root, null);
-
-  for (let c = worklist.shift(); c; c = worklist.shift()) {
-    if (selected.get(keyOf(c)) !== c.version) continue; // superseded by a higher version
-    const id = formatCoordinate(c);
-    if (nodes.has(id)) continue;
-    const node = await lookup(c);
-    if (!node) {
-      throw new RegistryError("not_found", `Dependency ${id} was not found`, { path: pathTo(c) });
-    }
-    nodes.set(id, node);
-    for (const dep of node.dependencies) request(dep, id);
+    selected = next;
   }
-
-  // Walk again following only selected versions, so deps of superseded versions drop out.
-  const final = new Map<string, ResolvedNode>();
-  const stack = roots.map(keyOf);
-  while (stack.length > 0) {
-    const key = stack.pop() as string;
-    if (final.has(key)) continue;
-    const version = selected.get(key) as string;
-    const [group, name] = [key.slice(0, key.lastIndexOf(":")), key.slice(key.lastIndexOf(":") + 1)];
-    const node = nodes.get(formatCoordinate({ group, name, version })) as ResolvedNode;
-    final.set(key, node);
-    for (const dep of node.dependencies) stack.push(keyOf(dep));
-  }
-
-  const conflicts: Conflict[] = [];
-  for (const [key, versions] of requested) {
-    if (versions.size < 2 || !final.has(key)) continue;
-    const node = final.get(key) as ResolvedNode;
-    conflicts.push({
-      group: node.coordinate.group,
-      name: node.coordinate.name,
-      requested: [...versions].sort(compareVersions),
-      selected: selected.get(key) as string,
-    });
-  }
-
-  const byKey = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
-  return {
-    nodes: [...final.entries()].sort(([a], [b]) => byKey(a, b)).map(([, n]) => n),
-    conflicts: conflicts.sort((a, b) => byKey(`${a.group}:${a.name}`, `${b.group}:${b.name}`)),
-  };
+  throw new RegistryError("invalid_request", "Dependency resolution did not converge");
 }
 
 /** Finds file paths claimed by more than one coordinate. */
@@ -127,5 +139,5 @@ export function findPathCollisions(
   return [...claims.entries()]
     .filter(([, owners]) => owners.size > 1)
     .map(([path, owners]) => ({ path, coordinates: [...owners].sort() }))
-    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    .sort((a, b) => byString(a.path, b.path));
 }
