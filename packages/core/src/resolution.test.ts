@@ -103,6 +103,19 @@ describe("resolveGraph", () => {
     expect(r.nodes.map((n) => formatCoordinate(n.coordinate))).toEqual(["g:a:1", "g:b:2.0", "g:c:1"]);
   });
 
+  it.each([
+    ["g:b:1", "g:c:1"],
+    ["g:c:1", "g:b:1"],
+  ])("does not throw for a coordinate only selected in an intermediate pass (%s, %s)", async (...deps) => {
+    const lookup = memoryLookup({
+      "g:a:1": deps,
+      "g:c:1": ["g:b:2"],
+      "g:b:2": [],
+    });
+    const r = await resolveGraph([c("a", "1")], lookup);
+    expect(r.nodes.map((n) => formatCoordinate(n.coordinate))).toEqual(["g:a:1", "g:b:2", "g:c:1"]);
+  });
+
   it("is independent of dependency declaration order", async () => {
     const graph: Record<string, string[]> = {
       "g:a:1": ["g:x:2", "g:b:1.0", "g:c:1"],

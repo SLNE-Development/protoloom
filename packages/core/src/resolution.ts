@@ -67,6 +67,7 @@ export async function resolveGraph(roots: Coordinate[], lookup: Lookup): Promise
     const parents = new Map<string, string | null>();
     const seen = new Set<string>();
     const queue: Coordinate[] = [];
+    const missing: { id: string; path: string[] }[] = [];
     const reach = (key: string, parent: string | null): void => {
       if (seen.has(key)) return;
       seen.add(key);
@@ -84,9 +85,11 @@ export async function resolveGraph(roots: Coordinate[], lookup: Lookup): Promise
         cache.set(id, node);
       }
       if (!node) {
+        // Only an error if this coordinate is still live once the selection is stable.
         const path: string[] = [];
         for (let cur: string | null | undefined = id; cur; cur = parents.get(cur)) path.unshift(cur);
-        throw new RegistryError("not_found", `Dependency ${id} was not found`, { path });
+        missing.push({ id, path });
+        continue;
       }
       live.set(keyOf(c), node);
       for (const dep of node.dependencies) {
@@ -102,6 +105,10 @@ export async function resolveGraph(roots: Coordinate[], lookup: Lookup): Promise
 
     const stable = next.size === selected.size && [...next].every(([k, v]) => selected.get(k) === v);
     if (stable) {
+      const first = missing.sort((a, b) => byString(a.id, b.id))[0];
+      if (first) {
+        throw new RegistryError("not_found", `Dependency ${first.id} was not found`, { path: first.path });
+      }
       const conflicts: Conflict[] = [];
       for (const [key, versions] of requested) {
         if (versions.size < 2) continue;
