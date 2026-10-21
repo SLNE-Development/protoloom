@@ -136,6 +136,41 @@ class LocalModulesTest {
     }
 
     @Test
+    fun `a local module substitutes a remote artifact with its group and name`() {
+        // dev.example:x:1.0.0 depends on the published dev.example:contracts:1.0.0, which is :contracts here.
+        stub.coordinate = "dev.example:x:1.0.0"
+        stub.files = mapOf("x/v1/x.proto" to remoteContent)
+        stub.extraArtifacts = mapOf("dev.example:contracts:1.0.0" to mapOf("contracts/v1/a.proto" to "// remote copy\n"))
+        writeProjects(contractsDependencies = "")
+        projectDir.resolve("service/build.gradle.kts").appendText("dependencies {\n    protoloom(\"dev.example:x:1.0.0\")\n}\n")
+
+        val result = gradle(":service:fetchProtos", "--info").build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":service:fetchProtos")?.outcome)
+        assertEquals(listOf("/api/v1/repos/releases/artifacts/dev.example/x/1.0.0/archive"), stub.archivePaths.toList())
+        assertEquals(1, Regex("Using project :contracts instead of dev.example:contracts:1.0.0").findAll(result.output).count(), result.output)
+        val protos = projectDir.resolve("service/build/protoloom/protos")
+        assertEquals(CONTRACTS_PROTO, protos.resolve("contracts/v1/a.proto").readText())
+        assertEquals(remoteContent, protos.resolve("x/v1/x.proto").readText())
+    }
+
+    @Test
+    fun `a remote artifact with another name still collides with a local module`() {
+        stub.coordinate = "dev.example:x:1.0.0"
+        stub.files = mapOf("x/v1/x.proto" to remoteContent, "contracts/v1/a.proto" to "// x's copy\n")
+        stub.extraArtifacts = mapOf("dev.example:contracts:1.0.0" to mapOf("contracts/v1/a.proto" to "// remote copy\n"))
+        writeProjects(contractsDependencies = "")
+        projectDir.resolve("service/build.gradle.kts").appendText("dependencies {\n    protoloom(\"dev.example:x:1.0.0\")\n}\n")
+
+        val result = gradle(":service:fetchProtos").buildAndFail()
+
+        assertTrue(
+            result.output.contains("File contracts/v1/a.proto is provided by both project :contracts and dev.example:x:1.0.0"),
+            result.output,
+        )
+    }
+
+    @Test
     fun `publishProtos declares the local module by its publishing coordinates`() {
         writeProjects()
         projectDir.resolve("service/src/main/proto/service/v1").mkdirs()

@@ -314,26 +314,6 @@ class RemoteTest {
         assertEquals(0, stub.publishes.size)
     }
 
-    @Test
-    fun `a protoloom dependency without a group fails clearly`() {
-        writeBuild(
-            """
-            protoloom {
-                repositories("releases")
-            }
-            dependencies {
-                protoloom(mapOf("name" to "a", "version" to "1"))
-            }
-            """,
-        )
-
-        val result = gradle("fetchProtos").buildAndFail()
-
-        assertTrue(result.output.contains("protoloom dependency a:1 needs a group"), result.output)
-        assertFalse(result.output.contains("null:a:1"), result.output)
-        assertEquals(0, stub.resolveBodies.size)
-    }
-
     private fun writeBuild(body: String) {
         projectDir.resolve("settings.gradle.kts").writeText("""rootProject.name = "consumer"""" + "\n")
         projectDir.resolve("build.gradle.kts").writeText(

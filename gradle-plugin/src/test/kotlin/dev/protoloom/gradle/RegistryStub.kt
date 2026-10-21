@@ -27,7 +27,7 @@ internal class CapturedRequest(
 
 /**
  * A minimal stand-in for the Protoloom REST API that records what the plugin sends. `/resolve`
- * always answers with one artifact, [coordinate], whose archive holds [files].
+ * always answers with [coordinate], whose archive holds [files], followed by [extraArtifacts].
  */
 internal class RegistryStub : AutoCloseable {
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -38,6 +38,9 @@ internal class RegistryStub : AutoCloseable {
 
     @Volatile var coordinate = "dev.example:a:1.0.0"
     @Volatile var files: Map<String, String> = mapOf("a/v1/a.proto" to protoContent)
+
+    /** Further artifacts `/resolve` returns, coordinate → archive contents. */
+    @Volatile var extraArtifacts: Map<String, Map<String, String>> = emptyMap()
 
     /** Origin written into `archiveUrl`; defaults to this stub's own [url]. */
     @Volatile var archiveOrigin: String? = null
@@ -56,14 +59,16 @@ internal class RegistryStub : AutoCloseable {
         server.createContext("/api/v1/resolve") { exchange ->
             authorizations += exchange.requestHeaders.getFirst("Authorization")
             resolveBodies += exchange.requestBody.readBytes().toString(Charsets.UTF_8)
-            val (group, name, version) = coordinate.split(":")
-            val sha256 = sha256(tarGz(files))
             val origin = archiveOrigin ?: url
-            val body = """
-                {"artifacts":[{"repository":"releases","coordinate":"$coordinate","group":"$group",
-                "name":"$name","version":"$version","buildNumber":1,"sha256":"$sha256",
-                "archiveUrl":"$origin/api/v1/repos/releases/artifacts/$group/$name/$version/archive"}],"conflicts":[]}
-            """.trimIndent()
+            val artifacts = artifacts().entries.joinToString(",") { (coordinate, files) ->
+                val (group, name, version) = coordinate.split(":")
+                """
+                {"repository":"releases","coordinate":"$coordinate","group":"$group",
+                "name":"$name","version":"$version","buildNumber":1,"sha256":"${sha256(tarGz(files))}",
+                "archiveUrl":"$origin/api/v1/repos/releases/artifacts/$group/$name/$version/archive"}
+                """.trimIndent()
+            }
+            val body = """{"artifacts":[$artifacts],"conflicts":[]}"""
             exchange.respond(200, "application/json", body.toByteArray())
         }
         server.createContext("/api/v1/repos/") { exchange ->
@@ -72,6 +77,12 @@ internal class RegistryStub : AutoCloseable {
                     authorizations += exchange.requestHeaders.getFirst("Authorization")
                     archivePaths += exchange.requestURI.path
                     archiveDownloads.incrementAndGet()
+                    val (group, name, version) = exchange.requestURI.path.split("/").dropLast(1).takeLast(3)
+                    val files = artifacts()["$group:$name:$version"]
+                    if (files == null) {
+                        exchange.respond(404, "text/plain", ByteArray(0))
+                        return@createContext
+                    }
                     val archive = tarGz(files)
                     val bytes = if (corruptArchive) tarGz(files.mapValues { "tampered" }) else archive
                     exchange.responseHeaders.add("x-protoloom-sha256", sha256(archive))
@@ -92,6 +103,8 @@ internal class RegistryStub : AutoCloseable {
         }
         server.start()
     }
+
+    private fun artifacts(): Map<String, Map<String, String>> = mapOf(coordinate to files) + extraArtifacts
 
     override fun close() = server.stop(0)
 }
