@@ -6,6 +6,7 @@ import { apiKey } from "@better-auth/api-key";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { account, apikey, session, user, verification, type Db } from "@protoloom/db";
 import { env, type Env } from "../env";
+import { accountAuditHooks } from "./account-audit";
 import { isSecureUrl } from "./invite";
 import { trackTransactions } from "./transactions";
 import { createUserGate } from "./user-gate";
@@ -134,7 +135,7 @@ export function buildAuthOptions(db: Db, source: AuthEnv = env) {
     }),
     socialProviders: socialProviders(source),
     user: { validateUserInfo: gate.validateUserInfo },
-    databaseHooks: gate.databaseHooks,
+    databaseHooks: { ...gate.databaseHooks, account: accountAuditHooks(db) },
     account: {
       accountLinking: {
         enabled: true,

@@ -32,6 +32,7 @@ The audit log records changes with who made them, when, and what they touched:
 - deletions by cleanup policies (`cleanup.delete`, by the system, with the rule's reason),
 - API keys created and revoked,
 - invites created and revoked, and role, ban and removal changes of users,
+- accounts created through an invite or `INITIAL_ADMIN` (`user.create`, with the role and how the account was created), and sign-in providers connected or disconnected on the Account page (`account.link`, `account.unlink`),
 - repository and setting changes.
 
 The actor is a user, an API key, or `system` for scheduled cleanup. Filter by action to find, for example, every deletion of the last week.
