@@ -1,0 +1,105 @@
+# Production-style stack: web + worker (one image), postgres, valkey.
+#
+#   cp .env.example .env   # fill in the required values
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Storage defaults to a local volume shared by web and worker. For S3, set STORAGE_DRIVER=s3 and the
+# S3_* variables (see the commented block below). Run your own S3 provider, or copy the seaweedfs
+# services from docker-compose.coolify.yml.
+
+x-protoloom-env: &protoloom-env
+  DATABASE_URL: postgres://protoloom:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/protoloom
+  VALKEY_URL: redis://valkey:6379
+  STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+  STORAGE_LOCAL_PATH: /data/storage
+  # S3 (only used with STORAGE_DRIVER=s3), set in .env:
+  #   S3_ENDPOINT=https://s3.example.com   (leave empty for AWS)
+  #   S3_BUCKET=protoloom
+  #   S3_REGION=us-east-1
+  #   S3_ACCESS_KEY_ID=...
+  #   S3_SECRET_ACCESS_KEY=...
+  S3_ENDPOINT: ${S3_ENDPOINT:-}
+  S3_BUCKET: ${S3_BUCKET:-}
+  S3_REGION: ${S3_REGION:-}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+  BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET (openssl rand -base64 48)}
+  BETTER_AUTH_URL: ${BETTER_AUTH_URL:?Set the public https URL, e.g. https://protos.example.com}
+  INITIAL_ADMIN: ${INITIAL_ADMIN:-}
+  GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+  GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+  DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+  DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: protoloom:local
+    command: ["web"]
+    restart: unless-stopped
+    environment: *protoloom-env
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - storage-data:/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: protoloom:local
+    command: ["worker"]
+    restart: unless-stopped
+    environment: *protoloom-env
+    volumes:
+      - storage-data:/data/storage
+    depends_on:
+      app:
+        condition: service_healthy # the app container applies migrations
+    healthcheck:
+      # The worker has no HTTP port; check that its node process is alive.
+      test: ["CMD", "node", "-e", "const f=require('fs');process.exit(f.readdirSync('/proc').some(p=>/^\\d+$/.test(p)&&f.readFileSync('/proc/'+p+'/cmdline','utf8').includes('apps/worker/'+'dist'))?0:1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: protoloom
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: protoloom
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U protoloom -d protoloom"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  valkey:
+    image: valkey/valkey:8.1-alpine
+    restart: unless-stopped
+    # BullMQ requires noeviction.
+    command: ["valkey-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  postgres-data:
+  valkey-data:
+  storage-data:

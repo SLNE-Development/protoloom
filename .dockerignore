@@ -1,0 +1,16 @@
+.git
+.superpowers
+.claude
+node_modules
+**/node_modules
+**/.next
+**/dist
+**/build
+.turbo
+.gradle
+**/.gradle
+.env
+.env.*
+!.env.example
+docs
+coverage
