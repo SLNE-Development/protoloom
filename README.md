@@ -155,6 +155,8 @@ npx protoloom fetch [--config protoloom.json] [--out ./protos]
 The app container applies database migrations on start; the worker waits for the app to be healthy.
 
 The released image is `ghcr.io/slne-development/protoloom:latest` (also tagged with each version, e.g. `:0.1.0`).
+`pull` works once the first release has been published (see [Releases](#releases)); until then build from the
+checkout with `up -d --build`.
 
 ```sh
 cp .env.example .env
@@ -177,6 +179,9 @@ Commands: `web` (default, migrates first) and `worker`. Set `RUN_MIGRATIONS=true
 ## Deploy on Coolify
 
 Create a **Docker Compose** resource from this repository and select `docker-compose.coolify.yml`.
+The `protoloom` and `worker` services pull the published image `ghcr.io/slne-development/protoloom:latest`
+(set `PROTOLOOM_IMAGE` to pin a version). To build from source instead (for example before the first release),
+add `build: { context: ., dockerfile: docker/Dockerfile }` to both services and set `PROTOLOOM_IMAGE=protoloom:local`.
 It contains `protoloom` (web), `worker`, `postgres`, `valkey`, `seaweedfs` (bundled S3 storage, bucket created
 by a one-shot init container) and `seaweedfs-admin` (the `weed admin` panel).
 
