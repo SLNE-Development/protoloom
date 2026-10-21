@@ -3,24 +3,33 @@ package dev.protoloom.gradle
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.ArchiveOperations
+import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.DuplicatesStrategy
 import org.gradle.api.file.FileSystemOperations
+import org.gradle.api.file.FileTree
+import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.work.DisableCachingByDefault
 import java.io.File
 import javax.inject.Inject
 
 /**
- * Resolves the `protoloom` dependencies on the server and extracts every resolved artifact into one
- * merged proto root. Archives are cached by checksum, so releases download once while snapshots are
- * re-checked on every run through `/resolve`.
+ * Builds one merged proto root from the `protoloom` dependencies: the `.proto` files of local
+ * modules are copied as they are, and the remote dependencies (this module's own plus those of all
+ * local modules) are resolved on the server in one `/resolve` call and extracted next to them.
+ * Archives are cached by checksum, so releases download once while snapshots are re-checked on
+ * every run through `/resolve`.
  */
 @DisableCachingByDefault(because = "Always re-resolves against the registry; archives are cached by checksum instead")
 abstract class FetchProtosTask : DefaultTask() {
@@ -34,9 +43,23 @@ abstract class FetchProtosTask : DefaultTask() {
     @get:Input
     abstract val repositories: ListProperty<String>
 
-    /** Root coordinates (`g:n:v`) to resolve. */
+    /** This module's direct external coordinates (`g:n:v`) to resolve. */
     @get:Input
     abstract val dependencies: ListProperty<String>
+
+    /** Proto source directories of the local modules this module depends on. */
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val localSources: ConfigurableFileCollection
+
+    /** Absolute path of each [localSources] directory → project path, used to name it in errors. */
+    @get:Internal
+    abstract val localSourceProjects: MapProperty<String, String>
+
+    /** [LocalManifest]s of the local modules; their `external` lists join the resolved roots. */
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val localManifests: ConfigurableFileCollection
 
     /** Content-addressed archive cache, `<gradleUserHome>/caches/protoloom`. */
     @get:Internal
@@ -52,36 +75,48 @@ abstract class FetchProtosTask : DefaultTask() {
     @get:Inject
     protected abstract val fileSystemOperations: FileSystemOperations
 
+    @get:Inject
+    protected abstract val objects: ObjectFactory
+
     init {
         outputs.upToDateWhen { false }
     }
 
     @TaskAction
     fun fetch() {
-        val roots = dependencies.get()
-        if (roots.isEmpty()) {
-            fileSystemOperations.delete { delete(outputDir) }
-            outputDir.get().asFile.mkdirs()
-            return
+        val roots = (dependencies.get() + localManifests.files.sorted().flatMap { readLocalManifest(it).external }).distinct()
+        val origins = localSourceProjects.get()
+        val local = localSources.files.sorted().filter { it.isDirectory }.map { dir ->
+            Origin(origins[dir.absolutePath]?.let { "project $it" } ?: dir.path, protoFiles(dir))
         }
+        val remote = if (roots.isEmpty()) emptyList() else fetchRemote(roots)
+
+        val sources = local + remote
+        checkForCollisions(sources)
+        fileSystemOperations.sync {
+            into(outputDir)
+            duplicatesStrategy = DuplicatesStrategy.FAIL
+            sources.forEach { from(it.files) }
+        }
+        outputDir.get().asFile.mkdirs()
+    }
+
+    private fun fetchRemote(roots: List<String>): List<Origin> {
         val repos = repositories.get()
         if (repos.isEmpty()) {
             throw GradleException("protoloom.repositories is empty. Add the repositories to resolve from, for example repositories(\"releases\").")
         }
-
         val client = protoloomClient(url.orNull, token.orNull)
         val resolution = client.resolve(repos, roots)
         resolution.conflicts.forEach { logger.lifecycle("Protoloom resolved a version conflict: $it") }
-
-        val archives = resolution.artifacts.map { artifact -> artifact to cachedArchive(client, artifact) }
-        checkForCollisions(archives)
-
-        fileSystemOperations.sync {
-            into(outputDir)
-            duplicatesStrategy = DuplicatesStrategy.FAIL
-            archives.forEach { (_, archive) -> from(archiveOperations.tarTree(archiveOperations.gzip(archive))) }
+        return resolution.artifacts.map { artifact ->
+            Origin(artifact.coordinate, archiveOperations.tarTree(archiveOperations.gzip(cachedArchive(client, artifact))))
         }
     }
+
+    /** The `.proto` files of a local module's source directory, the same set `packProtos` would publish. */
+    private fun protoFiles(dir: File): FileTree =
+        objects.fileTree().from(dir).matching { include(ProtoloomPlugin.PROTO_PATTERN) }
 
     private fun cachedArchive(client: ProtoloomClient, artifact: ResolvedArtifact): File {
         if (!SHA256.matches(artifact.sha256)) {
@@ -97,20 +132,23 @@ abstract class FetchProtosTask : DefaultTask() {
         return file
     }
 
-    /** Fails when two artifacts contain the same file path, naming both. */
-    private fun checkForCollisions(archives: List<Pair<ResolvedArtifact, File>>) {
+    /** Fails when two origins (local modules or remote artifacts) contain the same file path, naming both. */
+    private fun checkForCollisions(sources: List<Origin>) {
         val owners = mutableMapOf<String, String>()
-        archives.forEach { (artifact, archive) ->
-            archiveOperations.tarTree(archiveOperations.gzip(archive)).visit {
+        sources.forEach { source ->
+            source.files.visit {
                 if (!isDirectory) {
-                    val previous = owners.put(relativePath.pathString, artifact.coordinate)
+                    val previous = owners.put(relativePath.pathString, source.name)
                     if (previous != null) {
-                        throw GradleException("File ${relativePath.pathString} is provided by both $previous and ${artifact.coordinate}")
+                        throw GradleException("File ${relativePath.pathString} is provided by both $previous and ${source.name}")
                     }
                 }
             }
         }
     }
+
+    /** Files contributed to the proto root, with the name of where they come from. */
+    private class Origin(val name: String, val files: FileTree)
 
     private companion object {
         val SHA256 = Regex("^[0-9a-f]{64}$")

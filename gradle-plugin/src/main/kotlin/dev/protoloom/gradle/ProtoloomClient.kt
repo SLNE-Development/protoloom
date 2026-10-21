@@ -6,6 +6,8 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import org.gradle.api.GradleException
+import org.gradle.api.logging.Logger
+import org.gradle.api.logging.Logging
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -79,13 +81,14 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
 
     /**
      * Downloads [artifact]'s archive to [target], verifying its SHA-256 against the resolved checksum.
-     * The file only appears at [target] once it is complete and verified.
+     * The file only appears at [target] once it is complete and verified. The archive is always
+     * requested from the configured server (see [archiveUri]), so the token never leaves its origin.
      */
     fun download(artifact: ResolvedArtifact, target: File) {
         target.parentFile.mkdirs()
         val temp = File(target.parentFile, "${target.name}.${UUID.randomUUID()}.tmp")
         try {
-            val request = request(URI.create(artifact.archiveUrl)).GET().build()
+            val request = request(archiveUri(artifact.archiveUrl)).GET().build()
             val response = send(request, HttpResponse.BodyHandlers.ofFile(temp.toPath()), "download ${artifact.coordinate}")
             if (response.statusCode() !in 200..299) {
                 throw errorFor(response.statusCode(), temp.readText(), "download ${artifact.coordinate}")
@@ -114,6 +117,27 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
             .PUT(HttpRequest.BodyPublishers.ofByteArray(body))
             .build()
         return decode(PublishResponse.serializer(), sendForString(request, "publish"))
+    }
+
+    /**
+     * Returns [archiveUrl] when it has the same scheme, host and port as the configured server.
+     * Otherwise its path (from `/api/v1/` on, when present) and query are rebased onto the
+     * configured URL, because the bearer token may only be sent to that origin.
+     */
+    internal fun archiveUri(archiveUrl: String): URI {
+        val archive = try {
+            URI.create(archiveUrl)
+        } catch (e: IllegalArgumentException) {
+            throw GradleException("Protoloom server returned an invalid archive URL: $archiveUrl", e)
+        }
+        val base = URI.create(baseUrl)
+        if (sameOrigin(archive, base)) return archive
+        val path = archive.rawPath.orEmpty()
+        val apiPath = path.indexOf(API_PREFIX).let { if (it >= 0) path.substring(it) else path }
+        val query = archive.rawQuery?.let { "?$it" }.orEmpty()
+        val rebased = URI.create(baseUrl + apiPath + query)
+        logger.info("Protoloom: archive URL {} is not on {}; requesting {} instead", archiveUrl, baseUrl, rebased)
+        return rebased
     }
 
     private fun request(uri: URI): HttpRequest.Builder {
@@ -178,7 +202,21 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
     }
 
     private companion object {
+        const val API_PREFIX = "/api/v1/"
         val json = Json { ignoreUnknownKeys = true }
+        val logger: Logger = Logging.getLogger(ProtoloomClient::class.java)
+
+        fun sameOrigin(a: URI, b: URI): Boolean =
+            a.scheme.equals(b.scheme, ignoreCase = true) &&
+                a.host.equals(b.host, ignoreCase = true) &&
+                effectivePort(a) == effectivePort(b)
+
+        fun effectivePort(uri: URI): Int = when {
+            uri.port != -1 -> uri.port
+            uri.scheme.equals("https", ignoreCase = true) -> 443
+            uri.scheme.equals("http", ignoreCase = true) -> 80
+            else -> -1
+        }
 
         fun sha256(file: File): String {
             val digest = MessageDigest.getInstance("SHA-256")
