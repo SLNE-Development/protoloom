@@ -30,6 +30,13 @@ const config: NextConfig = {
     ],
     // The sitemap lists the docs pages by reading content/docs at request time.
     "/sitemap.xml": ["./content/docs/**/*.md"],
+    // The docs read their Markdown at request time, and their share cards read WOFF fonts.
+    "/docs/**/*": ["./content/docs/**/*"],
+    "/og/docs/**/*": [
+      "./content/docs/**/*",
+      "./node_modules/@fontsource/geist/files/geist-latin-*-normal.woff",
+      "./node_modules/@fontsource/geist-mono/files/geist-mono-latin-*-normal.woff",
+    ],
   },
 };
 

@@ -1,0 +1,304 @@
+/*
+ * Rendered Markdown of the docs (`.docs-prose`), in the Ink + Console look of the app:
+ * Geist for text, Geist Mono for code, 6px radius, hairline borders, tokens from @protoloom/ui.
+ */
+
+.docs-prose {
+  --docs-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--foreground);
+}
+
+.docs-prose > :first-child {
+  margin-top: 0;
+}
+
+.docs-prose p,
+.docs-prose ul,
+.docs-prose ol {
+  margin: 0 0 14px;
+}
+
+.docs-prose ul,
+.docs-prose ol {
+  padding-left: 22px;
+}
+
+.docs-prose ul {
+  list-style: disc;
+}
+
+.docs-prose ol {
+  list-style: decimal;
+}
+
+.docs-prose li {
+  margin: 4px 0;
+}
+
+.docs-prose li > ul,
+.docs-prose li > ol {
+  margin: 4px 0 0;
+}
+
+.docs-prose li::marker {
+  color: var(--muted-foreground);
+}
+
+.docs-prose strong {
+  font-weight: 600;
+}
+
+.docs-prose a {
+  color: var(--link);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--link) 35%, transparent);
+  text-underline-offset: 3px;
+}
+
+.docs-prose a:hover {
+  text-decoration-color: var(--link);
+}
+
+.docs-prose h2,
+.docs-prose h3 {
+  position: relative;
+  scroll-margin-top: 80px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.docs-prose h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 40px 0 10px;
+  font-size: 19px;
+  line-height: 1.35;
+}
+
+.docs-prose h3 {
+  margin: 28px 0 8px;
+  font-size: 16px;
+}
+
+.docs-prose .docs-step {
+  font: 500 12px var(--docs-mono);
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  min-width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transform: translateY(-1px);
+}
+
+.docs-prose .docs-anchor {
+  margin-left: 6px;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  font-weight: 400;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+
+.docs-prose h2:hover .docs-anchor,
+.docs-prose h3:hover .docs-anchor,
+.docs-prose .docs-anchor:focus-visible {
+  opacity: 1;
+}
+
+.docs-prose :not(pre) > code {
+  font-family: var(--docs-mono);
+  font-size: 0.86em;
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  overflow-wrap: anywhere;
+}
+
+.docs-prose a code {
+  color: inherit;
+}
+
+/* Code blocks: a title or language bar with a copy button, then the highlighted code. */
+.docs-prose .docs-code {
+  margin: 14px 0 18px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.docs-prose .docs-code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 0 6px 0 14px;
+  border-bottom: 1px solid var(--border);
+  font: 12px var(--docs-mono);
+  color: var(--muted-foreground);
+}
+
+.docs-prose .docs-code-title {
+  color: var(--foreground);
+}
+
+.docs-prose .docs-copy {
+  font: 500 12px "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  color: var(--muted-foreground);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 8px;
+  background: transparent;
+}
+
+.docs-prose .docs-copy:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+
+.docs-prose .docs-copy:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.docs-prose .docs-copy[data-copied] {
+  color: var(--release);
+}
+
+.docs-prose pre {
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font: 13px/1.65 var(--docs-mono);
+  background: transparent !important;
+  tab-size: 4;
+}
+
+.docs-prose pre:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.docs-prose pre code {
+  font: inherit;
+}
+
+.docs-prose .shiki span {
+  color: var(--shiki-light);
+}
+
+.dark .docs-prose .shiki span {
+  color: var(--shiki-dark);
+}
+
+/* Callouts: `> [!NOTE]`, `> [!TIP]`, `> [!WARNING]`. */
+.docs-prose .docs-callout {
+  margin: 18px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.docs-prose .docs-callout > :last-child {
+  margin-bottom: 0;
+}
+
+.docs-prose .docs-callout-note {
+  border-left-color: var(--link);
+  background: color-mix(in oklab, var(--link) 7%, transparent);
+}
+
+.docs-prose .docs-callout-note strong {
+  color: var(--link);
+}
+
+.docs-prose .docs-callout-tip {
+  border-left-color: var(--release);
+  background: var(--release-soft);
+}
+
+.docs-prose .docs-callout-tip strong {
+  color: var(--release);
+}
+
+.docs-prose .docs-callout-warning {
+  border-left-color: var(--snapshot);
+  background: var(--snapshot-soft);
+}
+
+.docs-prose .docs-callout-warning strong {
+  color: var(--snapshot);
+}
+
+/* Tables scroll sideways on narrow screens instead of widening the page. */
+.docs-prose .docs-table {
+  margin: 14px 0 18px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.docs-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.docs-prose th,
+.docs-prose td {
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.docs-prose th {
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: var(--surface);
+  white-space: nowrap;
+}
+
+.docs-prose th[align="center"],
+.docs-prose td[align="center"] {
+  text-align: center;
+}
+
+.docs-prose tr:last-child td {
+  border-bottom: 0;
+}
+
+.docs-prose hr {
+  margin: 32px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.docs-prose blockquote {
+  margin: 14px 0;
+  padding-left: 14px;
+  border-left: 3px solid var(--border);
+  color: var(--muted-foreground);
+}
+
+@media (max-width: 640px) {
+  .docs-prose {
+    font-size: 15px;
+  }
+
+  .docs-prose pre {
+    font-size: 12.5px;
+  }
+}
