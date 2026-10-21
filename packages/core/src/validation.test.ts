@@ -68,10 +68,14 @@ describe("validateProtos", () => {
     expect(await validateProtos({ files, dependencyFiles: [] })).toEqual([]);
   }, 60_000);
 
-  it.each(["files", "dependencyFiles"] as const)(
-    "rejects a well-known type path in %s",
-    async (key) => {
-      const shadow = { path: "google/protobuf/timestamp.proto", content: `${header}message T {}\n` };
+  it.each([
+    ["files", "google/protobuf/timestamp.proto"],
+    ["dependencyFiles", "google/protobuf/timestamp.proto"],
+    ["files", "Google/Protobuf/x.proto"],
+  ] as const)(
+    "rejects a well-known type path in %s (%s)",
+    async (key, path) => {
+      const shadow = { path, content: `${header}message T {}\n` };
       const input = { files: [a], dependencyFiles: [b] };
       input[key] = [...input[key], shadow];
       const issues = await validateProtos(input);

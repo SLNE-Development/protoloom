@@ -73,13 +73,21 @@ function runBuf(cwd: string, args: string[]): Promise<BufResult> {
 }
 
 async function writeFiles(root: string, files: ProtoFile[]): Promise<void> {
-  await Promise.all(
-    files.map(async (file) => {
-      const target = join(root, ...file.path.split("/"));
-      await mkdir(dirname(target), { recursive: true });
-      await writeFile(target, file.content, "utf8");
-    }),
-  );
+  const targets = files.map((file) => ({
+    target: join(root, ...file.path.split("/")),
+    content: file.content,
+  }));
+  await mkdir(root, { recursive: true });
+  for (const dir of new Set(targets.map((t) => dirname(t.target)))) {
+    await mkdir(dir, { recursive: true });
+  }
+  // Bounded batches keep open file descriptors well below typical limits (EMFILE).
+  const batchSize = 64;
+  for (let i = 0; i < targets.length; i += batchSize) {
+    await Promise.all(
+      targets.slice(i, i + batchSize).map((t) => writeFile(t.target, t.content, "utf8")),
+    );
+  }
 }
 
 function parseIssues(output: string, files: ProtoFile[], dependencyFiles: ProtoFile[]): ValidationIssue[] {
@@ -128,7 +136,7 @@ function pathProblem(path: string): string | undefined {
   ) {
     return `Invalid path: ${path} must be a normalized relative path`;
   }
-  if (path.startsWith("google/protobuf/")) {
+  if (path.toLowerCase().startsWith("google/protobuf/")) {
     return `Reserved path: ${path} is reserved for protobuf well-known types`;
   }
   return undefined;
