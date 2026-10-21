@@ -25,14 +25,21 @@ const PLATFORM_PACKAGES: Record<string, string> = {
   "linux x64": "@bufbuild/buf-linux-x64",
 };
 
-/** Resolves the buf executable shipped by the platform package of `@bufbuild/buf`. */
+let cachedBufBinary: string | undefined;
+
+/**
+ * Resolves the buf executable shipped by the platform package of `@bufbuild/buf`.
+ * The platform map mirrors the one in `@bufbuild/buf/install.js`; keep them in sync on upgrades.
+ */
 function resolveBufBinary(): string {
+  if (cachedBufBinary) return cachedBufBinary;
   const key = `${process.platform} ${process.arch}`;
   const pkg = PLATFORM_PACKAGES[key];
   if (!pkg) throw new Error(`buf is not available for platform ${key}`);
   const bufRequire = createRequire(require.resolve("@bufbuild/buf/package.json"));
   const pkgDir = dirname(bufRequire.resolve(`${pkg}/package.json`));
-  return join(pkgDir, "bin", process.platform === "win32" ? "buf.exe" : "buf");
+  cachedBufBinary = join(pkgDir, "bin", process.platform === "win32" ? "buf.exe" : "buf");
+  return cachedBufBinary;
 }
 
 interface BufIssue {
@@ -66,14 +73,16 @@ function runBuf(cwd: string, args: string[]): Promise<BufResult> {
 }
 
 async function writeFiles(root: string, files: ProtoFile[]): Promise<void> {
-  for (const file of files) {
-    const target = join(root, ...file.path.split("/"));
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, file.content, "utf8");
-  }
+  await Promise.all(
+    files.map(async (file) => {
+      const target = join(root, ...file.path.split("/"));
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, file.content, "utf8");
+    }),
+  );
 }
 
-function parseIssues(output: string, files: ProtoFile[]): ValidationIssue[] {
+function parseIssues(output: string, files: ProtoFile[], dependencyFiles: ProtoFile[]): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   for (const raw of output.split("\n")) {
     const text = raw.trim();
@@ -86,22 +95,43 @@ function parseIssues(output: string, files: ProtoFile[]): ValidationIssue[] {
       continue;
     }
     const normalized = (parsed.path ?? "").replaceAll("\\", "/");
-    const issue: ValidationIssue = {
-      path: normalized.startsWith("src/") ? normalized.slice("src/".length) : normalized,
-      message: parsed.message ?? "Unknown validation error",
-    };
-    if (parsed.start_line) issue.line = parsed.start_line;
-    if (parsed.start_line && /does not exist/.test(issue.message)) {
+    const inDependency = normalized.startsWith("deps/");
+    const path = normalized.replace(/^(src|deps)\//, "");
+    let message = parsed.message ?? "Unknown validation error";
+    if (parsed.start_line && /does not exist/.test(message)) {
       // buf omits the import path from this message; recover it from the source line.
-      const content = files.find((f) => f.path === issue.path)?.content;
+      const content = (inDependency ? dependencyFiles : files).find((f) => f.path === path)?.content;
       const source = content?.split("\n")[parsed.start_line - 1];
       const imported = source ? /"([^"]+)"/.exec(source)?.[1] : undefined;
-      if (imported) issue.message = `${issue.message}: ${imported}`;
+      if (imported) message = `${message}: ${imported}`;
     }
+    const issue: ValidationIssue = {
+      path,
+      message: inDependency ? `in dependency: ${message}` : message,
+    };
+    if (parsed.start_line) issue.line = parsed.start_line;
     if (parsed.start_column) issue.column = parsed.start_column;
     issues.push(issue);
   }
   return issues;
+}
+
+/** Returns why a path cannot be written safely, or undefined when it is acceptable. */
+function pathProblem(path: string): string | undefined {
+  if (
+    path === "" ||
+    path.includes("\\") ||
+    path.includes("\u0000") ||
+    path.startsWith("/") ||
+    /^[A-Za-z]:/.test(path) ||
+    path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    return `Invalid path: ${path} must be a normalized relative path`;
+  }
+  if (path.startsWith("google/protobuf/")) {
+    return `Reserved path: ${path} is reserved for protobuf well-known types`;
+  }
+  return undefined;
 }
 
 /**
@@ -112,6 +142,13 @@ export async function validateProtos(input: {
   files: ProtoFile[];
   dependencyFiles: ProtoFile[];
 }): Promise<ValidationIssue[]> {
+  const rejected: ValidationIssue[] = [];
+  for (const file of [...input.files, ...input.dependencyFiles]) {
+    const problem = pathProblem(file.path);
+    if (problem) rejected.push({ path: file.path, message: problem });
+  }
+  if (rejected.length > 0) return rejected;
+
   const dependencyPaths = new Set(input.dependencyFiles.map((f) => f.path));
   const duplicates = input.files
     .filter((f) => dependencyPaths.has(f.path))
@@ -125,23 +162,23 @@ export async function validateProtos(input: {
   const root = await mkdtemp(join(tmpdir(), "protoloom-validate-"));
   try {
     await writeFiles(join(root, "src"), input.files);
-    await mkdir(join(root, "deps"), { recursive: true });
-    await writeFiles(join(root, "deps"), input.dependencyFiles);
+    // buf rejects a module without .proto files, so deps is only declared when it has some.
+    const hasDeps = input.dependencyFiles.length > 0;
+    if (hasDeps) await writeFiles(join(root, "deps"), input.dependencyFiles);
     await writeFile(
       join(root, "buf.yaml"),
-      "version: v2\nmodules:\n  - path: src\n  - path: deps\n",
+      `version: v2\nmodules:\n  - path: src\n${hasDeps ? "  - path: deps\n" : ""}`,
       "utf8",
     );
     const result = await runBuf(root, [
       "build",
-      ...input.files.flatMap((f) => ["--path", `src/${f.path}`]),
       "--error-format",
       "json",
       "-o",
       "-",
     ]);
     if (result.code === 0) return [];
-    const issues = parseIssues(result.stderr || result.stdout, input.files);
+    const issues = parseIssues(result.stderr || result.stdout, input.files, input.dependencyFiles);
     return issues.length > 0
       ? issues
       : [{ path: "", message: `buf exited with code ${result.code}` }];
