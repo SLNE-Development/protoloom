@@ -61,7 +61,7 @@ jobs:
             ghcr.io/slne-development/protoloom:${{ needs.versions.outputs.version }}
             ghcr.io/slne-development/protoloom:latest
           labels: |
-            org.opencontainers.image.source=https://github.com/slne-development/protoloom
+            org.opencontainers.image.source=https://github.com/SLNE-Development/protoloom
             org.opencontainers.image.version=${{ needs.versions.outputs.version }}
             org.opencontainers.image.licenses=MIT
           cache-from: type=gha

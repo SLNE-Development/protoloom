@@ -1,6 +1,6 @@
 # protoloom
 
-Command-line client for [Protoloom](https://github.com/slne-development/protoloom), a self-hosted registry
+Command-line client for [Protoloom](https://github.com/SLNE-Development/protoloom), a self-hosted registry
 for `.proto` files. `protoloom fetch` downloads the proto bundles your project depends on, with their
 transitive dependencies, into a local directory.
 

@@ -4,13 +4,13 @@
   "description": "CLI for fetching .proto dependencies from a Protoloom registry",
   "keywords": ["protobuf", "proto", "registry", "protoloom", "cli"],
   "license": "MIT",
-  "homepage": "https://github.com/slne-development/protoloom#readme",
+  "homepage": "https://github.com/SLNE-Development/protoloom#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/slne-development/protoloom.git",
+    "url": "git+https://github.com/SLNE-Development/protoloom.git",
     "directory": "packages/cli"
   },
-  "bugs": { "url": "https://github.com/slne-development/protoloom/issues" },
+  "bugs": { "url": "https://github.com/SLNE-Development/protoloom/issues" },
   "type": "module",
   "bin": { "protoloom": "dist/index.js" },
   "files": ["dist", "README.md"],

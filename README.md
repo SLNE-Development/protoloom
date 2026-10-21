@@ -3,7 +3,7 @@
 A self-hosted registry for `.proto` files. Publish versioned proto bundles from Gradle, resolve their
 dependencies, and fetch them in any project with the Gradle plugin or the `protoloom` CLI.
 
-Source: [github.com/slne-development/protoloom](https://github.com/slne-development/protoloom) · License: MIT
+Source: [github.com/SLNE-Development/protoloom](https://github.com/SLNE-Development/protoloom) · License: MIT
 
 - **Web app and REST API** (Next.js): repositories, versions, dependency graph, API keys, invites.
 - **Worker** (BullMQ on Valkey): background jobs, same image as the web app.

@@ -12,7 +12,7 @@ You need Docker with Compose, a domain with HTTPS in front of the server, and a 
 ## 1. Get the compose file
 
 ```sh
-git clone https://github.com/slne-development/protoloom.git
+git clone https://github.com/SLNE-Development/protoloom.git
 cd protoloom
 cp .env.example .env
 ```
