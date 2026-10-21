@@ -3,6 +3,8 @@
 A self-hosted registry for `.proto` files. Publish versioned proto bundles from Gradle, resolve their
 dependencies, and fetch them in any project with the Gradle plugin or the `protoloom` CLI.
 
+Source: [github.com/slne-development/protoloom](https://github.com/slne-development/protoloom) · License: MIT
+
 - **Web app and REST API** (Next.js): repositories, versions, dependency graph, API keys, invites.
 - **Worker** (BullMQ on Valkey): background jobs, same image as the web app.
 - **Storage**: local disk or any S3-compatible store. **Database**: PostgreSQL.
@@ -18,10 +20,11 @@ dependencies, and fetch them in any project with the Gradle plugin or the `proto
 | `packages/cli` | The `protoloom` CLI |
 | `gradle-plugin` | Gradle plugin `dev.protoloom` |
 | `docker/` | Dockerfile and entrypoint |
+| `.github/workflows` | CI (`ci.yml`) and tag releases (`release.yml`) |
 
 ## Local development
 
-Requirements: Node 22+, pnpm (via corepack), Docker, a JDK 21 for the Gradle plugin.
+Requirements: Node 22.3+, pnpm (via corepack), Docker, a JDK 21 for the Gradle plugin.
 
 ```sh
 corepack enable
@@ -76,6 +79,19 @@ Compose-only variables: `POSTGRES_PASSWORD` and `APP_PORT` (default `3000`) in `
 
 ## Gradle plugin
 
+The plugin `dev.protoloom` is published to `https://reposilite.slne.dev/releases/`. Add that repository to the
+plugin repositories:
+
+```kotlin
+// settings.gradle.kts
+pluginManagement {
+    repositories {
+        maven("https://reposilite.slne.dev/releases/")
+        gradlePluginPortal()
+    }
+}
+```
+
 ```kotlin
 // build.gradle.kts
 plugins {
@@ -108,8 +124,13 @@ dependencies {
 
 ## CLI
 
+The CLI is published to npm as [`protoloom`](https://www.npmjs.com/package/protoloom) (Node 22.3+). Install it
+as a dev dependency of the project that consumes the protos:
+
 ```sh
-npm install --global protoloom   # or: npx protoloom fetch
+npm i -D protoloom
+# or
+pnpm add -D protoloom
 ```
 
 `protoloom.json`:
@@ -125,7 +146,7 @@ npm install --global protoloom   # or: npx protoloom fetch
 ```sh
 export PROTOLOOM_URL=https://protos.example.com
 export PROTOLOOM_TOKEN=...        # only needed for private repositories
-protoloom fetch [--config protoloom.json] [--out ./protos]
+npx protoloom fetch [--config protoloom.json] [--out ./protos]
 ```
 
 ## Deploy with Docker Compose
@@ -133,12 +154,21 @@ protoloom fetch [--config protoloom.json] [--out ./protos]
 `docker-compose.prod.yml` runs the app, the worker (same image, command `worker`), PostgreSQL and Valkey.
 The app container applies database migrations on start; the worker waits for the app to be healthy.
 
+The released image is `ghcr.io/slne-development/protoloom:latest` (also tagged with each version, e.g. `:0.1.0`).
+`pull` works once the first release has been published (see [Releases](#releases)); until then build from the
+checkout with `up -d --build`.
+
 ```sh
 cp .env.example .env
 # set POSTGRES_PASSWORD, BETTER_AUTH_SECRET, BETTER_AUTH_URL, one OAuth provider and, for the first
 # deploy, INITIAL_ADMIN (without it nobody can sign in to a fresh instance)
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+# or build the image from this checkout instead of pulling it:
 docker compose -f docker-compose.prod.yml up -d --build
 ```
+
+Set `PROTOLOOM_IMAGE` to pin a version (e.g. `ghcr.io/slne-development/protoloom:0.1.0`) or to use your own build.
 
 Put a TLS-terminating reverse proxy in front of port 3000 and set `BETTER_AUTH_URL` to its https URL.
 Storage defaults to the `storage-data` volume; for S3 set `STORAGE_DRIVER=s3` and the `S3_*` variables.
@@ -149,6 +179,9 @@ Commands: `web` (default, migrates first) and `worker`. Set `RUN_MIGRATIONS=true
 ## Deploy on Coolify
 
 Create a **Docker Compose** resource from this repository and select `docker-compose.coolify.yml`.
+The `protoloom` and `worker` services pull the published image `ghcr.io/slne-development/protoloom:latest`
+(set `PROTOLOOM_IMAGE` to pin a version). To build from source instead (for example before the first release),
+add `build: { context: ., dockerfile: docker/Dockerfile }` to both services and set `PROTOLOOM_IMAGE=protoloom:local`.
 It contains `protoloom` (web), `worker`, `postgres`, `valkey`, `seaweedfs` (bundled S3 storage, bucket created
 by a one-shot init container) and `seaweedfs-admin` (the `weed admin` panel).
 
@@ -177,8 +210,8 @@ the bucket, safe to re-run on every redeploy) and `seaweedfs-admin` always start
 (`SERVICE_FQDN_PROTOLOOM_3000`). That value only tells the proxy where to route traffic. With a Cloudflare Tunnel
 the URL Coolify knows is plain `http://`, while OAuth callbacks, secure cookies and all links need `https://`.
 So `BETTER_AUTH_URL` is a separate required variable you set to the public https URL, and the app never derives
-a URL from the request or from the service FQDN. The app trusts `X-Forwarded-Proto` / `X-Forwarded-Host` from the
-proxy but still builds URLs from `BETTER_AUTH_URL` only.
+a URL from the request or from the service FQDN. It ignores `Host` and `X-Forwarded-*` headers for this purpose
+(Better Auth runs with `trustedProxyHeaders: false`), so no proxy header configuration is needed.
 
 Register these OAuth callback URLs:
 
@@ -189,3 +222,25 @@ Register these OAuth callback URLs:
 always password protected: Coolify generates `SERVICE_USER_SEAWEEDFSADMIN` and `SERVICE_PASSWORD_SEAWEEDFSADMIN`
 (visible in the Environment Variables tab); the password is handed to `weed admin` through a private options file,
 not on the command line. Remove the service from the compose file if you do not want the panel.
+
+## Releases
+
+CI (`.github/workflows/ci.yml`) builds, type-checks, lints and tests every push to `main` and every pull request,
+and runs the Gradle plugin tests.
+
+Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`. The tag must equal the version in
+`packages/cli/package.json` and `gradle-plugin/build.gradle.kts`. It publishes:
+
+- the image `ghcr.io/slne-development/protoloom:X.Y.Z` and `:latest` (linux/amd64 and linux/arm64),
+- the CLI to npm as `protoloom@X.Y.Z`,
+- the Gradle plugin `dev.protoloom:X.Y.Z` to `https://reposilite.slne.dev/releases/`.
+
+Repository secrets the release needs:
+
+| Secret | Used for |
+| --- | --- |
+| `NPM_TOKEN` | npm automation (or granular publish) token for the `protoloom` package. |
+| `SLNE_RELEASES_REPO_USERNAME` | Reposilite user with write access to `releases`. |
+| `SLNE_RELEASES_REPO_PASSWORD` | Its password or token. |
+
+The image is pushed with the workflow's built-in `GITHUB_TOKEN` (`packages: write`); no secret is needed for it.

@@ -23,6 +23,14 @@
 #   SERVICE_PASSWORD_SEAWEEDFS (S3 keys), SERVICE_USER_SEAWEEDFSADMIN and
 #   SERVICE_PASSWORD_SEAWEEDFSADMIN (login of the weed admin panel).
 # SERVICE_FQDN_* only routes traffic; the application never reads it.
+#
+# Image: protoloom and worker pull the published ghcr.io/slne-development/protoloom:latest. Set
+#   PROTOLOOM_IMAGE to pin a release (e.g. ghcr.io/slne-development/protoloom:0.1.0). To build from
+#   source instead, add to both services:
+#     build:
+#       context: .
+#       dockerfile: docker/Dockerfile
+#   and set PROTOLOOM_IMAGE=protoloom:local.
 
 x-protoloom-env: &protoloom-env
   DATABASE_URL: postgres://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/protoloom
@@ -44,10 +52,7 @@ x-protoloom-env: &protoloom-env
 
 services:
   protoloom:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
-    image: protoloom:coolify
+    image: ${PROTOLOOM_IMAGE:-ghcr.io/slne-development/protoloom:latest}
     command: ["web"]
     restart: unless-stopped
     environment:
@@ -70,10 +75,7 @@ services:
       start_period: 40s
 
   worker:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
-    image: protoloom:coolify
+    image: ${PROTOLOOM_IMAGE:-ghcr.io/slne-development/protoloom:latest}
     command: ["worker"]
     restart: unless-stopped
     environment: *protoloom-env

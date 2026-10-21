@@ -15,7 +15,8 @@ WORKDIR /repo
 # ---- pruner: reduce the monorepo to what web + worker need ----
 FROM base AS pruner
 COPY . .
-RUN npm install --global turbo@2.11.10 \
+# The turbo version comes from the root package.json, so it is pinned in one place.
+RUN npm install --global "turbo@$(node -p "require('./package.json').devDependencies.turbo")" \
  && turbo prune web @protoloom/worker --docker
 
 # ---- builder: install, build both apps, assemble the runtime tree under /out ----
@@ -37,26 +38,24 @@ RUN pnpm turbo run build --filter=web --filter=@protoloom/worker
 #   /out/app            Next standalone server (apps/web/server.js), static assets, public/
 #   /out/app/apps/worker  self-contained worker (dist + prod node_modules), via `pnpm deploy`
 #   /out/migrate        self-contained @protoloom/db (dist + drizzle migrations + prod node_modules)
-#   /out/buf            @bufbuild/buf packages with the Linux binary
 RUN mkdir -p /out/app \
  && cp -r apps/web/.next/standalone/. /out/app/ \
  && mkdir -p /out/app/apps/web/.next \
  && cp -r apps/web/.next/static /out/app/apps/web/.next/static \
  && if [ -d apps/web/public ]; then cp -r apps/web/public /out/app/apps/web/public; fi
+# Proto validation runs buf from its per-platform package (@bufbuild/buf-linux-x64 / -aarch64),
+# which pnpm installs for the build platform only and Next traces into the standalone output
+# (next.config.ts outputFileTracingIncludes). Fail the build if that binary is missing or not executable.
+RUN set -e; \
+    bin="$(ls /out/app/node_modules/.pnpm/@bufbuild+buf-linux-*/node_modules/@bufbuild/buf-linux-*/bin/buf)"; \
+    test -x "$bin"; \
+    test -e /out/app/node_modules/.pnpm/@bufbuild+buf@*/node_modules/@bufbuild/buf/package.json; \
+    "$bin" --version
 # `pnpm deploy` packs with npm-packlist, which falls back to .gitignore (it lists dist/): drop it first.
 RUN rm -f .gitignore \
  && pnpm --filter=@protoloom/worker deploy --legacy --prod /out/app/apps/worker \
  && pnpm --filter=@protoloom/db deploy --legacy --prod /out/migrate
 COPY docker/migrate.mjs /out/migrate/run.mjs
-# buf ships its binary in a per-platform optional package; pnpm installs only the one matching the
-# build platform (@bufbuild/buf-linux-x64 or -arm64). Copy @bufbuild/buf plus that package into
-# /out/buf/node_modules/@bufbuild and fail the build if no binary is found.
-RUN mkdir -p /out/buf/node_modules/@bufbuild \
- && for d in node_modules/.pnpm/@bufbuild+buf@*/node_modules/@bufbuild/buf \
-             node_modules/.pnpm/@bufbuild+buf-linux-*/node_modules/@bufbuild/buf-linux-*; do \
-      [ -e "$d" ] && cp -rL "$d" /out/buf/node_modules/@bufbuild/; \
-    done; \
-    ls /out/buf/node_modules/@bufbuild/buf-linux-*/bin/buf
 
 # ---- runtime ----
 FROM ${NODE_IMAGE} AS runtime
@@ -64,18 +63,12 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOSTNAME=0.0.0.0 \
     PORT=3000 \
-    STORAGE_LOCAL_PATH=/data/storage \
-    BUF_BIN=/opt/buf/bin/buf
+    STORAGE_LOCAL_PATH=/data/storage
 WORKDIR /app
 # `node` (uid 1000) ships with the base image.
 COPY --from=builder --chown=node:node /out/app/ /app/
 COPY --from=builder --chown=node:node /out/migrate/ /app/migrate/
-COPY --from=builder /out/buf/ /opt/buf-pkgs/
-# Stable path for the buf binary regardless of CPU architecture.
-RUN mkdir -p /opt/buf/bin /data/storage \
- && ln -s "$(ls /opt/buf-pkgs/node_modules/@bufbuild/buf-linux-*/bin/buf | head -n1)" /opt/buf/bin/buf \
- && ln -s /opt/buf/bin/buf /usr/local/bin/buf \
- && chown -R node:node /data
+RUN mkdir -p /data/storage && chown -R node:node /data
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 USER node
 EXPOSE 3000

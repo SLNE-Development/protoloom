@@ -80,7 +80,11 @@ private data class ValidationDetails(val issues: List<ValidationIssue> = emptyLi
  */
 internal class ProtoloomClient(baseUrl: String, private val token: String?) {
     private val baseUrl = baseUrl.trimEnd('/')
+    // HTTP/1.1 for every registry URL, http and https alike. Over plain http the JDK client would
+    // otherwise ask for an h2c upgrade, which the Next.js server answers by closing the connection;
+    // over https it only gives up HTTP/2 via ALPN, which these few large requests don't need.
     private val http = HttpClient.newBuilder()
+        .version(HttpClient.Version.HTTP_1_1)
         .connectTimeout(Duration.ofSeconds(30))
         .followRedirects(HttpClient.Redirect.NORMAL)
         .build()

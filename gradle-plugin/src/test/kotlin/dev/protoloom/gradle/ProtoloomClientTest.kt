@@ -101,6 +101,28 @@ class ProtoloomClientTest {
     }
 
     @Test
+    fun `plain http requests never ask for an h2c upgrade, which the Next js server answers by closing the connection`() {
+        val upgrades = mutableListOf<String?>()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { exchange ->
+            upgrades += exchange.requestHeaders.getFirst("Upgrade")
+            exchange.requestBody.readBytes()
+            val bytes = """{"artifacts":[]}""".toByteArray()
+            exchange.responseHeaders.add("Content-Type", "application/json")
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+        server.start()
+        try {
+            ProtoloomClient("http://127.0.0.1:${server.address.port}", "token").resolve(listOf("releases"), emptyList())
+        } finally {
+            server.stop(0)
+        }
+
+        assertEquals(listOf<String?>(null), upgrades)
+    }
+
+    @Test
     fun `other errors keep the single-line code and message`() {
         val error = publishAgainst(409, """{"error":{"code":"immutable","message":"already exists","details":{"x":1}}}""")
 

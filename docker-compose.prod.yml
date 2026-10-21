@@ -1,7 +1,10 @@
 # Production-style stack: web + worker (one image), postgres, valkey.
 #
 #   cp .env.example .env   # fill in the required values
-#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml pull     # released image ghcr.io/slne-development/protoloom:latest
+#   docker compose -f docker-compose.prod.yml up -d    # or `up -d --build` to build it from this checkout
+#
+# PROTOLOOM_IMAGE overrides the image (e.g. ghcr.io/slne-development/protoloom:0.1.0 to pin a release).
 #
 # Storage defaults to a local volume shared by web and worker. For S3, set STORAGE_DRIVER=s3 and the
 # S3_* variables (see the commented block below). Run your own S3 provider, or copy the seaweedfs
@@ -37,7 +40,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: protoloom:local
+    image: ${PROTOLOOM_IMAGE:-ghcr.io/slne-development/protoloom:latest}
     command: ["web"]
     restart: unless-stopped
     environment: *protoloom-env
@@ -55,7 +58,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: protoloom:local
+    image: ${PROTOLOOM_IMAGE:-ghcr.io/slne-development/protoloom:latest}
     command: ["worker"]
     restart: unless-stopped
     environment: *protoloom-env
