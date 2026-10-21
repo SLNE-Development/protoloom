@@ -1,2 +1,14 @@
 .superpowers/
 node_modules/
+.next/
+dist/
+build/
+.turbo/
+.gradle/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+coverage/
+.idea/
+.DS_Store
