@@ -29,9 +29,9 @@ Requirements: Node 22.3+, pnpm (via corepack), Docker, a JDK 21 for the Gradle p
 ```sh
 corepack enable
 pnpm install
-docker compose up -d          # postgres + seaweedfs (S3) for development
+docker compose up -d          # postgres, valkey (job queue) and seaweedfs (S3) for development
 cp .env.example .env          # then fill in the values
-pnpm dev
+pnpm dev                      # web app (next dev) and worker (tsx watch), both reading the root .env
 pnpm build && pnpm typecheck && pnpm lint && pnpm test
 ```
 
@@ -49,7 +49,7 @@ All variables are validated at startup (`apps/web/src/env.ts`). Empty values cou
 | Variable | Required | Description |
 | --- | --- | --- |
 | `DATABASE_URL` | yes | PostgreSQL connection string. |
-| `VALKEY_URL` | yes | Valkey/Redis URL used by BullMQ, e.g. `redis://localhost:6379`. |
+| `VALKEY_URL` | worker: yes; web: optional | Valkey/Redis URL used by BullMQ, e.g. `redis://localhost:6379`. The worker needs it; without it the web app runs but can't queue cleanup runs ("Run now"). |
 | `STORAGE_DRIVER` | yes | `local` or `s3`. |
 | `STORAGE_LOCAL_PATH` | with `local` | Directory for stored archives (the image uses `/data/storage`). |
 | `S3_ENDPOINT` | with `s3` | S3 endpoint URL (empty for AWS). |
