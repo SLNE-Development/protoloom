@@ -64,11 +64,19 @@ internal data class PublishResponse(val coordinate: String, val buildNumber: Int
 private data class ErrorBody(val error: ErrorDetail)
 
 @Serializable
-private data class ErrorDetail(val code: String, val message: String)
+private data class ErrorDetail(val code: String, val message: String, val details: JsonElement? = null)
+
+/** One entry of `details.issues` in a `validation_failed` error body. */
+@Serializable
+private data class ValidationIssue(val path: String = "", val line: Int? = null, val message: String)
+
+@Serializable
+private data class ValidationDetails(val issues: List<ValidationIssue> = emptyList())
 
 /**
  * Client for the Protoloom REST API (`/api/v1`). Every non-2xx response becomes a
- * [GradleException] of the form `<code>: <message>` taken from the server's error body.
+ * [GradleException] of the form `<code>: <message>` taken from the server's error body; for
+ * `validation_failed` each issue follows on its own line as `  <path>:<line>: <message>`.
  */
 internal class ProtoloomClient(baseUrl: String, private val token: String?) {
     private val baseUrl = baseUrl.trimEnd('/')
@@ -182,11 +190,42 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
             null
         }
         return if (error != null) {
-            GradleException("${error.code}: ${error.message}")
+            GradleException("${error.code}: ${error.message}" + validationIssueLines(error))
         } else {
             GradleException("Protoloom $action failed with HTTP $status: ${body.take(500)}")
         }
     }
+
+    /** One `\n  <path>:<line>: <message>` line per issue of a `validation_failed` error (line and path left out when absent). */
+    private fun validationIssueLines(error: ErrorDetail): String {
+        if (error.code != "validation_failed" || error.details == null) return ""
+        val issues = try {
+            json.decodeFromJsonElement(ValidationDetails.serializer(), error.details).issues
+        } catch (_: SerializationException) {
+            return ""
+        } catch (_: IllegalArgumentException) {
+            return ""
+        }
+        val listed = issues.take(MAX_LISTED_ISSUES).joinToString("") { issue ->
+            val path = sanitize(issue.path)
+            val message = sanitize(issue.message)
+            val location = listOfNotNull(path.ifEmpty { null }, issue.line?.toString()).joinToString(":")
+            if (location.isEmpty()) "\n  $message" else "\n  $location: $message"
+        }
+        val rest = issues.size - MAX_LISTED_ISSUES
+        return if (rest > 0) "$listed\n  … and $rest more" else listed
+    }
+
+    /**
+     * Makes server-provided text safe for one log line: drops ANSI escape sequences (ESC- and
+     * C1-introduced) and other C0/C1 control characters, turns line breaks and tabs into spaces.
+     */
+    private fun sanitize(text: String): String =
+        text.replace(ANSI_ESCAPE, "")
+            .replace(LINE_CONTROLS, " ")
+            .replace(OTHER_CONTROLS, "")
+            .replace(SPACES, " ")
+            .trim()
 
     private fun <T> decode(serializer: KSerializer<T>, body: String): T =
         try {
@@ -214,6 +253,15 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
 
     private companion object {
         const val API_PREFIX = "/api/v1/"
+
+        /** Validation issues listed in a failed publish; the rest are summarised as a count. */
+        const val MAX_LISTED_ISSUES = 20
+
+        /** CSI (`ESC [` or C1 `0x9B`) and OSC (`ESC ]` … BEL / ST) sequences, then any other two-char ESC sequence. */
+        val ANSI_ESCAPE = Regex("(?:\u001B\\[|\u009B)[0-?]*[ -/]*[@-~]|(?:\u001B\\]|\u009D)[^\u0007\u001B\u009C]*(?:\u0007|\u001B\\\\|\u009C)?|\u001B[@-_]?")
+        val LINE_CONTROLS = Regex("[\r\n\t]+")
+        val OTHER_CONTROLS = Regex("[\u0000-\u001F\u007F-\u009F]")
+        val SPACES = Regex(" {2,}")
         val json = Json { ignoreUnknownKeys = true }
         val logger: Logger = Logging.getLogger(ProtoloomClient::class.java)
 
