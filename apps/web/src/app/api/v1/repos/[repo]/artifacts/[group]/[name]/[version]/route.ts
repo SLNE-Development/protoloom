@@ -83,9 +83,16 @@ export const PUT = handle(async (req: Request, { params }: Context) => {
   );
 });
 
-/** `VersionInfo` as sent over REST: the coordinate as `group:name:version`, dates as ISO strings. */
+/**
+ * `VersionInfo` as sent over REST: the coordinate and the dependencies as `group:name:version`
+ * strings, dates as ISO strings.
+ */
 function toJson(info: VersionInfo) {
-  return { ...info, coordinate: formatCoordinate(info.coordinate) };
+  return {
+    ...info,
+    coordinate: formatCoordinate(info.coordinate),
+    dependencies: info.dependencies.map(formatCoordinate),
+  };
 }
 
 /** `GET`: the metadata of a version's newest build. */

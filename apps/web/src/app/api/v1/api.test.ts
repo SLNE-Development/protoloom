@@ -17,7 +17,10 @@ import {
   GET as manifestRoute,
   PUT as publishRoute,
 } from "./repos/[repo]/artifacts/[group]/[name]/[version]/route";
-import { GET as archiveRoute } from "./repos/[repo]/artifacts/[group]/[name]/[version]/archive/route";
+import {
+  GET as archiveRoute,
+  HEAD as archiveHead,
+} from "./repos/[repo]/artifacts/[group]/[name]/[version]/archive/route";
 
 const holder = vi.hoisted(() => ({ ctx: undefined as ServerContext | undefined }));
 
@@ -394,6 +397,52 @@ describe("DELETE", () => {
     await publishBoth();
     expect((await del(order)).status).toBe(401);
     expect((await del(order, keys.viewerOwned)).status).toBe(403);
+  });
+});
+
+describe("GET manifest and HEAD archive", () => {
+  async function downloadCount(p: Params): Promise<number> {
+    const res = await manifestRoute(new Request(artifactUrl(p)), ctxOf(p));
+    return ((await res.json()) as { downloadCount: number }).downloadCount;
+  }
+
+  it("lists dependencies as group:name:version strings, like the coordinate", async () => {
+    expect((await publish(money, { token: keys.maintainer })).status).toBe(201);
+    expect(
+      (await publish(order, { token: keys.maintainer, files: orderFiles, dependencies: ["acme:money:1.0.0"] })).status,
+    ).toBe(201);
+    const res = await manifestRoute(new Request(artifactUrl(order)), ctxOf(order));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ coordinate: "acme:order:1.0.0", dependencies: ["acme:money:1.0.0"] });
+  });
+
+  it("does not count reading the manifest as a download", async () => {
+    expect((await publish(money, { token: keys.maintainer })).status).toBe(201);
+    await downloadCount(money);
+    expect(await downloadCount(money)).toBe(0);
+  });
+
+  it("answers HEAD on the archive with its headers only, without counting a download", async () => {
+    const published = (await (await publish(money, { token: keys.maintainer })).json()) as { sha256: string };
+    const get = await archiveRoute(new Request(artifactUrl(money, "/archive")), ctxOf(money));
+    const size = (await get.arrayBuffer()).byteLength;
+    expect(await downloadCount(money)).toBe(1);
+
+    const head = await archiveHead(new Request(artifactUrl(money, "/archive"), { method: "HEAD" }), ctxOf(money));
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-type")).toBe("application/gzip");
+    expect(head.headers.get("content-length")).toBe(String(size));
+    expect(head.headers.get("x-protoloom-sha256")).toBe(published.sha256);
+    expect(head.headers.get("content-disposition")).toBe('attachment; filename="money-1.0.0.tar.gz"');
+    expect(await head.text()).toBe("");
+    expect(await downloadCount(money)).toBe(1);
+  });
+
+  it("answers HEAD with 404 for a version the caller can't read", async () => {
+    const hidden = { ...money, repo: "private" };
+    expect((await publish(hidden, { token: keys.maintainer })).status).toBe(201);
+    const head = await archiveHead(new Request(artifactUrl(hidden, "/archive"), { method: "HEAD" }), ctxOf(hidden));
+    expect(head.status).toBe(404);
   });
 });
 
