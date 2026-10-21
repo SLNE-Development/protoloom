@@ -40,15 +40,18 @@ type Values = z.infer<typeof schema>;
 const DEFAULTS: Values = { reason: "", duration: "forever" };
 
 /**
- * Bans `user` (when set) after asking for an optional reason and duration. A ban ends their
+ * Bans `user` after asking for an optional reason and duration. A ban ends their
  * sessions at once and stops their API keys.
  */
 export function BanDialog({
   user,
+  open,
   onOpenChange,
   onBanned,
 }: {
+  /** The user to ban; kept while the dialog animates closed. */
   user: { id: string; name: string } | null;
+  open: boolean;
   onOpenChange: (open: boolean) => void;
   onBanned: () => Promise<unknown>;
 }) {
@@ -65,8 +68,8 @@ export function BanDialog({
   );
 
   useEffect(() => {
-    if (user) form.reset(DEFAULTS);
-  }, [user, form]);
+    if (open) form.reset(DEFAULTS);
+  }, [open, form]);
 
   function submit(values: Values) {
     if (!user) return;
@@ -78,7 +81,7 @@ export function BanDialog({
   }
 
   return (
-    <Dialog open={user !== null} onOpenChange={(open) => !ban.isPending && onOpenChange(open)}>
+    <Dialog open={open} onOpenChange={(open) => !ban.isPending && onOpenChange(open)}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Ban {user?.name}?</DialogTitle>

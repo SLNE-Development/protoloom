@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ShieldAlertIcon, UsersIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -8,7 +7,7 @@ import type { Role } from "@protoloom/core";
 import { Avatar, AvatarFallback, AvatarImage } from "@protoloom/ui/components/avatar";
 import { Badge } from "@protoloom/ui/components/badge";
 import { Button } from "@protoloom/ui/components/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@protoloom/ui/components/empty";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@protoloom/ui/components/empty";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@protoloom/ui/components/select";
 import { Skeleton } from "@protoloom/ui/components/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@protoloom/ui/components/table";
@@ -17,6 +16,7 @@ import { ProviderIcon } from "@/components/provider-icon";
 import { PROVIDER_NAMES, type ProviderId } from "@/lib/auth-client";
 import { useTRPC, type RouterOutputs } from "@/trpc/client";
 import { ConfirmDialog } from "../_components/confirm-dialog";
+import { useDialogTarget } from "../_components/use-dialog-target";
 import { formatDate, formatDateTime, initials } from "../_components/format";
 import { BanDialog } from "./ban-dialog";
 import { lastAdminId } from "./last-admin";
@@ -26,6 +26,7 @@ type UserSummary = RouterOutputs["users"]["list"][number];
 const ROLES: Role[] = ["admin", "maintainer", "viewer"];
 
 const LAST_ADMIN_REASON = "The last admin can't be demoted, banned or removed. Promote another user to admin first.";
+const SELF_REASON = "You can't ban or remove your own account.";
 
 function withArticle(role: Role): string {
   return role === "admin" ? "an admin" : `a ${role}`;
@@ -71,16 +72,18 @@ function LoadingRows() {
 }
 
 /**
- * Every user with their providers, role and ban state. Admins change roles inline and ban, unban
- * or remove users after a confirmation; the last active admin is protected, with the reason shown.
+ * Every user with their providers, role and ban state. Admins change roles inline (promoting to
+ * admin and demoting yourself ask first) and ban, unban or remove users after a confirmation. The
+ * last active admin is protected and nobody can ban or remove their own account; the reason is shown.
  */
 export function UsersTable({ currentUserId }: { currentUserId: string }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const users = useQuery(trpc.users.list.queryOptions());
-  const [banTarget, setBanTarget] = useState<UserSummary | null>(null);
-  const [unbanTarget, setUnbanTarget] = useState<UserSummary | null>(null);
-  const [removeTarget, setRemoveTarget] = useState<UserSummary | null>(null);
+  const banDialog = useDialogTarget<UserSummary>();
+  const unbanDialog = useDialogTarget<UserSummary>();
+  const removeDialog = useDialogTarget<UserSummary>();
+  const roleDialog = useDialogTarget<{ user: UserSummary; role: Role }>();
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: trpc.users.list.queryKey() });
   const fail = (title: string) => (error: { message: string }) => toast.error(title, { description: error.message });
@@ -88,6 +91,12 @@ export function UsersTable({ currentUserId }: { currentUserId: string }) {
   const setRole = useMutation(
     trpc.users.setRole.mutationOptions({
       onSuccess: async (_, input) => {
+        if (input.userId === currentUserId && input.role !== "admin") {
+          toast.success(`You are now ${withArticle(input.role)}`);
+          // Admin pages are gone for this user; a full load re-renders the shell with the new role.
+          window.location.assign("/dashboard");
+          return;
+        }
         const name = users.data?.find((u) => u.id === input.userId)?.name ?? "The user";
         toast.success(`${name} is now ${withArticle(input.role)}`);
         await refresh();
@@ -116,6 +125,17 @@ export function UsersTable({ currentUserId }: { currentUserId: string }) {
 
   const protectedId = users.data ? lastAdminId(users.data) : null;
 
+  /** Applies a role change at once, or asks first when it promotes to admin or demotes yourself. */
+  function changeRole(user: UserSummary, role: Role) {
+    if (role === user.role) return;
+    const demotesSelf = user.id === currentUserId && user.role === "admin";
+    if (role === "admin" || demotesSelf) roleDialog.show({ user, role });
+    else setRole.mutate({ userId: user.id, role });
+  }
+
+  const pendingRole = roleDialog.target;
+  const pendingSelfDemotion = pendingRole !== null && pendingRole.user.id === currentUserId;
+
   if (users.isError) {
     return (
       <Empty className="border">
@@ -126,6 +146,11 @@ export function UsersTable({ currentUserId }: { currentUserId: string }) {
           <EmptyTitle>Couldn&apos;t load the users</EmptyTitle>
           <EmptyDescription>{users.error.message}</EmptyDescription>
         </EmptyHeader>
+        <EmptyContent>
+          <Button variant="outline" size="sm" onClick={() => void users.refetch()}>
+            Try again
+          </Button>
+        </EmptyContent>
       </Empty>
     );
   }
@@ -160,6 +185,7 @@ export function UsersTable({ currentUserId }: { currentUserId: string }) {
               users.data.map((u) => {
                 const isLastAdmin = u.id === protectedId;
                 const isSelf = u.id === currentUserId;
+                const blockedReason = isLastAdmin ? LAST_ADMIN_REASON : isSelf ? SELF_REASON : undefined;
                 return (
                   <TableRow key={u.id}>
                     <TableCell className="pl-4">
@@ -189,7 +215,7 @@ export function UsersTable({ currentUserId }: { currentUserId: string }) {
                       <Select
                         value={u.role}
                         disabled={isLastAdmin || setRole.isPending}
-                        onValueChange={(role) => setRole.mutate({ userId: u.id, role: role as Role })}
+                        onValueChange={(role) => changeRole(u, role as Role)}
                       >
                         <SelectTrigger size="sm" aria-label="Role" className="w-32 font-mono text-xs">
                           <SelectValue />
@@ -239,16 +265,16 @@ export function UsersTable({ currentUserId }: { currentUserId: string }) {
                     <TableCell className="pr-4">
                       <div className="flex justify-end gap-1">
                         {u.banned ? (
-                          <Button variant="ghost" size="sm" onClick={() => setUnbanTarget(u)}>
+                          <Button variant="ghost" size="sm" onClick={() => unbanDialog.show(u)}>
                             Unban
                           </Button>
                         ) : (
                           <Button
                             variant="ghost"
                             size="sm"
-                            disabled={isLastAdmin}
-                            title={isLastAdmin ? LAST_ADMIN_REASON : undefined}
-                            onClick={() => setBanTarget(u)}
+                            disabled={blockedReason !== undefined}
+                            title={blockedReason}
+                            onClick={() => banDialog.show(u)}
                           >
                             Ban
                           </Button>
@@ -257,9 +283,9 @@ export function UsersTable({ currentUserId }: { currentUserId: string }) {
                           variant="ghost"
                           size="sm"
                           className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                          disabled={isLastAdmin}
-                          title={isLastAdmin ? LAST_ADMIN_REASON : undefined}
-                          onClick={() => setRemoveTarget(u)}
+                          disabled={blockedReason !== undefined}
+                          title={blockedReason}
+                          onClick={() => removeDialog.show(u)}
                         >
                           Remove
                         </Button>
@@ -280,34 +306,52 @@ export function UsersTable({ currentUserId }: { currentUserId: string }) {
       )}
 
       <BanDialog
-        user={banTarget}
-        onOpenChange={(open) => !open && setBanTarget(null)}
+        user={banDialog.target}
+        open={banDialog.open}
+        onOpenChange={banDialog.onOpenChange}
         onBanned={async () => {
-          setBanTarget(null);
+          banDialog.onOpenChange(false);
           await refresh();
         }}
       />
       <ConfirmDialog
-        open={unbanTarget !== null}
-        onOpenChange={(open) => !open && setUnbanTarget(null)}
-        title={`Unban ${unbanTarget?.name ?? "user"}?`}
+        open={unbanDialog.open}
+        onOpenChange={unbanDialog.onOpenChange}
+        title={`Unban ${unbanDialog.target?.name ?? "user"}?`}
         description="They can sign in again with their connected accounts, and their API keys work again."
         confirmLabel="Unban user"
-        onConfirm={() => unban.mutateAsync({ userId: unbanTarget!.id })}
+        onConfirm={() => unban.mutateAsync({ userId: unbanDialog.target!.id })}
       />
       <ConfirmDialog
-        open={removeTarget !== null}
-        onOpenChange={(open) => !open && setRemoveTarget(null)}
-        title={`Remove ${removeTarget?.name ?? "user"}?`}
+        open={removeDialog.open}
+        onOpenChange={removeDialog.onOpenChange}
+        title={`Remove ${removeDialog.target?.name ?? "user"}?`}
         description={
           <>
-            This deletes <span className="font-medium text-foreground">{removeTarget?.email}</span> with their sessions, connected
-            accounts and API keys. They need a new invite to come back. This can&apos;t be undone.
+            This deletes <span className="font-medium text-foreground">{removeDialog.target?.email}</span> with their sessions,
+            connected accounts and API keys. They need a new invite to come back. This can&apos;t be undone.
           </>
         }
         confirmLabel="Remove user"
         destructive
-        onConfirm={() => remove.mutateAsync({ userId: removeTarget!.id })}
+        onConfirm={() => remove.mutateAsync({ userId: removeDialog.target!.id })}
+      />
+      <ConfirmDialog
+        open={roleDialog.open}
+        onOpenChange={roleDialog.onOpenChange}
+        title={
+          pendingSelfDemotion
+            ? `Make yourself ${pendingRole ? withArticle(pendingRole.role) : ""}?`
+            : `Make ${pendingRole?.user.name ?? "this user"} an admin?`
+        }
+        description={
+          pendingSelfDemotion
+            ? "You'll lose admin access immediately: the users, settings and audit pages close for you, and only another admin can give the role back."
+            : "Admins have full control of this Protoloom, including users, settings, every repository and the audit log."
+        }
+        confirmLabel={pendingSelfDemotion ? "Give up admin access" : "Make admin"}
+        destructive={pendingSelfDemotion}
+        onConfirm={() => setRole.mutateAsync({ userId: pendingRole!.user.id, role: pendingRole!.role })}
       />
     </>
   );

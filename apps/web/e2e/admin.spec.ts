@@ -1,55 +1,82 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { eq } from "drizzle-orm";
-import { createDb, repository, setting, user } from "@protoloom/db";
-import { BASE_URL, STATE_FILE, USERS } from "./fixtures";
+import { auditEvent, createDb, repository, session, setting, user } from "@protoloom/db";
+import { BASE_URL, STATE_FILE, USERS, sessionToken } from "./fixtures";
 import { loginAs } from "./helpers";
 
-/** A throwaway user the users-table tests ban, promote and remove (seeded users keep their sessions). */
-const TEMP_USER = { id: "e2e-admin-spec-temp", name: "Tess Temp", email: "temp@e2e.test", role: "viewer" } as const;
+/**
+ * A throwaway user the users-table tests promote, ban and remove, so the seeded users keep their
+ * roles and sessions. Reset before every test, so a retry starts from the same state.
+ */
+const TEMP_USER = { id: "e2e-admin-spec-temp", name: "Tess Temp", email: "temp@e2e.test" } as const;
+
+/** Makes names this run creates unique, so a retry against the same database doesn't collide. */
+const RUN = Date.now().toString(36);
 
 const PUBLIC_REPO = "admin-spec-public";
 const PRIVATE_REPO = "admin-spec-private";
+
+const DAY = 24 * 60 * 60 * 1000;
 
 function openDb() {
   const { databaseUrl } = JSON.parse(readFileSync(STATE_FILE, "utf8")) as { databaseUrl: string };
   return createDb(databaseUrl);
 }
 
-/** Resets "Allow anonymous view" to its default (off); the e2e database is shared by every spec. */
-async function resetAnonymousView(): Promise<void> {
+async function withDb(work: (db: ReturnType<typeof openDb>) => Promise<unknown>): Promise<void> {
   const db = openDb();
   try {
-    await db.delete(setting).where(eq(setting.key, "anonymousView"));
+    await work(db);
   } finally {
     await db.$client.end();
   }
 }
 
-const sidebar = (page: Page) => page.locator("[data-slot=sidebar]");
+/** Resets "Allow anonymous view" to its default (off); the e2e database is shared by every spec. */
+async function resetAnonymousView(): Promise<void> {
+  await withDb((db) => db.delete(setting).where(eq(setting.key, "anonymousView")));
+}
 
-test.beforeAll(async () => {
-  const db = openDb();
-  try {
+/** (Re)creates the temp user as an unbanned user with `role` and a session `loginAs` can use. */
+async function resetTempUser(role: "admin" | "viewer" = "viewer"): Promise<void> {
+  await withDb(async (db) => {
     const now = new Date();
     await db
       .insert(user)
-      .values({ ...TEMP_USER, emailVerified: true, createdAt: now, updatedAt: now })
-      .onConflictDoNothing();
+      .values({ ...TEMP_USER, role, emailVerified: true, createdAt: now, updatedAt: now })
+      .onConflictDoUpdate({ target: user.id, set: { role, banned: false, banReason: null, banExpires: null } });
     await db
+      .insert(session)
+      .values({
+        id: `session-${TEMP_USER.id}`,
+        token: sessionToken(TEMP_USER.id),
+        userId: TEMP_USER.id,
+        expiresAt: new Date(now.getTime() + 7 * DAY),
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({ target: session.id, set: { expiresAt: new Date(now.getTime() + 7 * DAY) } });
+  });
+}
+
+const sidebar = (page: Page) => page.locator("[data-slot=sidebar]");
+
+test.beforeAll(async () => {
+  await withDb((db) =>
+    db
       .insert(repository)
       .values([
         { name: PUBLIC_REPO, visibility: "public", description: "Public protos" },
         { name: PRIVATE_REPO, visibility: "private" },
       ])
-      .onConflictDoNothing();
-  } finally {
-    await db.$client.end();
-  }
+      .onConflictDoNothing(),
+  );
 });
 
 test.describe("invites", () => {
   test("an admin creates a viewer invite whose link is shown exactly once", async ({ page, browser }) => {
+    const note = `Admin spec invite ${RUN}`;
     await loginAs(page, USERS.admin.id);
     await page.goto("/admin/users");
     await page.getByRole("tab", { name: "Invites" }).click();
@@ -59,7 +86,7 @@ test.describe("invites", () => {
     await dialog.getByRole("combobox", { name: "Role" }).click();
     await page.getByRole("option", { name: "viewer" }).click();
     await dialog.getByLabel("Expires in (days)").fill("3");
-    await dialog.getByLabel("Note").fill("Invite from the admin spec");
+    await dialog.getByLabel("Note").fill(note);
     await dialog.getByRole("button", { name: "Create invite" }).click();
 
     const link = dialog.getByRole("textbox", { name: "Invite link" });
@@ -68,14 +95,19 @@ test.describe("invites", () => {
     const url = await link.inputValue();
     const token = url.split("/invite/")[1]!;
 
+    // Only "Done" closes the dialog while the link is shown.
+    await page.keyboard.press("Escape");
+    await expect(link).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Close" })).toHaveCount(0);
+
     await dialog.getByRole("button", { name: "Done" }).click();
     await expect(dialog).toBeHidden();
-    const row = page.getByRole("row", { name: /Invite from the admin spec/ });
+    const row = page.getByRole("row", { name: new RegExp(note) });
     await expect(row).toContainText("open");
     await expect(row).toContainText(USERS.admin.name);
 
     await page.reload();
-    await expect(page.getByRole("row", { name: /Invite from the admin spec/ })).toBeVisible();
+    await expect(page.getByRole("row", { name: new RegExp(note) })).toBeVisible();
     expect(await page.content()).not.toContain(token);
 
     const anonymous = await browser.newContext();
@@ -91,16 +123,17 @@ test.describe("invites", () => {
   });
 
   test("a revoked invite disappears and its link stops working", async ({ page, browser }) => {
+    const note = `Invite to revoke ${RUN}`;
     await loginAs(page, USERS.admin.id);
     await page.goto("/admin/users?tab=invites");
     await page.getByRole("button", { name: "Create invite" }).click();
     const dialog = page.getByRole("dialog");
-    await dialog.getByLabel("Note").fill("Invite to revoke");
+    await dialog.getByLabel("Note").fill(note);
     await dialog.getByRole("button", { name: "Create invite" }).click();
     const url = await dialog.getByRole("textbox", { name: "Invite link" }).inputValue();
     await dialog.getByRole("button", { name: "Done" }).click();
 
-    const row = page.getByRole("row", { name: /Invite to revoke/ });
+    const row = page.getByRole("row", { name: new RegExp(note) });
     await row.getByRole("button", { name: "Revoke" }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Revoke invite" }).click();
     await expect(row).toHaveCount(0);
@@ -117,6 +150,8 @@ test.describe("invites", () => {
 });
 
 test.describe("users", () => {
+  test.beforeEach(() => resetTempUser());
+
   test("the last admin can't be demoted, banned or removed", async ({ page }) => {
     await loginAs(page, USERS.admin.id);
     await page.goto("/admin/users");
@@ -152,12 +187,52 @@ test.describe("users", () => {
     await expect(page.getByText("User removed")).toBeVisible();
     await expect(page.getByRole("row", { name: new RegExp(TEMP_USER.email) })).toHaveCount(0);
   });
+
+  test("promoting to admin asks first, and admins can't ban or remove themselves", async ({ page }) => {
+    await loginAs(page, USERS.admin.id);
+    await page.goto("/admin/users");
+    const temp = page.getByRole("row", { name: new RegExp(TEMP_USER.email) });
+    await temp.getByRole("combobox", { name: "Role" }).click();
+    await page.getByRole("option", { name: "admin" }).click();
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm).toContainText(`Make ${TEMP_USER.name} an admin?`);
+    await confirm.getByRole("button", { name: "Make admin" }).click();
+    await expect(page.getByText(`${TEMP_USER.name} is now an admin`)).toBeVisible();
+
+    // No longer the last admin: the own role can change, but banning or removing yourself can't.
+    const self = page.getByRole("row", { name: new RegExp(USERS.admin.email) });
+    await expect(self).not.toContainText("Last admin");
+    await expect(self.getByRole("combobox", { name: "Role" })).toBeEnabled();
+    await expect(self.getByRole("button", { name: "Ban" })).toBeDisabled();
+    await expect(self.getByRole("button", { name: "Remove" })).toBeDisabled();
+
+    await self.getByRole("combobox", { name: "Role" }).click();
+    await page.getByRole("option", { name: "viewer" }).click();
+    await expect(page.getByRole("alertdialog")).toContainText("You'll lose admin access immediately");
+    await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).click();
+    await expect(self.getByRole("combobox", { name: "Role" })).toHaveText("admin");
+  });
+
+  test("an admin who demotes themselves lands on the dashboard without admin nav", async ({ page }) => {
+    await resetTempUser("admin");
+    await loginAs(page, TEMP_USER.id);
+    await page.goto("/admin/users");
+    const self = page.getByRole("row", { name: new RegExp(TEMP_USER.email) });
+    await self.getByRole("combobox", { name: "Role" }).click();
+    await page.getByRole("option", { name: "maintainer" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Give up admin access" }).click();
+
+    await expect(page).toHaveURL("/dashboard");
+    await expect(sidebar(page).getByRole("link", { name: "Repositories", exact: true })).toBeVisible();
+    await expect(sidebar(page).getByRole("link", { name: "Users", exact: true })).toHaveCount(0);
+  });
 });
 
 test.describe("settings", () => {
   test.afterEach(resetAnonymousView);
 
   test("allowing anonymous view lets visitors browse public repositories only", async ({ page, browser }) => {
+    await resetAnonymousView();
     const anonymous = await browser.newContext();
     try {
       const visitor = await anonymous.newPage();
@@ -193,21 +268,41 @@ test.describe("settings", () => {
 });
 
 test.describe("audit log", () => {
+  const inviteTarget = `audit-spec-invite-${RUN}`;
+  const removeTarget = `audit-spec-removed-${RUN}`;
+
+  test.beforeEach(async () => {
+    await withDb((db) =>
+      db.insert(auditEvent).values([
+        {
+          actorType: "user",
+          actorId: USERS.admin.id,
+          action: "invite.create",
+          target: inviteTarget,
+          details: { role: "viewer", note: `audit ${RUN}` },
+        },
+        { actorType: "system", action: "user.remove", target: removeTarget, forced: true },
+      ]),
+    );
+  });
+
   test("lists changes and filters them by action", async ({ page }) => {
     await loginAs(page, USERS.admin.id);
     await page.goto("/admin/audit");
     const table = page.getByRole("table");
-    await expect(table.getByText("invite.create").first()).toBeVisible();
-    await expect(table.getByText("user.remove").first()).toBeVisible();
+    const invite = table.getByRole("row", { name: new RegExp(inviteTarget) });
+    const removal = table.getByRole("row", { name: new RegExp(removeTarget) });
+    await expect(invite).toContainText(USERS.admin.name);
+    await expect(removal).toContainText("System");
+    await expect(removal).toContainText("forced");
 
     await page.getByRole("combobox", { name: "Action" }).click();
     await page.getByRole("option", { name: "invite.create" }).click();
+    await expect(removal).toHaveCount(0);
     await expect(table.getByText("user.remove")).toHaveCount(0);
-    const first = table.getByRole("row", { name: /invite\.create/ }).first();
-    await expect(first).toContainText(USERS.admin.name);
 
-    await first.getByRole("button", { name: "Show details" }).click();
-    await expect(table.getByText(/"role":\s*"viewer"|"role":\s*"maintainer"/).first()).toBeVisible();
+    await invite.getByRole("button", { name: "Show details" }).click();
+    await expect(table.getByText(`"note": "audit ${RUN}"`)).toBeVisible();
   });
 });
 

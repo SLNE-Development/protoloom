@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
@@ -93,6 +93,11 @@ export function CreateInviteDialog({ onCreated }: { onCreated: () => Promise<unk
     }),
   );
 
+  // Drop the one-time result when the dialog unmounts too (for example on navigation).
+  const resetCreate = useRef(create.reset);
+  resetCreate.current = create.reset;
+  useEffect(() => () => resetCreate.current(), []);
+
   function changeOpen(next: boolean) {
     if (create.isPending) return;
     setOpen(next);
@@ -116,7 +121,13 @@ export function CreateInviteDialog({ onCreated }: { onCreated: () => Promise<unk
           Create invite
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-lg" onInteractOutside={(event) => created && event.preventDefault()}>
+      <DialogContent
+        className="sm:max-w-lg"
+        // While the link is shown, only "Done" closes the dialog, so it isn't dismissed by accident.
+        showCloseButton={!created}
+        onInteractOutside={(event) => created && event.preventDefault()}
+        onEscapeKeyDown={(event) => created && event.preventDefault()}
+      >
         {created ? (
           <>
             <DialogHeader>

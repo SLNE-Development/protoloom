@@ -506,13 +506,26 @@ describe("users", () => {
   it("refuses to demote, ban or remove the last admin", async () => {
     const caller = call(admin());
     expect(await codeOf(caller.users.setRole({ userId: people.admin, role: "maintainer" }))).toBe("PRECONDITION_FAILED");
-    expect(await codeOf(caller.users.ban({ userId: people.admin }))).toBe("PRECONDITION_FAILED");
-    expect(await codeOf(caller.users.remove({ userId: people.admin }))).toBe("PRECONDITION_FAILED");
+    // Another caller with admin rights (the stored role is what counts for the last-admin rule).
+    const other = call(asUser(people.maintainer, "admin"));
+    expect(await codeOf(other.users.ban({ userId: people.admin }))).toBe("PRECONDITION_FAILED");
+    expect(await codeOf(other.users.remove({ userId: people.admin }))).toBe("PRECONDITION_FAILED");
 
     await caller.users.setRole({ userId: people.maintainer, role: "admin" });
     await caller.users.setRole({ userId: people.admin, role: "viewer" });
     const roles = Object.fromEntries((await caller.users.list()).map((u) => [u.id, u.role]));
     expect(roles).toEqual({ [people.admin]: "viewer", [people.maintainer]: "admin", [people.viewer]: "viewer" });
+  });
+
+  it("refuses to let admins ban or remove their own account", async () => {
+    await call(admin()).users.setRole({ userId: people.maintainer, role: "admin" });
+    const self = call(admin());
+    const banSelf = self.users.ban({ userId: people.admin });
+    await expect(banSelf).rejects.toThrow("You can't ban your own account");
+    expect(await codeOf(self.users.ban({ userId: people.admin }))).toBe("FORBIDDEN");
+    await expect(self.users.remove({ userId: people.admin })).rejects.toThrow("You can't remove your own account");
+    expect(await codeOf(self.users.remove({ userId: people.admin }))).toBe("FORBIDDEN");
+    expect((await self.users.list()).find((u) => u.id === people.admin)).toMatchObject({ banned: false, role: "admin" });
   });
 
   it("bans (ending sessions), unbans and removes users, auditing every change", async () => {

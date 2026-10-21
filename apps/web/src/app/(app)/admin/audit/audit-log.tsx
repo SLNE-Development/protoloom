@@ -5,7 +5,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { BotIcon, ChevronRightIcon, KeyRoundIcon, ScrollTextIcon, ShieldAlertIcon, UserIcon, UserXIcon } from "lucide-react";
 import { Badge } from "@protoloom/ui/components/badge";
 import { Button } from "@protoloom/ui/components/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@protoloom/ui/components/empty";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@protoloom/ui/components/empty";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@protoloom/ui/components/select";
 import { Skeleton } from "@protoloom/ui/components/skeleton";
 import { Spinner } from "@protoloom/ui/components/spinner";
@@ -61,11 +61,11 @@ export function AuditLog() {
     ),
   );
   const sentinel = useRef<HTMLDivElement>(null);
-  const { hasNextPage, isFetchingNextPage, fetchNextPage } = log;
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = log;
 
   useEffect(() => {
     const node = sentinel.current;
-    if (!node || !hasNextPage) return;
+    if (!node || !hasNextPage || isFetchNextPageError) return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting) && !isFetchingNextPage) void fetchNextPage();
@@ -74,7 +74,7 @@ export function AuditLog() {
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
 
   function toggle(id: string) {
     setExpanded((current) => {
@@ -113,7 +113,7 @@ export function AuditLog() {
         {log.isFetching && !log.isFetchingNextPage && <Spinner className="text-muted-foreground" />}
       </div>
 
-      {log.isError ? (
+      {log.isError && !log.data ? (
         <Empty className="border">
           <EmptyHeader>
             <EmptyMedia variant="icon">
@@ -122,6 +122,11 @@ export function AuditLog() {
             <EmptyTitle>Couldn&apos;t load the audit log</EmptyTitle>
             <EmptyDescription>{log.error.message}</EmptyDescription>
           </EmptyHeader>
+          <EmptyContent>
+            <Button variant="outline" size="sm" onClick={() => void log.refetch()}>
+              Try again
+            </Button>
+          </EmptyContent>
         </Empty>
       ) : !log.isPending && items.length === 0 ? (
         <Empty className="border">
@@ -228,6 +233,13 @@ export function AuditLog() {
           <div ref={sentinel} className="flex justify-center border-t px-4 py-2 text-xs text-muted-foreground">
             {log.isFetchingNextPage ? (
               <Spinner />
+            ) : log.isFetchNextPageError ? (
+              <span role="alert" className="flex items-center gap-2 text-destructive">
+                Couldn&apos;t load more entries.
+                <Button variant="outline" size="sm" onClick={() => void log.fetchNextPage()}>
+                  Try again
+                </Button>
+              </span>
             ) : log.hasNextPage ? (
               <Button variant="ghost" size="sm" onClick={() => void log.fetchNextPage()}>
                 Load more

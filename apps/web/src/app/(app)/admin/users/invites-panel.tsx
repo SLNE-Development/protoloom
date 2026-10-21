@@ -1,17 +1,17 @@
 "use client";
 
-import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MailPlusIcon, ShieldAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@protoloom/ui/components/badge";
 import { Button } from "@protoloom/ui/components/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@protoloom/ui/components/empty";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@protoloom/ui/components/empty";
 import { Skeleton } from "@protoloom/ui/components/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@protoloom/ui/components/table";
 import { cn } from "@protoloom/ui/lib/utils";
 import { useTRPC, type RouterOutputs } from "@/trpc/client";
 import { ConfirmDialog } from "../_components/confirm-dialog";
+import { useDialogTarget } from "../_components/use-dialog-target";
 import { formatDate, formatDateTime, formatRelative } from "../_components/format";
 import { CreateInviteDialog } from "./create-invite-dialog";
 
@@ -56,7 +56,7 @@ export function InvitesPanel() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const invites = useQuery(trpc.invites.list.queryOptions());
-  const [revokeTarget, setRevokeTarget] = useState<Invite | null>(null);
+  const revokeDialog = useDialogTarget<Invite>();
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: trpc.invites.list.queryKey() });
   const revoke = useMutation(
@@ -80,6 +80,11 @@ export function InvitesPanel() {
           <EmptyTitle>Couldn&apos;t load the invites</EmptyTitle>
           <EmptyDescription>{invites.error.message}</EmptyDescription>
         </EmptyHeader>
+        <EmptyContent>
+          <Button variant="outline" size="sm" onClick={() => void invites.refetch()}>
+            Try again
+          </Button>
+        </EmptyContent>
       </Empty>
     );
   } else if (invites.isPending) {
@@ -141,7 +146,7 @@ export function InvitesPanel() {
                       variant="ghost"
                       size="sm"
                       className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      onClick={() => setRevokeTarget(invite)}
+                      onClick={() => revokeDialog.show(invite)}
                     >
                       Revoke
                     </Button>
@@ -165,17 +170,17 @@ export function InvitesPanel() {
       </div>
       {body}
       <ConfirmDialog
-        open={revokeTarget !== null}
-        onOpenChange={(open) => !open && setRevokeTarget(null)}
+        open={revokeDialog.open}
+        onOpenChange={revokeDialog.onOpenChange}
         title="Revoke this invite?"
         description={
-          revokeTarget?.status === "expired"
+          revokeDialog.target?.status === "expired"
             ? "The invite has already expired; revoking it removes it from the list."
             : "The link stops working immediately. Anyone who hasn't used it yet will need a new invite."
         }
         confirmLabel="Revoke invite"
         destructive
-        onConfirm={() => revoke.mutateAsync({ id: revokeTarget!.id })}
+        onConfirm={() => revoke.mutateAsync({ id: revokeDialog.target!.id })}
       />
     </div>
   );
