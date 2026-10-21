@@ -47,7 +47,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: protoloom:coolify
+    image: ${PROTOLOOM_IMAGE:-ghcr.io/slne-development/protoloom:latest}
     command: ["web"]
     restart: unless-stopped
     environment:
@@ -73,7 +73,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: protoloom:coolify
+    image: ${PROTOLOOM_IMAGE:-ghcr.io/slne-development/protoloom:latest}
     command: ["worker"]
     restart: unless-stopped
     environment: *protoloom-env
