@@ -1,0 +1,5 @@
+{
+  "extends": "@protoloom/config/tsconfig.node.json",
+  "compilerOptions": { "types": ["node"], "noEmit": true, "rootDir": "." },
+  "include": ["src", "tsup.config.ts"]
+}
