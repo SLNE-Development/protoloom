@@ -103,9 +103,9 @@ The worker exits at start when `VALKEY_URL` or `DATABASE_URL` is missing.
 
 | Message | Fix |
 | --- | --- |
-| `Missing required environment variable STORAGE_LOCAL_PATH` | With `STORAGE_DRIVER=local`, set the path (the image uses `/data/storage`) and mount a volume there. |
+| `Missing required environment variable STORAGE_LOCAL_PATH` (worker or first request) | With `STORAGE_DRIVER=local`, set the path (the image uses `/data/storage`) and mount a volume there. |
 | `Missing required environment variable S3_BUCKET` (or `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) | Set every `S3_*` variable for `STORAGE_DRIVER=s3`. |
-| `Invalid or missing STORAGE_DRIVER` | Use `local` or `s3`. |
+| `Invalid environment variables: STORAGE_DRIVER: …` (web) or `Invalid or missing STORAGE_DRIVER` | Use `local` or `s3`. |
 | Publishes fail with `internal_error` and the log shows `NoSuchBucket` | Create the bucket. On Coolify, check that `seaweedfs-init` completed. |
 | `Archive blob … is missing from storage` in the log | The database points at an archive the store doesn't have: storage was reset or web and worker use different volumes. Restore the storage backup that matches the database. |
 | `EACCES` writing to `/data/storage` | The container runs as `node` (uid 1000). Make the mounted directory writable for it. |

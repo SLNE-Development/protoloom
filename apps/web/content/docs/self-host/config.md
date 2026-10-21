@@ -14,7 +14,7 @@ Protoloom is configured with environment variables only. The web app validates i
 | Variable | Required | Reads | Description |
 | --- | --- | --- | --- |
 | `DATABASE_URL` | yes | web, worker | PostgreSQL connection string, e.g. `postgres://protoloom:<password>@postgres:5432/protoloom`. |
-| `VALKEY_URL` | yes | worker, web | Valkey or Redis URL for the job queue, e.g. `redis://valkey:6379`. The worker refuses to start without it. Valkey must use `maxmemory-policy noeviction`. |
+| `VALKEY_URL` | worker: yes, web: no | worker, web | Valkey or Redis URL for the job queue, e.g. `redis://valkey:6379`. The worker refuses to start without it. The web app starts without it but needs it to queue cleanup runs (**Run now**). Valkey must use `maxmemory-policy noeviction`. |
 
 ## Storage
 

@@ -11,6 +11,7 @@ import {
   CommandItem,
   CommandList,
 } from "@protoloom/ui/components/command";
+import { Button } from "@protoloom/ui/components/button";
 import { Kbd } from "@protoloom/ui/components/kbd";
 import type { DocSearchEntry } from "@/lib/docs";
 
@@ -20,7 +21,13 @@ import type { DocSearchEntry } from "@/lib/docs";
  */
 export function DocsSearch({ entries }: { entries: DocSearchEntry[] }) {
   const [open, setOpen] = useState(false);
+  const [isMac, setIsMac] = useState(false);
   const router = useRouter();
+
+  useEffect(() => {
+    // Read after hydration so server and client render the same first markup.
+    setIsMac(/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent));
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -40,17 +47,20 @@ export function DocsSearch({ entries }: { entries: DocSearchEntry[] }) {
 
   return (
     <>
-      <button
+      <Button
         type="button"
+        variant="outline"
+        size="sm"
         onClick={() => setOpen(true)}
-        className="flex h-8 w-full max-w-60 items-center gap-2 rounded-md border bg-background px-2.5 text-[13px] text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-        aria-label="Search docs"
+        className="w-full max-w-60 min-w-0 justify-start gap-2 px-2.5 text-[13px] font-normal text-muted-foreground shadow-none"
         aria-keyshortcuts="Control+K Meta+K"
       >
-        <SearchIcon className="size-3.5 shrink-0" aria-hidden="true" />
+        <SearchIcon className="size-3.5" aria-hidden="true" />
         <span className="truncate">Search docs</span>
-        <Kbd className="ml-auto hidden border font-mono sm:inline-flex">Ctrl K</Kbd>
-      </button>
+        <Kbd className="ml-auto hidden border font-mono sm:inline-flex" aria-hidden="true">
+          {isMac ? "⌘K" : "Ctrl K"}
+        </Kbd>
+      </Button>
       <CommandDialog open={open} onOpenChange={setOpen} title="Search docs" description="Find a page or a section of the docs">
         <CommandInput placeholder="Search docs…" />
         <CommandList>

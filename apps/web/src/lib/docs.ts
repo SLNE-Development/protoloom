@@ -144,8 +144,23 @@ function markdownFiles(dir: string): string[] {
 
 const sectionRank = (section: DocSection) => DOC_SECTIONS.indexOf(section);
 
+/**
+ * In production the content can't change while the server runs, so the page list is read once per
+ * process. `NODE_ENV` is set by Next.js and Vitest themselves, not by the operator.
+ */
+const CACHE_LIST = process.env.NODE_ENV === "production";
+const listCache = new Map<string, DocMeta[]>();
+
 /** Every page in reading order: by section, then `order`. Throws when a page has bad frontmatter. */
 export function listDocs(dir: string = DOCS_DIR): DocMeta[] {
+  const cached = CACHE_LIST ? listCache.get(dir) : undefined;
+  if (cached) return cached;
+  const docs = readDocs(dir);
+  if (CACHE_LIST) listCache.set(dir, docs);
+  return docs;
+}
+
+function readDocs(dir: string): DocMeta[] {
   return markdownFiles(dir)
     .map((file) => {
       const rel = relative(dir, file).split(sep).join("/");
@@ -221,6 +236,14 @@ function toCallout(node: Element): boolean {
   return true;
 }
 
+/** Whether a link's `href` (or an image's `src`) is relative, an anchor, or uses http, https or mailto. */
+function hasSafeUrl(node: Element): boolean {
+  const value = node.properties?.href ?? node.properties?.src;
+  if (typeof value !== "string") return true;
+  const scheme = /^\s*([a-z][a-z0-9+.-]*):/i.exec(value)?.[1]?.toLowerCase();
+  return scheme === undefined || scheme === "http" || scheme === "https" || scheme === "mailto";
+}
+
 interface RenderState {
   headings: DocHeading[];
   links: string[];
@@ -247,11 +270,20 @@ function rehypeDocs(highlighter: Highlighter, state: RenderState) {
         const id = slugger.slug(text);
         node.properties = { ...node.properties, id };
         state.headings.push({ depth: node.tagName === "h2" ? 2 : 3, id, text });
-        node.children.push(el("a", { className: ["docs-anchor"], href: `#${id}`, ariaLabel: `Link to ${text}` }, [{ type: "text", value: "#" }]));
+        // Hidden from assistive tech so the heading's accessible name stays its text; the TOC links to it.
+        node.children.push(el("a", { className: ["docs-anchor"], href: `#${id}`, ariaHidden: "true", tabIndex: -1 }, [{ type: "text", value: "#" }]));
         return SKIP;
       }
       if (node.tagName === "blockquote") {
         toCallout(node);
+        return undefined;
+      }
+      if ((node.tagName === "a" || node.tagName === "img") && !hasSafeUrl(node)) {
+        // `javascript:`, `data:` and other schemes never reach the page.
+        const properties = { ...node.properties };
+        delete properties.href;
+        delete properties.src;
+        node.properties = properties;
         return undefined;
       }
       if (node.tagName === "a" && typeof node.properties?.href === "string") {
@@ -310,7 +342,10 @@ async function renderMarkdown(markdown: string): Promise<{ html: string } & Rend
   return { html: String(file), ...state };
 }
 
+/** Rendered pages by content key; insertion-ordered, so the oldest entry is dropped first. */
 const renderCache = new Map<string, Promise<RenderedDoc>>();
+/** Enough for every page at the instance URL plus the search index, with room for edits in development. */
+const RENDER_CACHE_LIMIT = 200;
 
 /**
  * Renders the page at `slug` with `{{url}}` filled in, or null when there is no such page.
@@ -331,9 +366,10 @@ function renderAt(docs: DocMeta[], index: number, url: string): Promise<Rendered
   const prev = docs[index - 1];
   const next = docs[index + 1];
   const source = readFileSync(doc.file, "utf8");
-  const key = [doc.file, url, prev?.path, prev?.title, next?.path, next?.title, source].join(" ");
+  const key = [doc.file, url, prev?.path, prev?.title, next?.path, next?.title, source].join("\u0000");
   let cached = renderCache.get(key);
   if (!cached) {
+    if (renderCache.size >= RENDER_CACHE_LIMIT) renderCache.delete(renderCache.keys().next().value as string);
     cached = renderMarkdown(fillUrl(parseFrontmatter(source, doc.file).body, url)).then(({ html, headings }) => ({
       ...doc,
       html,

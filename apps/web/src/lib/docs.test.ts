@@ -204,6 +204,19 @@ describe("rendering", () => {
       join(dir, "steps.md"),
       "---\ntitle: Steps\ndescription: Steps test.\nsection: Help\norder: 2\n---\n\n## 2. Store the key\n",
     );
+    await writeFile(
+      join(dir, "unsafe.md"),
+      [
+        "---\ntitle: Unsafe\ndescription: Unsafe test.\nsection: Help\norder: 3\n---\n",
+        "<script>alert(1)</script>",
+        "",
+        '<img src="x" onerror="alert(1)"> <iframe src="https://evil.test"></iframe>',
+        "",
+        "[js](javascript:alert(1)) [JS](JavaScript:alert(1)) [data](data:text/html,hi) ![img](javascript:alert(1))",
+        "",
+        "[mail](mailto:ops@protos.test) [docs](/docs)",
+      ].join("\n"),
+    );
   });
 
   afterAll(async () => {
@@ -241,6 +254,19 @@ describe("rendering", () => {
     const doc = await renderDoc(["steps"], { url: "https://protos.test", dir });
     expect(doc?.headings).toEqual([{ depth: 2, id: "store-the-key", text: "Store the key" }]);
     expect(doc?.html).toContain('<h2 id="store-the-key"><span class="docs-step" aria-hidden="true">2</span>Store the key');
+  });
+
+  it("drops raw HTML and unsafe link schemes", async () => {
+    const doc = await renderDoc(["unsafe"], { url: "https://protos.test", dir });
+    expect(doc?.html).not.toMatch(/<script|onerror|<iframe/i);
+    expect(doc?.html).not.toMatch(/javascript:|data:text/i);
+    expect(doc?.html).toContain('<a href="mailto:ops@protos.test">');
+    expect(doc?.html).toContain('<a href="/docs">');
+  });
+
+  it("keeps heading anchors out of the heading's accessible name", async () => {
+    const doc = await renderDoc(["steps"], { url: "https://protos.test", dir });
+    expect(doc?.html).toContain('<a class="docs-anchor" href="#store-the-key" aria-hidden="true" tabindex="-1">#</a>');
   });
 
   it("returns null for an unknown page", async () => {

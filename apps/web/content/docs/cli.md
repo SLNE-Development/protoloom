@@ -38,7 +38,7 @@ Or run it once without installing: `npx protoloom fetch`.
 | `dependencies` | yes | Exact coordinates `group:name:version`. Their dependencies are fetched too. |
 | `outDir` | no | Output folder, relative to the current directory. Default `protos`. |
 
-Unknown fields are ignored. A wrong type fails with `Invalid config protoloom.json: …` and names the field.
+Unknown fields are ignored. A wrong type fails with `Invalid config <absolute path to the config file>: …` and names the field.
 
 ## Run it
 

@@ -9,7 +9,7 @@ Admins find both pages in the sidebar: **Settings** and **Audit log**.
 
 ## Allow anonymous view
 
-Off by default. When it's off, visitors who aren't signed in see only the sign-in page.
+Off by default. When it's off, visitors who aren't signed in can still open the landing page, these docs and the sign-in page, but they can't browse any repository in the web app.
 
 When it's on, visitors can browse **public** repositories in the web app without signing in: the artifact browser, version pages and the proto viewer, all read-only. They never see private repositories, API keys, users, settings or the audit log.
 

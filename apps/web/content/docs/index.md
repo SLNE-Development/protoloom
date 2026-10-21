@@ -18,7 +18,7 @@ dev.surf.economy:economy-contracts:1.4.0
 group            name              version
 ```
 
-- **group** is a reverse-DNS name such as `dev.surf.economy`. Lowercase letters, digits, `_` and `-`, separated by dots.
+- **group** is a reverse-DNS name such as `dev.surf.economy`. Segments of lowercase letters, digits and `_`, separated by dots; segments after the first may also contain `-`.
 - **name** identifies the artifact inside the group, such as `economy-contracts`.
 - **version** is a version number like `1.4.0`, optionally with a qualifier: `1.4.0-rc.1` or `1.4.0-SNAPSHOT`.
 

@@ -5,7 +5,7 @@ section: Concepts
 order: 3
 ---
 
-Protoloom never stores an artifact that doesn't compile. Every publish goes through the checks below, and the first one that fails rejects it. Nothing is stored when a check fails.
+Protoloom never stores an artifact that doesn't compile. Every publish goes through the checks below. Any failing check rejects the publish, and nothing is stored. The sections group the checks by topic; the server runs some of them interleaved (for example, the archive size and the manifest are checked before the archive contents are unpacked).
 
 ## 1. The archive
 

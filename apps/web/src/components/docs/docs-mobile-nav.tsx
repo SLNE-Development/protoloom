@@ -1,6 +1,7 @@
 "use client";
 
 import { MenuIcon } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@protoloom/ui/components/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@protoloom/ui/components/sheet";
@@ -24,6 +25,13 @@ export function DocsMobileNav({ groups }: { groups: DocNavGroup[] }) {
         </SheetHeader>
         <div className="p-3">
           <DocsNav groups={groups} onNavigate={() => setOpen(false)} />
+        </div>
+        <div className="mt-auto border-t p-3">
+          <Button asChild variant="outline" className="w-full">
+            <Link href="/dashboard" onClick={() => setOpen(false)}>
+              Open app
+            </Link>
+          </Button>
         </div>
       </SheetContent>
     </Sheet>

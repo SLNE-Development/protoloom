@@ -86,7 +86,7 @@ docker compose -f docker-compose.prod.yml ps
 
 ## 5. Put HTTPS in front
 
-The app listens on plain HTTP on port 3000 (`APP_PORT` changes the host port). Put a TLS-terminating reverse proxy in front of it, such as Caddy, Traefik, nginx or a Cloudflare Tunnel, and point your domain at it. `BETTER_AUTH_URL` must be that public https URL.
+The app listens on plain HTTP on port 3000 (`APP_PORT` changes the host port). With a reverse proxy on the same host, publish the port on localhost only, so the app can't be reached around the proxy: change the `app` ports entry to `"127.0.0.1:${APP_PORT:-3000}:3000"`. Put a TLS-terminating reverse proxy in front of it, such as Caddy, Traefik, nginx or a Cloudflare Tunnel, and point your domain at it. `BETTER_AUTH_URL` must be that public https URL.
 
 ```text title="Caddyfile"
 {{host}} {

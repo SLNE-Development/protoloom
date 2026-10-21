@@ -199,7 +199,7 @@ curl -fLo economy-contracts-1.4.0.tar.gz \
 DELETE /api/v1/repos/{repo}/artifacts/{group}/{name}/{version}
 ```
 
-Deletes the version with all its builds. Needs a key with `write` access to the group, owned by a maintainer or admin. Answers `204 No Content`.
+Deletes the version with all its builds. Needs a key with `write` access to the group, owned by a maintainer or admin, or a signed-in maintainer or admin session. Answers `204 No Content`.
 
 If other versions depend on it, in any repository, the answer is `409 has_dependents`:
 
