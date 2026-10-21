@@ -64,16 +64,27 @@ export async function readableRepository(
   return repo;
 }
 
-/** The newest build of a version in a readable repository; throws `not_found` otherwise. */
+/** Selects one build of a version: `buildNumber` when given, otherwise the newest. */
+export interface BuildSelector {
+  buildNumber?: number;
+}
+
+/**
+ * The newest build (or build `buildNumber`) of a version in a readable repository; throws
+ * `not_found` otherwise.
+ */
 async function readableBuild(
   db: Queryable,
   p: Principal,
   repositoryName: string,
   c: Coordinate,
+  { buildNumber }: BuildSelector = {},
 ): Promise<{ repo: RepositoryRow; build: BuildRow }> {
   const repo = await readableRepository(db, p, repositoryName, c.group);
-  const found = await findLatestBuild(db, repo.id, c);
-  if (!found) throw notFound(`Version ${formatCoordinate(c)}`);
+  const found = await findLatestBuild(db, repo.id, c, buildNumber);
+  if (!found) {
+    throw notFound(buildNumber === undefined ? `Version ${formatCoordinate(c)}` : `Build ${buildNumber} of ${formatCoordinate(c)}`);
+  }
   return { repo, build: found };
 }
 
@@ -104,14 +115,15 @@ export async function listVersions(
     .sort((a, b) => compareVersions(b.version, a.version));
 }
 
-/** Metadata of a version; snapshots describe their newest build. */
+/** Metadata of a version; snapshots describe their newest build unless `select` names one. */
 export async function getManifest(
   ctx: RegistryContext,
   p: Principal,
   repositoryName: string,
   c: Coordinate,
+  select: BuildSelector = {},
 ): Promise<VersionInfo> {
-  const { repo, build: latest } = await readableBuild(ctx.db, p, repositoryName, c);
+  const { repo, build: latest } = await readableBuild(ctx.db, p, repositoryName, c, select);
   const [files, dependencies, builds, publisher] = await Promise.all([
     ctx.db
       .select({ path: buildFile.path })
@@ -143,14 +155,18 @@ export async function getManifest(
   };
 }
 
-/** Returns the archive of a version's newest build and counts the download on that build. */
+/**
+ * Returns the archive of a version's newest build (or the build `select` names, `not_found` once
+ * it is gone) and counts the download on that build.
+ */
 export async function download(
   ctx: RegistryContext,
   p: Principal,
   repositoryName: string,
   c: Coordinate,
+  select: BuildSelector = {},
 ): Promise<{ data: Buffer; sha256: string; filename: string }> {
-  const { build: served } = await readableBuild(ctx.db, p, repositoryName, c);
+  const { build: served } = await readableBuild(ctx.db, p, repositoryName, c, select);
   const data = await ctx.blobs.get(served.storageKey);
   if (!data) throw new Error(`Archive blob ${served.storageKey} is missing from storage`);
   await ctx.db

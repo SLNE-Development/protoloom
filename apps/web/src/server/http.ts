@@ -79,13 +79,25 @@ export function versionCoordinate(params: VersionParams): Coordinate {
 }
 
 /**
- * The absolute URL of a version's archive route, built from the public base URL
- * (`BETTER_AUTH_URL`), never from the request host.
+ * The absolute URL of one build's archive, built from the public base URL (`BETTER_AUTH_URL`),
+ * never from the request host. Pinning the build keeps a snapshot download consistent with the
+ * resolve answer (build number, sha256) even when a newer build is published in between.
  */
-export function archiveUrl(repository: string, c: Coordinate): string {
+export function archiveUrl(repository: string, c: Coordinate, buildNumber: number): string {
   const base = env.BETTER_AUTH_URL.replace(/\/+$/, "");
   const segments = [repository, "artifacts", c.group, c.name, c.version].map(encodeURIComponent).join("/");
-  return `${base}/api/v1/repos/${segments}/archive`;
+  return `${base}/api/v1/repos/${segments}/archive?build=${buildNumber}`;
+}
+
+/**
+ * The build number in `?build=<n>`, or undefined without one; throws `invalid_request` unless it
+ * is a positive integer.
+ */
+export function buildParam(req: Request): number | undefined {
+  const raw = new URL(req.url).searchParams.get("build");
+  if (raw === null) return undefined;
+  if (!/^[1-9]\d{0,8}$/.test(raw)) throw invalidRequest(`Invalid build number "${raw}"`);
+  return Number(raw);
 }
 
 /**

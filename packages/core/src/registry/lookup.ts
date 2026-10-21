@@ -62,11 +62,15 @@ export async function publishRepositoryOrder(db: Queryable, target: RepositoryRo
   return [target, ...others];
 }
 
-/** Finds the newest build (highest build number) of a version in a repository; null when absent. */
+/**
+ * Finds the newest build (highest build number) of a version in a repository, or exactly build
+ * `buildNumber` when given; null when absent.
+ */
 export async function findLatestBuild(
   db: Queryable,
   repositoryId: string,
   c: Coordinate,
+  buildNumber?: number,
 ): Promise<BuildRow | null> {
   const [row] = await db
     .select({ build })
@@ -79,6 +83,7 @@ export async function findLatestBuild(
         eq(artifact.group, c.group),
         eq(artifact.name, c.name),
         eq(version.version, c.version),
+        buildNumber === undefined ? undefined : eq(build.buildNumber, buildNumber),
       ),
     )
     .orderBy(desc(build.buildNumber))

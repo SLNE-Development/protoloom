@@ -288,7 +288,7 @@ describe("POST resolve", () => {
         version: "1.0.0",
         buildNumber: 1,
         sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
-        archiveUrl: `${BASE}/api/v1/repos/releases/artifacts/acme/money/1.0.0/archive`,
+        archiveUrl: `${BASE}/api/v1/repos/releases/artifacts/acme/money/1.0.0/archive?build=1`,
       },
       {
         repository: "releases",
@@ -298,7 +298,7 @@ describe("POST resolve", () => {
         version: "1.0.0",
         buildNumber: 1,
         sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
-        archiveUrl: `${BASE}/api/v1/repos/releases/artifacts/acme/order/1.0.0/archive`,
+        archiveUrl: `${BASE}/api/v1/repos/releases/artifacts/acme/order/1.0.0/archive?build=1`,
       },
     ]);
   });
@@ -437,6 +437,33 @@ describe("GET manifest and HEAD archive", () => {
     expect(head.headers.get("content-disposition")).toBe('attachment; filename="money-1.0.0.tar.gz"');
     expect(await head.text()).toBe("");
     expect(await downloadCount(money)).toBe(1);
+  });
+
+  it("serves the build named by ?build=, 404 once it is gone, 400 when malformed", async () => {
+    const snap: Params = { repo: "private", group: "acme", name: "money", version: "1.0.0-SNAPSHOT" };
+    const first = (await (await publish(snap, { token: keys.maintainer })).json()) as { sha256: string };
+    const changed = [proto("acme/money/v1/money.proto", "message Money { int64 cents = 1; string currency = 2; }")];
+    const second = (await (await publish(snap, { token: keys.maintainer, files: changed })).json()) as { sha256: string };
+
+    const get = (query: string) =>
+      archiveRoute(new Request(artifactUrl(snap, `/archive${query}`), { headers: headers(keys.maintainer) }), ctxOf(snap));
+    expect((await get("")).headers.get("x-protoloom-sha256")).toBe(second.sha256);
+    expect((await get("?build=1")).headers.get("x-protoloom-sha256")).toBe(first.sha256);
+    expect((await get("?build=2")).headers.get("x-protoloom-sha256")).toBe(second.sha256);
+    const head = await archiveHead(
+      new Request(artifactUrl(snap, "/archive?build=1"), { method: "HEAD", headers: headers(keys.maintainer) }),
+      ctxOf(snap),
+    );
+    expect(head.headers.get("x-protoloom-sha256")).toBe(first.sha256);
+
+    const gone = await get("?build=3");
+    expect(gone.status).toBe(404);
+    expect((await errorOf(gone)).code).toBe("not_found");
+    for (const bad of ["?build=abc", "?build=0", "?build=-1", "?build=1.5"]) {
+      const res = await get(bad);
+      expect(res.status, bad).toBe(400);
+      expect((await errorOf(res)).code).toBe("invalid_request");
+    }
   });
 
   it("answers HEAD with 404 for a version the caller can't read", async () => {

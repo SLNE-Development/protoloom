@@ -211,6 +211,22 @@ describe("registry", () => {
     expect(info.builds.map((b) => b.buildNumber)).toEqual([1, 2, 3]);
   });
 
+  it("downloads a specific snapshot build on request, and not_found once it is gone", async () => {
+    const snapshot = coord("acme", "money", "1.0.0-SNAPSHOT");
+    const first = await publishMoney(maintainer, "snapshots", "1.0.0-SNAPSHOT");
+    const changed = [proto("acme/money/v1/money.proto", "message Money { int64 cents = 1; string currency = 2; }")];
+    const second = await publishMoney(maintainer, "snapshots", "1.0.0-SNAPSHOT", changed);
+    expect(second.sha256).not.toBe(first.sha256);
+
+    expect((await registry.download(maintainer, "snapshots", snapshot)).sha256).toBe(second.sha256);
+    expect((await registry.download(maintainer, "snapshots", snapshot, { buildNumber: 1 })).sha256).toBe(first.sha256);
+    expect((await registry.getManifest(maintainer, "snapshots", snapshot, { buildNumber: 1 })).sha256).toBe(first.sha256);
+    await expectError(registry.download(maintainer, "snapshots", snapshot, { buildNumber: 3 }), "not_found");
+
+    await testDb.db.delete(build).where(eq(build.buildNumber, 1));
+    await expectError(registry.download(maintainer, "snapshots", snapshot, { buildNumber: 1 }), "not_found");
+  });
+
   /** A registry whose validation holds publishes until two arrive, then lets both into their transactions at once. */
   function racingRegistry(): Registry {
     let arrived = 0;

@@ -14,20 +14,28 @@ import {
   listDependents,
   listVersions,
   resolve,
+  type BuildSelector,
   type Dependent,
   type VersionInfo,
   type VersionSummary,
 } from "./read.js";
 
 export { manifestSchema, type Manifest, type PublishInput, type PublishResult } from "./publish.js";
-export type { Dependent, VersionInfo, VersionSummary } from "./read.js";
+export type { BuildSelector, Dependent, VersionInfo, VersionSummary } from "./read.js";
 
 /** The registry service: publishing, reading, resolving and deleting artifact versions. */
 export interface Registry {
   publish(p: Principal, input: PublishInput): Promise<PublishResult>;
   listVersions(p: Principal, repository: string, group: string, name: string): Promise<VersionSummary[]>;
-  getManifest(p: Principal, repository: string, c: Coordinate): Promise<VersionInfo>;
-  download(p: Principal, repository: string, c: Coordinate): Promise<{ data: Buffer; sha256: string; filename: string }>;
+  /** Metadata of the newest build, or of build `select.buildNumber`. */
+  getManifest(p: Principal, repository: string, c: Coordinate, select?: BuildSelector): Promise<VersionInfo>;
+  /** The archive of the newest build, or of build `select.buildNumber` (`not_found` once it is gone). */
+  download(
+    p: Principal,
+    repository: string,
+    c: Coordinate,
+    select?: BuildSelector,
+  ): Promise<{ data: Buffer; sha256: string; filename: string }>;
   getFile(p: Principal, repository: string, c: Coordinate, path: string): Promise<string>;
   /** Resolves `roots` across `repositories` in order; `exclude` keys (`group:name`) are provided externally. */
   resolve(p: Principal, repositories: string[], roots: Coordinate[], options?: ResolveOptions): Promise<Resolution>;
@@ -42,8 +50,8 @@ export function createRegistry(deps: { db: Db; blobs: BlobStore; validate?: type
   return {
     publish: (p, input) => publish(ctx, p, input),
     listVersions: (p, repository, group, name) => listVersions(ctx, p, repository, group, name),
-    getManifest: (p, repository, c) => getManifest(ctx, p, repository, c),
-    download: (p, repository, c) => download(ctx, p, repository, c),
+    getManifest: (p, repository, c, select) => getManifest(ctx, p, repository, c, select),
+    download: (p, repository, c, select) => download(ctx, p, repository, c, select),
     getFile: (p, repository, c, path) => getFile(ctx, p, repository, c, path),
     resolve: (p, repositories, roots, options) => resolve(ctx, p, repositories, roots, options),
     listDependents: (c) => listDependents(ctx.db, c),
