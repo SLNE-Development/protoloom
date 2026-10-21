@@ -8,7 +8,7 @@ import { getServerContext } from "@/server/context";
 import { requireRole } from "@/server/session";
 import { ConnectedAccounts } from "./connected-accounts";
 
-export const metadata: Metadata = { title: "Account · Protoloom" };
+export const metadata: Metadata = { title: "Account" };
 
 function first(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;

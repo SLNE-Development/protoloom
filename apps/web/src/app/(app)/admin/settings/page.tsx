@@ -3,7 +3,7 @@ import { requireRole } from "@/server/session";
 import { AdminPage } from "../_components/admin-page";
 import { AnonymousViewSetting } from "./anonymous-view-setting";
 
-export const metadata: Metadata = { title: "Settings · Protoloom" };
+export const metadata: Metadata = { title: "Settings" };
 
 /** Server-wide settings. */
 export default async function SettingsPage() {

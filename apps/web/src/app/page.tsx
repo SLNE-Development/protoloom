@@ -56,7 +56,7 @@ export default async function LandingPage() {
     <>
       <JsonLd url={siteUrl()} />
       <TopBar showBrowse={data.anonymousView} />
-      <main>
+      <main data-testid="landing">
         <Hero host={host} stats={data.stats} providers={providers} showBrowse={data.anonymousView} />
         <HowItWorks />
         <BrowsePreview />

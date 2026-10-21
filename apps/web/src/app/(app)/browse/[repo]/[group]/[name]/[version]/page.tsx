@@ -13,7 +13,7 @@ import { ProtoViewer } from "@/components/proto-viewer";
 import { UsageSnippet } from "@/components/usage-snippet";
 import { VersionActions } from "@/components/version-actions";
 import { env } from "@/env";
-import { artifactHref, artifactMetadataInput, buildFileTree, firstFile, formatBytes, formatTimestamp, gradleSnippet, repositoryHref } from "@/lib/browse";
+import { archiveHref, artifactHref, artifactMetadataInput, buildFileTree, firstFile, formatBytes, formatTimestamp, gradleSnippet, repositoryHref } from "@/lib/browse";
 import { pageMetadata } from "@/lib/seo";
 import { orNotFound } from "@/server/page-data";
 import { requirePageAccess } from "@/server/session";
@@ -45,8 +45,7 @@ export async function generateMetadata({ params }: { params: Promise<Params> }):
   } catch {
     input = artifactMetadataInput({ repository: repo, group, name, version, visibility: null });
   }
-  // Absolute, so the title reads the same whether or not a parent layout adds a title template.
-  return pageMetadata({ ...input, title: `${input.title} · Protoloom`, absoluteTitle: true });
+  return pageMetadata(input);
 }
 
 /** A coordinate string split into its parts. */
@@ -97,20 +96,22 @@ export default async function VersionPage({
   const path = artifactHref(repo, group, name, version);
   const { user } = await requirePageAccess(path);
   const coordinate = `${group}:${name}:${version}`;
-  const info = await orNotFound(loadVersion(repo, coordinate));
+  const info = await orNotFound(loadVersion(repo, coordinate), path);
 
   const tree = buildFileTree(info.files);
   const requested = Array.isArray(query.file) ? query.file[0] : query.file;
   const selected = requested && info.files.includes(requested) ? requested : firstFile(tree);
-  const [file, dependencyRepos] = await Promise.all([
+  const canDelete = user !== null && user.role !== "viewer";
+  const [file, dependencyRepos, versionCount] = await Promise.all([
     selected ? api.browse.file({ repository: repo, coordinate, path: selected }) : null,
     locateDependencies(info.dependencies),
+    // Only needed to know where to go after deleting the last version.
+    canDelete ? api.browse.versions({ repository: repo, group, name }).then((v) => v.length) : 0,
   ]);
 
   const snapshot = /-SNAPSHOT$/i.test(version);
   const snippet = { url: env.BETTER_AUTH_URL, repository: repo, coordinate };
-  const canDelete = user !== null && user.role !== "viewer";
-  const archiveUrl = `/api/v1/repos/${[repo, group, name, version].map(encodeURIComponent).join("/")}/archive`;
+  const archiveUrl = archiveHref(repo, group, name, version);
   const fileHref = (filePath: string) => `${path}?file=${encodeURIComponent(filePath)}`;
 
   return (
@@ -162,7 +163,13 @@ export default async function VersionPage({
               </a>
             </Button>
             {canDelete && (
-              <DeleteVersionDialog repository={repo} coordinate={coordinate} buildCount={info.builds.length} isAdmin={user.role === "admin"} />
+              <DeleteVersionDialog
+                repository={repo}
+                coordinate={coordinate}
+                buildCount={info.builds.length}
+                isAdmin={user.role === "admin"}
+                lastVersion={versionCount === 1}
+              />
             )}
           </>
         }
@@ -196,7 +203,7 @@ export default async function VersionPage({
               <FileTree nodes={tree} selected={selected ?? ""} hrefFor={fileHref} />
             </Panel>
             {file ? (
-              <ProtoViewer path={file.path} content={file.content} />
+              <ProtoViewer repository={repo} coordinate={coordinate} sha256={info.sha256} path={file.path} content={file.content} />
             ) : (
               <Panel className="px-4 py-8 text-center text-sm text-muted-foreground">This version has no files.</Panel>
             )}

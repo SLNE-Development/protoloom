@@ -11,6 +11,12 @@ export function artifactHref(repository: string, group: string, name: string, ve
   return version === undefined ? base : `${base}/${encodeURIComponent(version)}`;
 }
 
+/** The REST download URL of a version's archive. */
+export function archiveHref(repository: string, group: string, name: string, version: string): string {
+  const [r, g, n, v] = [repository, group, name, version].map(encodeURIComponent);
+  return `/api/v1/repos/${r}/artifacts/${g}/${n}/${v}/archive`;
+}
+
 /** What a usage snippet needs: the public base URL, the repository and the `group:name:version`. */
 export interface SnippetInput {
   url: string;
@@ -131,7 +137,13 @@ export function formatTimestamp(date: Date): string {
   return `${date.toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
-/** The `pageMetadata()` input of an artifact version page. */
+/** The site-wide share card (the root `opengraph-image`), used where an artifact card would disclose too much. */
+export const GENERIC_SHARE_IMAGE = "/opengraph-image";
+
+const GENERIC_DESCRIPTION = "Protobuf artifacts on this Protoloom.";
+const PRIVATE_DESCRIPTION = "Protobuf artifacts in a private repository.";
+
+/** The `pageMetadata()` input of a browse page. */
 export interface ArtifactMetadataInput {
   title: string;
   description: string;
@@ -157,11 +169,11 @@ export function artifactMetadataInput(input: {
   const { repository, group, name, version, visibility } = input;
   const path = artifactHref(repository, group, name, version);
   if (visibility === null) {
-    return { title: "Artifact", description: "A protobuf artifact on this Protoloom.", path, noindex: true };
+    return { title: "Artifact", description: GENERIC_DESCRIPTION, path, image: GENERIC_SHARE_IMAGE, noindex: true };
   }
   const coordinate = `${group}:${name}:${version}`;
   if (visibility === "private") {
-    return { title: coordinate, description: "A protobuf artifact in a private repository.", path, noindex: true };
+    return { title: coordinate, description: PRIVATE_DESCRIPTION, path, image: GENERIC_SHARE_IMAGE, noindex: true };
   }
   const files = input.fileCount ?? 0;
   const deps = input.dependencyCount ?? 0;
@@ -175,4 +187,31 @@ export function artifactMetadataInput(input: {
     path,
     image: `/og/artifact/${[repository, group, name, version].map(encodeURIComponent).join("/")}`,
   };
+}
+
+/**
+ * Metadata of a repository page (no `group`/`name`) or an artifact page. Public pages are
+ * indexable; private ones and pages the visitor can't see get `noindex` and a description that
+ * names nothing. All of them use the generic share card.
+ */
+export function listingMetadataInput(input: {
+  repository: string;
+  group?: string;
+  name?: string;
+  visibility: "public" | "private" | null;
+  description?: string | null;
+}): ArtifactMetadataInput {
+  const { repository, group, name, visibility } = input;
+  const artifact = group !== undefined && name !== undefined;
+  const path = artifact ? artifactHref(repository, group, name) : repositoryHref(repository);
+  const image = GENERIC_SHARE_IMAGE;
+  if (visibility === null) {
+    return { title: artifact ? "Artifact" : "Repository", description: GENERIC_DESCRIPTION, path, image, noindex: true };
+  }
+  const title = artifact ? `${group}:${name}` : repository;
+  if (visibility === "private") return { title, description: PRIVATE_DESCRIPTION, path, image, noindex: true };
+  const description = artifact
+    ? `Versions of ${title} in the ${repository} repository, with proto files and usage for Gradle and the protoloom CLI.`
+    : `${input.description ? `${input.description}. ` : ""}Protobuf artifacts in the ${repository} repository.`;
+  return { title, description, path, image };
 }

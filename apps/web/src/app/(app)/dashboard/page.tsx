@@ -9,13 +9,15 @@ import { artifactHref, repositoryHref } from "@/lib/browse";
 import { requirePageAccess } from "@/server/session";
 import { api } from "@/trpc/server";
 
-export const metadata: Metadata = { title: "Dashboard · Protoloom" };
+export const metadata: Metadata = { title: "Dashboard" };
 
 function Stat({ label, value, testId, hint }: { label: string; value: number; testId: string; hint?: string }) {
   return (
     <div data-testid={testId} className="flex flex-col gap-1 bg-card px-4 py-3">
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="font-mono text-2xl font-semibold tracking-tight tabular-nums">{value.toLocaleString("en")}</span>
+      <span data-slot="stat-value" className="font-mono text-2xl font-semibold tracking-tight tabular-nums">
+        {value.toLocaleString("en")}
+      </span>
       {hint && <span className="truncate text-[11px] text-muted-foreground">{hint}</span>}
     </div>
   );

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
+// The CLI's own schema, so the snippet can't drift from what `protoloom fetch` accepts.
+import { configSchema } from "../../../../packages/cli/src/config";
 import {
+  GENERIC_SHARE_IMAGE,
+  archiveHref,
   artifactHref,
   artifactMetadataInput,
+  listingMetadataInput,
   buildFileTree,
   firstFile,
   formatBytes,
@@ -17,6 +22,12 @@ describe("hrefs", () => {
     expect(artifactHref("releases", "dev.example", "demo")).toBe("/browse/releases/dev.example/demo");
     expect(artifactHref("releases", "dev.example", "demo", "1.0.0-SNAPSHOT")).toBe(
       "/browse/releases/dev.example/demo/1.0.0-SNAPSHOT",
+    );
+  });
+
+  it("builds the REST archive URL", () => {
+    expect(archiveHref("releases", "dev.example", "demo", "1.0.0")).toBe(
+      "/api/v1/repos/releases/artifacts/dev.example/demo/1.0.0/archive",
     );
   });
 
@@ -36,7 +47,9 @@ describe("usage snippets", () => {
   });
 
   it("writes a protoloom.json the CLI accepts", () => {
-    expect(JSON.parse(protoloomJsonSnippet(input))).toEqual({
+    const parsed = configSchema.safeParse(JSON.parse(protoloomJsonSnippet(input)));
+    expect(parsed.success).toBe(true);
+    expect(parsed.data).toEqual({
       url: "https://protos.example.com",
       repositories: ["releases"],
       dependencies: ["dev.example:demo:1.0.0"],
@@ -105,7 +118,7 @@ describe("artifactMetadataInput", () => {
   it("keeps private artifacts out of search engines and off share cards", () => {
     const meta = artifactMetadataInput({ ...base, visibility: "private" });
     expect(meta.noindex).toBe(true);
-    expect(meta.image).toBeUndefined();
+    expect(meta.image).toBe(GENERIC_SHARE_IMAGE);
     expect(meta.description).not.toContain("dev.example");
   });
 
@@ -113,5 +126,30 @@ describe("artifactMetadataInput", () => {
     const meta = artifactMetadataInput({ repository: "releases", group: "g", name: "n", version: "1.0.0", visibility: null });
     expect(meta.noindex).toBe(true);
     expect(meta.title).toBe("Artifact");
+    expect(meta.image).toBe(GENERIC_SHARE_IMAGE);
+  });
+});
+
+describe("listingMetadataInput", () => {
+  it("describes a public repository page with a canonical path", () => {
+    const meta = listingMetadataInput({ repository: "releases", visibility: "public", description: "Released contracts" });
+    expect(meta).toMatchObject({ title: "releases", path: "/browse/releases", image: GENERIC_SHARE_IMAGE });
+    expect(meta.description).toContain("Released contracts");
+    expect(meta.noindex).toBeFalsy();
+  });
+
+  it("describes a public artifact page", () => {
+    const meta = listingMetadataInput({ repository: "releases", group: "dev.example", name: "demo", visibility: "public" });
+    expect(meta).toMatchObject({ title: "dev.example:demo", path: "/browse/releases/dev.example/demo" });
+    expect(meta.noindex).toBeFalsy();
+  });
+
+  it("keeps private or unknown pages out of search engines without naming anything", () => {
+    for (const visibility of ["private", null] as const) {
+      const meta = listingMetadataInput({ repository: "internal", group: "acme", name: "secret", visibility, description: "Top secret" });
+      expect(meta.noindex).toBe(true);
+      expect(meta.description).not.toContain("secret");
+      expect(meta.description).not.toContain("Top");
+    }
   });
 });

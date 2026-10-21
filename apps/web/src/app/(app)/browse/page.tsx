@@ -8,7 +8,7 @@ import { repositoryHref } from "@/lib/browse";
 import { requirePageAccess } from "@/server/session";
 import { api } from "@/trpc/server";
 
-export const metadata: Metadata = { title: "Browse · Protoloom" };
+export const metadata: Metadata = { title: "Browse" };
 
 /** Every repository the visitor may browse, with its artifact and version counts. */
 export default async function BrowsePage() {

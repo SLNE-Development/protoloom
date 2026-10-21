@@ -6,23 +6,27 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { KindBadge, PageContainer, PageHeader, Panel, RelativeTime, SectionTitle } from "@/components/browse-ui";
 import { UsageSnippet } from "@/components/usage-snippet";
 import { env } from "@/env";
-import { artifactHref, repositoryHref } from "@/lib/browse";
+import { artifactHref, listingMetadataInput, repositoryHref } from "@/lib/browse";
+import { pageMetadata } from "@/lib/seo";
+import { visibleRepository } from "@/server/browse-metadata";
 import { orNotFound } from "@/server/page-data";
 import { requirePageAccess } from "@/server/session";
 import { api } from "@/trpc/server";
 
 type Params = { repo: string; group: string; name: string };
 
+/** Canonical URL and description; artifacts in private repositories are kept out of search engines. */
 export async function generateMetadata({ params }: { params: Promise<Params> }): Promise<Metadata> {
-  const { group, name } = await params;
-  return { title: `${group}:${name} · Protoloom` };
+  const { repo, group, name } = await params;
+  const info = await visibleRepository(repo);
+  return pageMetadata(listingMetadataInput({ repository: repo, group, name, visibility: info?.visibility ?? null }));
 }
 
 /** One artifact: its versions (newest first) and how to use the newest release. */
 export default async function ArtifactPage({ params }: { params: Promise<Params> }) {
   const { repo, group, name } = await params;
   await requirePageAccess(artifactHref(repo, group, name));
-  const versions = await orNotFound(api.browse.versions({ repository: repo, group, name }));
+  const versions = await orNotFound(api.browse.versions({ repository: repo, group, name }), artifactHref(repo, group, name));
   const latest = versions[0];
   const latestRelease = versions.find((v) => !v.isSnapshot);
   const usageVersion = latestRelease ?? latest;

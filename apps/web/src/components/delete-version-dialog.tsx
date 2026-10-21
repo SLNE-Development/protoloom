@@ -21,7 +21,7 @@ import { Button } from "@protoloom/ui/components/button";
 import { Field, FieldDescription, FieldLabel } from "@protoloom/ui/components/field";
 import { Input } from "@protoloom/ui/components/input";
 import { Spinner } from "@protoloom/ui/components/spinner";
-import { artifactHref } from "@/lib/browse";
+import { artifactHref, repositoryHref } from "@/lib/browse";
 import type { HasDependentsDetails } from "@/server/trpc/routers/versions";
 import type { AppRouter } from "@/server/trpc/root";
 import { useTRPC } from "@/trpc/client";
@@ -42,11 +42,14 @@ export function DeleteVersionDialog({
   coordinate,
   buildCount,
   isAdmin,
+  lastVersion,
 }: {
   repository: string;
   coordinate: string;
   buildCount: number;
   isAdmin: boolean;
+  /** The artifact has no other version: after the delete, go to the repository instead. */
+  lastVersion: boolean;
 }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
@@ -62,7 +65,7 @@ export function DeleteVersionDialog({
         setOpen(false);
         toast.success(`Deleted ${coordinate}`);
         await queryClient.invalidateQueries({ queryKey: trpc.browse.pathKey() });
-        router.push(artifactHref(repository, group, name));
+        router.push(lastVersion ? repositoryHref(repository) : artifactHref(repository, group, name));
         router.refresh();
       },
       onError: (error) => {

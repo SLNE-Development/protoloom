@@ -6,16 +6,20 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@p
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@protoloom/ui/components/input-group";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@protoloom/ui/components/table";
 import { KindBadge, PageContainer, PageHeader, Panel, RelativeTime, VisibilityBadge } from "@/components/browse-ui";
-import { artifactHref, repositoryHref } from "@/lib/browse";
+import { artifactHref, listingMetadataInput, repositoryHref } from "@/lib/browse";
+import { pageMetadata } from "@/lib/seo";
+import { visibleRepository } from "@/server/browse-metadata";
 import { orNotFound } from "@/server/page-data";
 import { requirePageAccess } from "@/server/session";
 import { api } from "@/trpc/server";
 
 type Params = { repo: string };
 
+/** Canonical URL and description; private repositories are kept out of search engines. */
 export async function generateMetadata({ params }: { params: Promise<Params> }): Promise<Metadata> {
   const { repo } = await params;
-  return { title: `${repo} · Protoloom` };
+  const info = await visibleRepository(repo);
+  return pageMetadata(listingMetadataInput({ repository: repo, visibility: info?.visibility ?? null, description: info?.description }));
 }
 
 /** The artifacts of one repository, optionally filtered by `?q=` on group or name. */
@@ -30,7 +34,7 @@ export default async function RepositoryPage({
   await requirePageAccess(repositoryHref(repo));
   const q = (Array.isArray(query.q) ? query.q[0] : query.q)?.trim() ?? "";
   const [artifacts, repositories] = await Promise.all([
-    orNotFound(api.browse.artifacts({ repository: repo, search: q || undefined })),
+    orNotFound(api.browse.artifacts({ repository: repo, search: q || undefined }), repositoryHref(repo)),
     api.browse.repositories(),
   ]);
   const info = repositories.find((r) => r.name === repo);

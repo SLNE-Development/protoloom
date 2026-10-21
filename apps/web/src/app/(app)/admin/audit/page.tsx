@@ -3,7 +3,7 @@ import { requireRole } from "@/server/session";
 import { AdminPage } from "../_components/admin-page";
 import { AuditLog } from "./audit-log";
 
-export const metadata: Metadata = { title: "Audit log · Protoloom" };
+export const metadata: Metadata = { title: "Audit log" };
 
 /** The audit log: every change made through the UI, the API or by the system, newest first. */
 export default async function AuditPage() {
