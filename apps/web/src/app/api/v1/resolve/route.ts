@@ -24,7 +24,7 @@ const bodySchema = z.object({
  * `POST`: resolves `dependencies` (`group:name:version`) and their transitive dependencies across
  * `repositories` in order, as seen by the caller. `exclude` lists `group:name` keys provided
  * externally (local modules): they and their dependency subtrees are left out. Answers
- * `{ artifacts, conflicts }`, each artifact with the absolute URL of its archive.
+ * `{ artifacts, conflicts }`, each artifact with the absolute URL of the resolved build's archive.
  */
 export const POST = handle(async (req: Request) => {
   const ctx = getServerContext();
@@ -47,7 +47,7 @@ export const POST = handle(async (req: Request) => {
       version: node.coordinate.version,
       buildNumber: node.buildNumber,
       sha256: node.sha256,
-      archiveUrl: archiveUrl(node.repository, node.coordinate),
+      archiveUrl: archiveUrl(node.repository, node.coordinate, node.buildNumber),
     })),
     conflicts: resolution.conflicts,
   });

@@ -51,7 +51,6 @@ export const dashboardRouter = router({
           version: version.version,
           buildNumber: build.buildNumber,
           publisherName: user.name,
-          publishedByUserId: build.publishedByUserId,
           createdAt: build.createdAt,
         })
         .from(build)
@@ -76,7 +75,8 @@ export const dashboardRouter = router({
           repository: byId.get(row.repositoryId)!.name,
           coordinate: coordinateText(row),
           buildNumber: row.buildNumber,
-          publishedBy: row.publisherName ?? row.publishedByUserId,
+          // A deleted publisher shows as null, never as a raw user id.
+          publishedBy: row.publisherName ?? null,
           createdAt: row.createdAt,
         })),
     };

@@ -287,6 +287,18 @@ describe("browse", () => {
     expect(visible).toMatchObject({ repositories: 1, artifacts: 2, versions: 3 });
     expect(visible.recentPublishes.map((p) => p.repository)).not.toContain("internal");
   });
+
+  it("shows the publisher's name, and no raw user id once the user is deleted", async () => {
+    const before = await call(viewer()).dashboard.stats();
+    expect(before.recentPublishes[0]?.publishedBy).toBe("Max Maintainer");
+    const version = { repository: "shared", coordinate: "acme:money:1.0.0" };
+    expect((await call(viewer()).browse.version(version)).publishedBy).toBe("Max Maintainer");
+
+    await db.update(build).set({ publishedByUserId: "deleted-user-id" });
+    const after = await call(viewer()).dashboard.stats();
+    expect(after.recentPublishes.map((p) => p.publishedBy)).toEqual(after.recentPublishes.map(() => null));
+    expect((await call(viewer()).browse.version(version)).publishedBy).toBeNull();
+  });
 });
 
 describe("versions.delete", () => {

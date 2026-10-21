@@ -54,7 +54,7 @@ The worker runs one cleanup job at a time, and a daily run that finds another on
 A misconfigured `0` days is treated as `1`, so a typo can't wipe a repository.
 
 > [!WARNING]
-> **Include releases deletes releases for good.** Builds that pin an old release fail once it is gone. Use it only in repositories whose consumers always move to new versions, and check the preview first.
+> **Include releases deletes releases for good.** Builds that pin an old release fail once it is gone. Use it only in repositories whose consumers always move to new versions, and check the preview first. A deleted release can only be restored with identical content unless the repository allows redeploy (see [Publishing a deleted release again](/docs/versions#publishing-a-deleted-release-again)).
 
 ## Removing versions by hand
 

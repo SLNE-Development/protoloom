@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { runWithEndpointContext, runWithTransaction, type AuthEndpointContext } from "@better-auth/core/context";
-import { account, invite, user, type Db } from "@protoloom/db";
+import { account, auditEvent, invite, user, type Db } from "@protoloom/db";
 import { startTestDb } from "@protoloom/db/testing";
 import { createAuth, type Auth, type AuthEnv } from "./auth";
 import { INVITE_COOKIE, generateInviteToken, hashInviteToken, serializeInviteCookie } from "./invite";
@@ -42,7 +42,28 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.delete(invite);
   await db.delete(user);
+  await db.delete(auditEvent);
 });
+
+async function audits() {
+  return db
+    .select({
+      actorType: auditEvent.actorType,
+      actorId: auditEvent.actorId,
+      action: auditEvent.action,
+      target: auditEvent.target,
+      details: auditEvent.details,
+    })
+    .from(auditEvent)
+    .orderBy(auditEvent.at);
+}
+
+/** Runs `fn` inside a Better Auth endpoint context, the way an endpoint such as link-social does. */
+async function inEndpoint<T>(fn: (authCtx: Awaited<Auth["$context"]>) => Promise<T>): Promise<T> {
+  const authCtx = await auth.$context;
+  const endpointCtx = { context: authCtx, headers: new Headers(), setCookie: () => "" } as unknown as AuthEndpointContext;
+  return runWithEndpointContext(endpointCtx, () => fn(authCtx));
+}
 
 async function createInvite(role = "maintainer") {
   const token = generateInviteToken();
@@ -151,6 +172,49 @@ describe("user creation gate through Better Auth", () => {
     await expect(oauthSignUp({ providerId: "github", profile: { id: 11, login: "octo" } })).rejects.toThrow(
       INVITE_REQUIRED_MESSAGE,
     );
+  });
+
+  it("audits an account created through an invite as user.create", async () => {
+    const { row, cookie } = await createInvite("maintainer");
+    const { created } = await oauthSignUp({ providerId: "github", profile: { id: 13, login: "someone" }, cookie });
+    expect(await audits()).toEqual([
+      {
+        actorType: "user",
+        actorId: created.id,
+        action: "user.create",
+        target: created.id,
+        details: { role: "maintainer", source: "invite", inviteId: row.id, provider: "github" },
+      },
+    ]);
+  });
+
+  it("audits the first admin as user.create with source initial-admin", async () => {
+    const { created } = await oauthSignUp({ providerId: "github", profile: { id: 14, login: "octo" } });
+    expect(await audits()).toEqual([
+      {
+        actorType: "user",
+        actorId: created.id,
+        action: "user.create",
+        target: created.id,
+        details: { role: "admin", source: "initial-admin", provider: "github" },
+      },
+    ]);
+  });
+
+  it("audits linking and unlinking a provider, but not the account created with the user", async () => {
+    const { cookie } = await createInvite("viewer");
+    const { created } = await oauthSignUp({ providerId: "github", profile: { id: 15, login: "someone" }, cookie });
+    await db.delete(auditEvent);
+
+    const linked = await inEndpoint((authCtx) =>
+      authCtx.internalAdapter.linkAccount({ userId: created.id, providerId: "discord", accountId: "4242" }),
+    );
+    await inEndpoint((authCtx) => authCtx.internalAdapter.deleteAccount(linked.id));
+
+    expect(await audits()).toEqual([
+      { actorType: "user", actorId: created.id, action: "account.link", target: created.id, details: { provider: "discord" } },
+      { actorType: "user", actorId: created.id, action: "account.unlink", target: created.id, details: { provider: "discord" } },
+    ]);
   });
 
   it("refuses an account that does not match INITIAL_ADMIN", async () => {

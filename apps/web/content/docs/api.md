@@ -111,7 +111,7 @@ The body may be at most 1 MiB. Response `200 OK`:
       "version": "2.1.0",
       "buildNumber": 1,
       "sha256": "4be1…07c3",
-      "archiveUrl": "{{url}}/api/v1/repos/releases/artifacts/dev.surf.common/common-types/2.1.0/archive"
+      "archiveUrl": "{{url}}/api/v1/repos/releases/artifacts/dev.surf.common/common-types/2.1.0/archive?build=1"
     },
     {
       "repository": "releases",
@@ -121,7 +121,7 @@ The body may be at most 1 MiB. Response `200 OK`:
       "version": "1.4.0",
       "buildNumber": 1,
       "sha256": "9f2c…e41a",
-      "archiveUrl": "{{url}}/api/v1/repos/releases/artifacts/dev.surf.economy/economy-contracts/1.4.0/archive"
+      "archiveUrl": "{{url}}/api/v1/repos/releases/artifacts/dev.surf.economy/economy-contracts/1.4.0/archive?build=1"
     }
   ],
   "conflicts": [
@@ -130,7 +130,7 @@ The body may be at most 1 MiB. Response `200 OK`:
 }
 ```
 
-Artifacts are sorted by `group:name`. `archiveUrl` is always built from this instance's public URL. See [Dependencies and resolution](/docs/resolution) for how versions are chosen.
+Artifacts are sorted by `group:name`. `archiveUrl` is always built from this instance's public URL and pins the resolved build (`?build=`), so a snapshot download matches `buildNumber` and `sha256` even if a newer build is published meanwhile. See [Dependencies and resolution](/docs/resolution) for how versions are chosen.
 
 | Status | Code | When |
 | --- | --- | --- |
@@ -186,7 +186,7 @@ Describes the newest build; for a snapshot that is the latest publish.
 GET /api/v1/repos/{repo}/artifacts/{group}/{name}/{version}/archive
 ```
 
-Returns the `.tar.gz` of the newest build as `application/gzip`, with its checksum in the `x-protoloom-sha256` header. Each request counts as a download, which [cleanup policies](/docs/admin/cleanup) use to find unused versions.
+Returns the `.tar.gz` of the newest build as `application/gzip`, or of a specific build with `?build=<n>` (`404 not_found` once that build was deleted, for example by a cleanup policy), with its checksum in the `x-protoloom-sha256` header. Each request counts as a download, which [cleanup policies](/docs/admin/cleanup) use to find unused versions.
 
 ```sh
 curl -fLo economy-contracts-1.4.0.tar.gz \

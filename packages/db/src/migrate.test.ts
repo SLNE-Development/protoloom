@@ -23,4 +23,18 @@ describe("schema migrations", () => {
     expect(row?.allowReleases).toBe(true);
     expect(row?.resolutionPriority).toBe(100);
   });
+
+  it("indexes api_key_permission by api_key_id", async () => {
+    const { rows } = await testDb.db.$client.query(
+      "select indexdef from pg_indexes where tablename = 'api_key_permission' and indexname = 'api_key_permission_api_key_id_idx'",
+    );
+    expect(rows).toEqual([{ indexdef: expect.stringContaining("(api_key_id)") }]);
+  });
+
+  it("creates the deleted_release tombstone table keyed by repository and coordinate", async () => {
+    const { rows } = await testDb.db.$client.query(
+      "select indexdef from pg_indexes where tablename = 'deleted_release' and indexname like '%_pk'",
+    );
+    expect(rows).toEqual([{ indexdef: expect.stringContaining('(repository_id, "group", name, version)') }]);
+  });
 });

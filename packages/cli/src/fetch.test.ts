@@ -25,6 +25,7 @@ interface Logged {
   method: string;
   path: string;
   raw?: string;
+  query?: string;
   authorization?: string;
 }
 
@@ -58,10 +59,10 @@ beforeEach(async () => {
   work = await mkdtemp(join(tmpdir(), "protoloom-cli-"));
   server = createServer((req, res) => {
     void (async () => {
-      const rawPath = (req.url ?? "").split("?")[0] as string;
+      const [rawPath = "", query = ""] = (req.url ?? "").split("?");
       // The stub is also mounted under a /registry prefix.
       const path = rawPath.startsWith("/registry/") ? rawPath.slice("/registry".length) : rawPath;
-      requests.push({ method: req.method ?? "", path, raw: rawPath, authorization: req.headers.authorization });
+      requests.push({ method: req.method ?? "", path, raw: rawPath, query, authorization: req.headers.authorization });
       const json = (status: number, body: unknown): void => {
         res.writeHead(status, { "content-type": "application/json" });
         res.end(JSON.stringify(body));
@@ -282,6 +283,19 @@ describe("fetchProtos", () => {
       raw: "/registry/api/v1/repos/main/artifacts/com.acme/a/1.0.0/archive",
       authorization: "Bearer secret",
     });
+  });
+
+  it("keeps the archiveUrl query (the pinned build) when using or rebasing it", async () => {
+    artifacts.push(oneArtifact({ archiveUrlFor: (base) => `${base}${archivePath(oneArtifact())}?build=1` }));
+    await fetchProtos(options({ token: "secret" }));
+    expect(archiveRequests()[0]).toMatchObject({ query: "build=1" });
+
+    requests.length = 0;
+    artifacts.length = 0;
+    artifacts.push(oneArtifact({ archiveUrlFor: () => `${foreignUrl}${archivePath(oneArtifact())}?build=1` }));
+    await fetchProtos(options({ token: "secret", cacheDir: join(work, "cache-2") }));
+    expect(foreignRequests).toHaveLength(0);
+    expect(archiveRequests()[0]).toMatchObject({ query: "build=1", authorization: "Bearer secret" });
   });
 
   it("fails clearly on a malformed resolve response", async () => {

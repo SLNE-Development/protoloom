@@ -1,0 +1,1 @@
+CREATE INDEX "api_key_permission_api_key_id_idx" ON "api_key_permission" USING btree ("api_key_id");

@@ -118,6 +118,26 @@ export const dependency = pgTable(
   ],
 );
 
+/**
+ * Tombstone of a deleted release version: its coordinate and the sha256 of the deleted archive.
+ * While a repository disallows redeploy, the release may only be published again with identical
+ * content; the tombstone is removed when it is.
+ */
+export const deletedRelease = pgTable(
+  "deleted_release",
+  {
+    repositoryId: uuid("repository_id")
+      .notNull()
+      .references(() => repository.id, { onDelete: "cascade" }),
+    group: text("group").notNull(),
+    name: text("name").notNull(),
+    version: text("version").notNull(),
+    sha256: text("sha256").notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.repositoryId, t.group, t.name, t.version] })],
+);
+
 export const cleanupPolicy = pgTable("cleanup_policy", {
   id: uuid("id").primaryKey().defaultRandom(),
   repositoryId: uuid("repository_id")
@@ -131,12 +151,17 @@ export const cleanupPolicy = pgTable("cleanup_policy", {
   createdAt: createdAt(),
 });
 
-export const apiKeyPermission = pgTable("api_key_permission", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  apiKeyId: text("api_key_id")
-    .notNull()
-    .references(() => apikey.id, { onDelete: "cascade" }),
-  repository: text("repository").notNull(),
-  groupPrefix: text("group_prefix"),
-  access: accessEnum("access").notNull(),
-});
+export const apiKeyPermission = pgTable(
+  "api_key_permission",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    apiKeyId: text("api_key_id")
+      .notNull()
+      .references(() => apikey.id, { onDelete: "cascade" }),
+    repository: text("repository").notNull(),
+    groupPrefix: text("group_prefix"),
+    access: accessEnum("access").notNull(),
+  },
+  // Every authenticated API request loads its key's permissions by key id.
+  (t) => [index("api_key_permission_api_key_id_idx").on(t.apiKeyId)],
+);

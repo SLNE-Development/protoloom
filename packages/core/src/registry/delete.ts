@@ -1,5 +1,5 @@
-import { and, eq, sql } from "drizzle-orm";
-import { artifact, build, version } from "@protoloom/db";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { artifact, build, deletedRelease, version } from "@protoloom/db";
 import { recordAudit } from "../audit.js";
 import { formatCoordinate, type Coordinate } from "../coordinates.js";
 import { RegistryError } from "../errors.js";
@@ -11,6 +11,9 @@ import { assertNoDependents, findDependents, readableRepository } from "./read.j
 export interface VersionTarget {
   versionId: string;
   artifactId: string;
+  repositoryId: string;
+  coordinate: Coordinate;
+  isSnapshot: boolean;
   updatedAt: Date;
 }
 
@@ -26,7 +29,12 @@ export async function findVersionTarget(
   c: Coordinate,
 ): Promise<VersionTarget | null> {
   const [target] = await db
-    .select({ versionId: version.id, artifactId: artifact.id, updatedAt: version.updatedAt })
+    .select({
+      versionId: version.id,
+      artifactId: artifact.id,
+      isSnapshot: version.isSnapshot,
+      updatedAt: version.updatedAt,
+    })
     .from(version)
     .innerJoin(artifact, eq(artifact.id, version.artifactId))
     .where(
@@ -37,19 +45,34 @@ export async function findVersionTarget(
         eq(version.version, c.version),
       ),
     );
-  return target ?? null;
+  if (!target) return null;
+  return { ...target, repositoryId, coordinate: { group: c.group, name: c.name, version: c.version } };
 }
 
 /**
  * Deletes a version with all its builds, files and dependency edges, and the artifact row once
- * its last version is gone. Returns the storage keys of the deleted builds; the caller removes
- * those blobs with {@link deleteBlobLogged} after the transaction commits.
+ * its last version is gone. Deleting a release records a {@link deletedRelease} tombstone with
+ * the deleted archive's sha256, so a repository without redeploy only accepts it back unchanged.
+ * Returns the storage keys of the deleted builds; the caller removes those blobs with
+ * {@link deleteBlobLogged} after the transaction commits.
  */
 export async function deleteVersionRows(tx: Queryable, target: VersionTarget): Promise<string[]> {
   const builds = await tx
-    .select({ storageKey: build.storageKey })
+    .select({ storageKey: build.storageKey, sha256: build.sha256 })
     .from(build)
-    .where(eq(build.versionId, target.versionId));
+    .where(eq(build.versionId, target.versionId))
+    .orderBy(desc(build.buildNumber));
+  const latest = builds[0];
+  if (!target.isSnapshot && latest) {
+    const { group, name, version: v } = target.coordinate;
+    await tx
+      .insert(deletedRelease)
+      .values({ repositoryId: target.repositoryId, group, name, version: v, sha256: latest.sha256 })
+      .onConflictDoUpdate({
+        target: [deletedRelease.repositoryId, deletedRelease.group, deletedRelease.name, deletedRelease.version],
+        set: { sha256: latest.sha256, deletedAt: new Date() },
+      });
+  }
   await tx.delete(version).where(eq(version.id, target.versionId));
   const [remaining] = await tx
     .select({ id: version.id })

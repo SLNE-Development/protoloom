@@ -53,13 +53,14 @@ export class RegistryClient {
    * Maps an archive URL from the server onto the configured registry. The bearer
    * token is only ever sent to the configured scheme+host+port, so a foreign
    * origin (a misconfigured or malicious server) has its path rebased onto the
-   * configured url instead of being contacted.
+   * configured url instead of being contacted. The query (the pinned `?build=`)
+   * is kept either way.
    */
   archiveTarget(archiveUrl: string): URL {
     const given = new URL(archiveUrl, this.base);
     if (given.origin === this.base.origin) return given;
     const prefix = this.base.pathname.replace(/\/+$/, "");
-    return new URL(`${prefix}${given.pathname}`, this.base.origin);
+    return new URL(`${prefix}${given.pathname}${given.search}`, this.base.origin);
   }
 
   async resolve(repositories: string[], dependencies: string[]): Promise<ResolveResponse> {

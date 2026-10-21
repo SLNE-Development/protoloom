@@ -11,7 +11,16 @@ export type Db = NodePgDatabase<typeof schema> & { $client: pg.Pool };
 /** Transaction handle passed to `db.transaction` callbacks. */
 export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
-/** Opens a node-postgres pool for `url` and wraps it in a schema-aware drizzle instance. */
+/**
+ * Opens a node-postgres pool for `url` and wraps it in a schema-aware drizzle instance.
+ * Errors on idle pooled clients (for example a server restart) are logged rather than
+ * left unhandled, so they don't crash the web or worker process; the pool discards the
+ * broken client and opens a new one on the next query.
+ */
 export function createDb(url: string): Db {
-  return drizzle(new pg.Pool({ connectionString: url }), { schema });
+  const pool = new pg.Pool({ connectionString: url });
+  pool.on("error", (error) => {
+    console.error("protoloom: idle postgres client error", error);
+  });
+  return drizzle(pool, { schema });
 }

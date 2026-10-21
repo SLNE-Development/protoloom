@@ -10,6 +10,7 @@ import { startTestDb } from "@protoloom/db/testing";
 import { createAuth, type Auth, type AuthEnv } from "@/server/auth";
 import type { ServerContext } from "@/server/context";
 import { handle } from "@/server/http";
+import { POST as authRoute } from "../auth/[...all]/route";
 import { POST as resolveRoute } from "./resolve/route";
 import { GET as listRoute } from "./repos/[repo]/artifacts/[group]/[name]/route";
 import {
@@ -287,7 +288,7 @@ describe("POST resolve", () => {
         version: "1.0.0",
         buildNumber: 1,
         sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
-        archiveUrl: `${BASE}/api/v1/repos/releases/artifacts/acme/money/1.0.0/archive`,
+        archiveUrl: `${BASE}/api/v1/repos/releases/artifacts/acme/money/1.0.0/archive?build=1`,
       },
       {
         repository: "releases",
@@ -297,7 +298,7 @@ describe("POST resolve", () => {
         version: "1.0.0",
         buildNumber: 1,
         sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
-        archiveUrl: `${BASE}/api/v1/repos/releases/artifacts/acme/order/1.0.0/archive`,
+        archiveUrl: `${BASE}/api/v1/repos/releases/artifacts/acme/order/1.0.0/archive?build=1`,
       },
     ]);
   });
@@ -438,6 +439,33 @@ describe("GET manifest and HEAD archive", () => {
     expect(await downloadCount(money)).toBe(1);
   });
 
+  it("serves the build named by ?build=, 404 once it is gone, 400 when malformed", async () => {
+    const snap: Params = { repo: "private", group: "acme", name: "money", version: "1.0.0-SNAPSHOT" };
+    const first = (await (await publish(snap, { token: keys.maintainer })).json()) as { sha256: string };
+    const changed = [proto("acme/money/v1/money.proto", "message Money { int64 cents = 1; string currency = 2; }")];
+    const second = (await (await publish(snap, { token: keys.maintainer, files: changed })).json()) as { sha256: string };
+
+    const get = (query: string) =>
+      archiveRoute(new Request(artifactUrl(snap, `/archive${query}`), { headers: headers(keys.maintainer) }), ctxOf(snap));
+    expect((await get("")).headers.get("x-protoloom-sha256")).toBe(second.sha256);
+    expect((await get("?build=1")).headers.get("x-protoloom-sha256")).toBe(first.sha256);
+    expect((await get("?build=2")).headers.get("x-protoloom-sha256")).toBe(second.sha256);
+    const head = await archiveHead(
+      new Request(artifactUrl(snap, "/archive?build=1"), { method: "HEAD", headers: headers(keys.maintainer) }),
+      ctxOf(snap),
+    );
+    expect(head.headers.get("x-protoloom-sha256")).toBe(first.sha256);
+
+    const gone = await get("?build=3");
+    expect(gone.status).toBe(404);
+    expect((await errorOf(gone)).code).toBe("not_found");
+    for (const bad of ["?build=abc", "?build=0", "?build=-1", "?build=1.5"]) {
+      const res = await get(bad);
+      expect(res.status, bad).toBe(400);
+      expect((await errorOf(res)).code).toBe("invalid_request");
+    }
+  });
+
   it("answers HEAD with 404 for a version the caller can't read", async () => {
     const hidden = { ...money, repo: "private" };
     expect((await publish(hidden, { token: keys.maintainer })).status).toBe(201);
@@ -467,6 +495,41 @@ describe("unknown repository", () => {
     expect((await manifestRoute(new Request(artifactUrl(hidden)), ctxOf(hidden))).status).toBe(404);
     const visible = await manifestRoute(new Request(artifactUrl(hidden), { headers: headers(keys.reader) }), ctxOf(hidden));
     expect(visible.status).toBe(200);
+  });
+});
+
+describe("Better Auth HTTP surface", () => {
+  const authPost = (path: string, body: object = {}) =>
+    authRoute(
+      new Request(`${BASE}/api/auth${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: BASE },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  it("does not expose admin-plugin or api-key endpoints over HTTP", async () => {
+    expect((await authPost("/admin/set-role", { userId: "x", role: "admin" })).status).toBe(404);
+    expect((await authPost("/admin/create-user", { email: "a@b.c", name: "a" })).status).toBe(404);
+    expect((await authPost("/admin/ban-user", { userId: "x" })).status).toBe(404);
+    expect((await authPost("/api-key/create", { name: "sneaky" })).status).toBe(404);
+    expect((await authPost("/api-key/delete", { keyId: "x" })).status).toBe(404);
+    expect((await authPost("/update-user", { name: "renamed" })).status).toBe(404);
+  });
+
+  it("still serves the endpoints the UI uses", async () => {
+    const signIn = await authPost("/sign-in/social", { provider: "github", callbackURL: "/dashboard" });
+    expect(signIn.status).toBe(200);
+    expect(((await signIn.json()) as { url: string }).url).toContain("github.com");
+    const session = await authRoute(new Request(`${BASE}/api/auth/get-session`));
+    expect(session.status).toBe(200);
+  });
+
+  it("keeps server-side API-key creation and REST key auth working", async () => {
+    const owner = await createUser("maintainer");
+    const created = await auth.api.createApiKey({ body: { userId: owner.id, name: "server-side" } });
+    await db.insert(apiKeyPermission).values({ apiKeyId: created.id, repository: "releases", groupPrefix: null, access: "write" });
+    expect((await publish(money, { token: created.key })).status).toBe(201);
   });
 });
 

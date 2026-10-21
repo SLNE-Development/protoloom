@@ -6,7 +6,16 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 /** The parts of a pg pool client that `runAllCleanups` uses. */
 type PoolClient = { query: (...args: never[]) => Promise<unknown>; release: (err?: Error | boolean) => void };
 import { and, asc, eq, sql } from "drizzle-orm";
-import { artifact, auditEvent, build, cleanupPolicy, dependency, repository, version } from "@protoloom/db";
+import {
+  artifact,
+  auditEvent,
+  build,
+  cleanupPolicy,
+  deletedRelease,
+  dependency,
+  repository,
+  version,
+} from "@protoloom/db";
 import { startTestDb } from "@protoloom/db/testing";
 import { applyCleanup, planCleanup, runAllCleanups, type CleanupCandidate } from "./cleanup.js";
 import type { Coordinate } from "./coordinates.js";
@@ -307,6 +316,28 @@ describe("cleanup", () => {
       ]);
 
       expect(await applyCleanup(testDb.db, blobs, "snapshots", NOW)).toEqual([]);
+    });
+
+    it("records a tombstone for each release it deletes, and none for snapshots", async () => {
+      const release = coord("acme", "release", "1.0.0");
+      await seed("snapshots", release, { lastDownloadedAt: daysAgo(120) });
+      await seed("snapshots", coord("acme", "unused", "1.0.0-SNAPSHOT"), { lastDownloadedAt: daysAgo(120) });
+      await addPolicy("snapshots", { kind: "delete_not_downloaded", value: 90, includeReleases: true });
+
+      expect(summary(await applyCleanup(testDb.db, blobs, "snapshots", NOW))).toEqual([
+        "release:1.0.0#all",
+        "unused:1.0.0-SNAPSHOT#all",
+      ]);
+      const tombstones = await testDb.db.select().from(deletedRelease);
+      expect(tombstones).toEqual([
+        expect.objectContaining({
+          repositoryId: repoIds.get("snapshots"),
+          group: "acme",
+          name: "release",
+          version: "1.0.0",
+          sha256: "0".repeat(64),
+        }),
+      ]);
     });
 
     it("skips a stale version that was published again after planning", async () => {

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
-import { auditEvent, build, repository } from "@protoloom/db";
+import { auditEvent, build, deletedRelease, repository } from "@protoloom/db";
 import { startTestDb } from "@protoloom/db/testing";
 import { packArchive, type ProtoFile } from "../archive.js";
 import type { Coordinate } from "../coordinates.js";
@@ -122,7 +122,8 @@ describe("registry", () => {
     expect(info.files).toEqual(["acme/order/v1/order.proto"]);
     expect(info.dependencies).toEqual([coord("acme", "money", "1.0.0")]);
     expect(info.buildNumber).toBe(1);
-    expect(info.publishedBy).toBe("user-maintainer");
+    // The fixture principal has no user row, as after the publisher was deleted: no raw id leaks.
+    expect(info.publishedBy).toBeNull();
     expect(info.builds).toHaveLength(1);
 
     const file = await registry.getFile(maintainer, "releases", coord("acme", "order", "1.0.0"), "acme/order/v1/order.proto");
@@ -132,6 +133,16 @@ describe("registry", () => {
     expect(versions).toEqual([
       expect.objectContaining({ version: "1.0.0", isSnapshot: false, latestBuild: 1 }),
     ]);
+  });
+
+  it("publishes and downloads a name containing '..' on local storage", async () => {
+    await registry.publish(maintainer, {
+      repository: "releases",
+      manifest: manifest("acme", "foo..bar", "1.0.0"),
+      archive: await packArchive(moneyFiles),
+    });
+    const downloaded = await registry.download(maintainer, "releases", coord("acme", "foo..bar", "1.0.0"));
+    expect(downloaded.filename).toBe("foo..bar-1.0.0.tar.gz");
   });
 
   it("records the publishing key and user on the build", async () => {
@@ -199,6 +210,22 @@ describe("registry", () => {
     const info = await registry.getManifest(maintainer, "snapshots", coord("acme", "money", "1.0.0-SNAPSHOT"));
     expect(info.buildNumber).toBe(3);
     expect(info.builds.map((b) => b.buildNumber)).toEqual([1, 2, 3]);
+  });
+
+  it("downloads a specific snapshot build on request, and not_found once it is gone", async () => {
+    const snapshot = coord("acme", "money", "1.0.0-SNAPSHOT");
+    const first = await publishMoney(maintainer, "snapshots", "1.0.0-SNAPSHOT");
+    const changed = [proto("acme/money/v1/money.proto", "message Money { int64 cents = 1; string currency = 2; }")];
+    const second = await publishMoney(maintainer, "snapshots", "1.0.0-SNAPSHOT", changed);
+    expect(second.sha256).not.toBe(first.sha256);
+
+    expect((await registry.download(maintainer, "snapshots", snapshot)).sha256).toBe(second.sha256);
+    expect((await registry.download(maintainer, "snapshots", snapshot, { buildNumber: 1 })).sha256).toBe(first.sha256);
+    expect((await registry.getManifest(maintainer, "snapshots", snapshot, { buildNumber: 1 })).sha256).toBe(first.sha256);
+    await expectError(registry.download(maintainer, "snapshots", snapshot, { buildNumber: 3 }), "not_found");
+
+    await testDb.db.delete(build).where(eq(build.buildNumber, 1));
+    await expectError(registry.download(maintainer, "snapshots", snapshot, { buildNumber: 1 }), "not_found");
   });
 
   /** A registry whose validation holds publishes until two arrive, then lets both into their transactions at once. */
@@ -474,6 +501,66 @@ describe("registry", () => {
     // With its only dependent gone, money can be deleted too.
     await registry.deleteVersion(maintainer, "releases", coord("acme", "money", "1.0.0"));
     expect(await testDb.db.select().from(build)).toHaveLength(0);
+  });
+
+  describe("re-publishing a deleted release", () => {
+    const money = coord("acme", "money", "1.0.0");
+    const changed = [proto("acme/money/v1/money.proto", "message Money { int64 cents = 1; string currency = 2; }")];
+
+    const tombstones = () => testDb.db.select().from(deletedRelease);
+
+    it("records a tombstone with the deleted archive's sha256", async () => {
+      const published = await publishMoney();
+      await registry.deleteVersion(maintainer, "releases", money);
+      const rows = await tombstones();
+      expect(rows).toEqual([
+        expect.objectContaining({ group: "acme", name: "money", version: "1.0.0", sha256: published.sha256 }),
+      ]);
+    });
+
+    it("refuses different content while redeploy is off", async () => {
+      await publishMoney();
+      await registry.deleteVersion(maintainer, "releases", money);
+      const error = await expectError(publishMoney(maintainer, "releases", "1.0.0", changed), "immutable");
+      expect(error.message).toBe(
+        "Release acme:money:1.0.0 was deleted; re-publishing is only allowed with identical content (or enable redeploy)",
+      );
+      expect(await tombstones()).toHaveLength(1);
+      expect(await testDb.db.select().from(build)).toHaveLength(0);
+    });
+
+    it("allows identical content and removes the tombstone", async () => {
+      const first = await publishMoney();
+      await registry.deleteVersion(maintainer, "releases", money);
+      const again = await publishMoney();
+      expect(again).toMatchObject({ sha256: first.sha256, buildNumber: 1, redeployed: false });
+      expect(await tombstones()).toHaveLength(0);
+    });
+
+    it("allows different content when the repository allows redeploy", async () => {
+      await publishMoney();
+      await registry.deleteVersion(maintainer, "releases", money);
+      await testDb.db.update(repository).set({ allowRedeploy: true }).where(eq(repository.name, "releases"));
+      await expect(publishMoney(maintainer, "releases", "1.0.0", changed)).resolves.toMatchObject({ buildNumber: 1 });
+      expect(await tombstones()).toHaveLength(0);
+    });
+
+    it("leaves snapshots unaffected", async () => {
+      await publishMoney(maintainer, "snapshots", "1.0.0-SNAPSHOT");
+      await registry.deleteVersion(maintainer, "snapshots", coord("acme", "money", "1.0.0-SNAPSHOT"));
+      expect(await tombstones()).toHaveLength(0);
+      await expect(publishMoney(maintainer, "snapshots", "1.0.0-SNAPSHOT", changed)).resolves.toMatchObject({
+        buildNumber: 1,
+      });
+    });
+
+    it("scopes tombstones to the repository", async () => {
+      await insertRepo("other");
+      const other = key("maintainer", [write("releases"), write("other")]);
+      await publishMoney(other);
+      await registry.deleteVersion(other, "releases", money);
+      await expect(publishMoney(other, "other", "1.0.0", changed)).resolves.toMatchObject({ buildNumber: 1 });
+    });
   });
 
   it("lists only readable dependents and counts the hidden ones", async () => {

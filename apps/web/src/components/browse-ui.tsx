@@ -1,5 +1,7 @@
 import Link from "next/link";
 import type { ComponentProps, ReactNode } from "react";
+// The subpath keeps node-only parts of core (storage, database) out of client bundles.
+import { isSnapshot } from "@protoloom/core/coordinates";
 import { Badge } from "@protoloom/ui/components/badge";
 import {
   Breadcrumb,
@@ -14,11 +16,9 @@ import { formatRelative, formatTimestamp } from "@/lib/browse";
 
 /** Shared building blocks of the browse pages and the dashboard (server-renderable). */
 
-const SNAPSHOT = /-SNAPSHOT$/i;
-
-/** Release (green) or snapshot (amber) tag for a version. */
+/** Release (green) or snapshot (amber) tag for a version, by the registry's own (case-sensitive) rule. */
 export function KindBadge({ version, className }: { version: string; className?: string }) {
-  const snapshot = SNAPSHOT.test(version);
+  const snapshot = isSnapshot(version);
   return (
     <Badge
       variant="outline"

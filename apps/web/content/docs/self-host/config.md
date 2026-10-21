@@ -60,7 +60,7 @@ It is never derived from the request's `Host` or `X-Forwarded-*` headers or from
 | `RUN_MIGRATIONS` | `true` for `web`, `false` for `worker` | entrypoint | Whether to apply database migrations before starting. |
 | `PORT` | `3000` | web | Port the web app listens on inside the container. |
 
-The image starts the web app by default. Pass `worker` as the command to start the worker. The healthcheck calls `/api/health` on the web app.
+The image starts the web app by default. Pass `worker` as the command to start the worker. The built-in healthcheck follows the command: it calls `/api/health` on the web app and checks that the worker process is running.
 
 ## Compose files
 

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { cache, type ReactNode } from "react";
 import { DownloadIcon } from "lucide-react";
+import { isSnapshot } from "@protoloom/core/coordinates";
 import { Button } from "@protoloom/ui/components/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@protoloom/ui/components/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@protoloom/ui/components/tabs";
@@ -109,7 +110,7 @@ export default async function VersionPage({
     canDelete ? api.browse.versions({ repository: repo, group, name }).then((v) => v.length) : 0,
   ]);
 
-  const snapshot = /-SNAPSHOT$/i.test(version);
+  const snapshot = isSnapshot(version);
   const snippet = { url: env.BETTER_AUTH_URL, repository: repo, coordinate };
   const archiveUrl = archiveHref(repo, group, name, version);
   const fileHref = (filePath: string) => `${path}?file=${encodeURIComponent(filePath)}`;

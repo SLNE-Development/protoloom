@@ -1,14 +1,15 @@
 import { and, eq, gt, inArray, isNull, like } from "drizzle-orm";
 import type { BetterAuthOptions, GenericEndpointContext } from "better-auth";
 import { APIError } from "better-auth/api";
+import { recordAudit } from "@protoloom/core";
 import { invite, user, type Db, type Tx } from "@protoloom/db";
 import { INVITE_COOKIE, hashInviteToken, readInviteToken } from "./invite";
-import { ROLES, isRole, parseRoles } from "./roles";
+import { ROLES, effectiveRole, isRole, parseRoles } from "./roles";
 
 /** Shown when someone without an invite tries to create an account. */
 export const INVITE_REQUIRED_MESSAGE = "You need an invite to join this Protoloom.";
 
-type Decision = { kind: "initial-admin" } | { kind: "invite"; inviteId: string };
+type Decision = { provider: string } & ({ kind: "initial-admin" } | { kind: "invite"; inviteId: string });
 
 type ValidateUserInfo = NonNullable<NonNullable<BetterAuthOptions["user"]>["validateUserInfo"]>;
 type UserCreateHooks = NonNullable<NonNullable<NonNullable<BetterAuthOptions["databaseHooks"]>["user"]>["create"]>;
@@ -56,7 +57,7 @@ export interface UserGateOptions {
  * then claims the invite atomically, inside Better Auth's user/account transaction (so one link
  * creates at most one user, and a failed insert leaves the invite unused), and sets the role. The
  * `after` hook, which runs once the transaction committed, records which user used the invite and
- * clears the invite cookie. Any creation the gate did not approve, such as the admin plugin's
+ * clears the invite cookie, and writes the `user.create` audit entry (role, source, provider). Any creation the gate did not approve, such as the admin plugin's
  * create-user endpoint, is refused. Sign-in and linking of existing users are not gated here.
  */
 export function createUserGate(opts: UserGateOptions) {
@@ -95,11 +96,12 @@ export function createUserGate(opts: UserGateOptions) {
     if (source.method !== "oauth" || !source.oauth || !ctx) return refusal();
 
     let decision: Decision | null = null;
-    if (matchesInitialAdmin(source.oauth.providerId, source.oauth.profile) && !(await adminExists())) {
-      decision = { kind: "initial-admin" };
+    const provider = source.oauth.providerId;
+    if (matchesInitialAdmin(provider, source.oauth.profile) && !(await adminExists())) {
+      decision = { kind: "initial-admin", provider };
     } else {
       const found = await findUsableInvite(ctx);
-      if (found) decision = { kind: "invite", inviteId: found.id };
+      if (found) decision = { kind: "invite", inviteId: found.id, provider };
     }
     if (!decision) return refusal();
     decisions.set(ctx, decision);
@@ -123,6 +125,18 @@ export function createUserGate(opts: UserGateOptions) {
       const decision = ctx ? decisions.get(ctx) : undefined;
       if (!ctx || !decision) return;
       decisions.delete(ctx);
+      const role = effectiveRole(created.role as string | null | undefined);
+      await db.transaction((tx) =>
+        recordAudit(tx, {
+          actor: { kind: "user", userId: created.id, role },
+          action: "user.create",
+          target: created.id,
+          details:
+            decision.kind === "invite"
+              ? { role, source: "invite", inviteId: decision.inviteId, provider: decision.provider }
+              : { role, source: "initial-admin", provider: decision.provider },
+        }),
+      );
       if (decision.kind === "invite") {
         await db.update(invite).set({ usedByUserId: created.id }).where(eq(invite.id, decision.inviteId));
         ctx.setCookie?.(INVITE_COOKIE, "", { path: "/", maxAge: 0, httpOnly: true, sameSite: "lax", secure: secureCookies });
