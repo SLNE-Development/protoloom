@@ -65,6 +65,14 @@ test.describe("signed-in users", () => {
     expect(await firstLink.evaluate((el) => getComputedStyle(el).cursor)).toBe("pointer");
   });
 
+  test("the login page never redirects a signed-in user off-site", async ({ page }) => {
+    await loginAs(page, USERS.viewer.id);
+    for (const next of ["%2F%09%2Fevil.example", "%2F%5C%2Fevil.example", "%2F%2Fevil.example"]) {
+      await page.goto(`/login?next=${next}`);
+      await expect(page).toHaveURL("/dashboard");
+    }
+  });
+
   test("a viewer doesn't see the admin section", async ({ page }) => {
     await loginAs(page, USERS.viewer.id);
     await page.goto("/dashboard");

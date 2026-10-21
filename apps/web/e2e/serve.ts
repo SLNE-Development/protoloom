@@ -34,5 +34,8 @@ async function stop(code: number) {
   process.exit(code);
 }
 
+// On POSIX, Playwright's SIGTERM reaches the handlers below and the container is stopped cleanly.
+// On Windows, Playwright force-kills the process tree, so these handlers never run and the
+// container is removed by the testcontainers reaper (Ryuk) once this process's connection drops.
 server.on("exit", (code) => void stop(code ?? 0));
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => void stop(0));
