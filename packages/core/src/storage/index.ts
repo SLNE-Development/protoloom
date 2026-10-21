@@ -2,8 +2,10 @@ import { createLocalStore } from "./local.js";
 import { createS3Store } from "./s3.js";
 
 /**
- * Storage for published archives. Keys follow
- * `{repository}/{group}/{name}/{version}/{buildNumber}.tar.gz`.
+ * Storage for published archives. The registry writes keys as
+ * `{repository}/{group}/{name}/{version}/{uuid}.tar.gz`, with a fresh uuid per build so a redeploy
+ * never overwrites the blob it replaces. The key is stored on the build row (`build.storageKey`);
+ * readers use that value and never derive keys.
  */
 export interface BlobStore {
   put(key: string, data: Buffer): Promise<void>;

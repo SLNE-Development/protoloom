@@ -31,6 +31,9 @@
   "dependencies": {
     "@aws-sdk/client-s3": "3.1154.0",
     "@bufbuild/buf": "1.74.0",
-    "tar": "7.5.22"
+    "@protoloom/db": "workspace:*",
+    "drizzle-orm": "0.45.4",
+    "tar": "7.5.22",
+    "zod": "4.6.7"
   }
 }

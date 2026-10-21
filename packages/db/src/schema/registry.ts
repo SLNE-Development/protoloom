@@ -30,6 +30,10 @@ export const repository = pgTable("repository", {
   allowRedeploy: boolean("allow_redeploy").notNull().default(false),
   allowReleases: boolean("allow_releases").notNull().default(true),
   allowSnapshots: boolean("allow_snapshots").notNull().default(true),
+  /**
+   * Order in which repositories other than the publish target are searched for dependencies at
+   * publish time. Lower wins; ties are broken by repository name.
+   */
   resolutionPriority: integer("resolution_priority").notNull().default(100),
   createdAt: createdAt(),
 });
