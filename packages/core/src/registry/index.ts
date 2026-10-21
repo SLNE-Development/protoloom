@@ -1,7 +1,7 @@
 import type { Db } from "@protoloom/db";
 import type { Coordinate } from "../coordinates.js";
 import type { Principal } from "../permissions.js";
-import type { Resolution } from "../resolution.js";
+import type { Resolution, ResolveOptions } from "../resolution.js";
 import type { BlobStore } from "../storage/index.js";
 import { validateProtos } from "../validation.js";
 import { deleteVersion } from "./delete.js";
@@ -29,7 +29,8 @@ export interface Registry {
   getManifest(p: Principal, repository: string, c: Coordinate): Promise<VersionInfo>;
   download(p: Principal, repository: string, c: Coordinate): Promise<{ data: Buffer; sha256: string; filename: string }>;
   getFile(p: Principal, repository: string, c: Coordinate, path: string): Promise<string>;
-  resolve(p: Principal, repositories: string[], roots: Coordinate[]): Promise<Resolution>;
+  /** Resolves `roots` across `repositories` in order; `exclude` keys (`group:name`) are provided externally. */
+  resolve(p: Principal, repositories: string[], roots: Coordinate[], options?: ResolveOptions): Promise<Resolution>;
   /** Versions in any repository that depend on `c`; not filtered by principal. */
   listDependents(c: Coordinate): Promise<Dependent[]>;
   deleteVersion(p: Principal, repository: string, c: Coordinate, opts?: { force?: boolean }): Promise<void>;
@@ -44,7 +45,7 @@ export function createRegistry(deps: { db: Db; blobs: BlobStore; validate?: type
     getManifest: (p, repository, c) => getManifest(ctx, p, repository, c),
     download: (p, repository, c) => download(ctx, p, repository, c),
     getFile: (p, repository, c, path) => getFile(ctx, p, repository, c, path),
-    resolve: (p, repositories, roots) => resolve(ctx, p, repositories, roots),
+    resolve: (p, repositories, roots, options) => resolve(ctx, p, repositories, roots, options),
     listDependents: (c) => listDependents(ctx.db, c),
     deleteVersion: (p, repository, c, opts) => deleteVersion(ctx, p, repository, c, opts),
   };

@@ -3,7 +3,7 @@ import { artifact, build, buildFile, dependency, repository, user, version } fro
 import { compareVersions, formatCoordinate, type Coordinate } from "../coordinates.js";
 import { RegistryError } from "../errors.js";
 import { canAccess, canForce, type Principal } from "../permissions.js";
-import { resolveGraph, type Resolution } from "../resolution.js";
+import { resolveGraph, type Resolution, type ResolveOptions } from "../resolution.js";
 import {
   createLookup,
   findLatestBuild,
@@ -177,15 +177,16 @@ export async function getFile(
   return row.content;
 }
 
-/** Resolves `roots` against `repositories` in order, as seen by the principal. */
+/** Resolves `roots` against `repositories` in order, as seen by the principal; see {@link resolveGraph} for `options`. */
 export async function resolve(
   ctx: RegistryContext,
   p: Principal,
   repositories: string[],
   roots: Coordinate[],
+  options: ResolveOptions = {},
 ): Promise<Resolution> {
   const repos = await findRepositories(ctx.db, repositories);
-  return resolveGraph(roots, createLookup(ctx.db, p, repos).lookup);
+  return resolveGraph(roots, createLookup(ctx.db, p, repos).lookup, options);
 }
 
 /** A dependent plus its repository's visibility, so callers can filter by read access. */

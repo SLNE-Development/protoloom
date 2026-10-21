@@ -27,6 +27,12 @@ export interface Resolution {
   conflicts: Conflict[];
 }
 
+/** Options of {@link resolveGraph}. */
+export interface ResolveOptions {
+  /** `group:name` keys treated as provided externally; see {@link resolveGraph}. */
+  exclude?: ReadonlySet<string>;
+}
+
 const keyOf = (c: Coordinate): string => `${c.group}:${c.name}`;
 const byString = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const MAX_ITERATIONS = 10_000;
@@ -53,8 +59,19 @@ function highest(requests: Map<string, Set<string>>): Map<string, string> {
  * exact coordinate is looked up at most once and cycles terminate. Throws
  * `RegistryError("not_found")` with `details.path` (root to missing coordinate)
  * when a coordinate of the live closure does not exist.
+ *
+ * `exclude` lists `group:name` keys provided externally (for example local modules of a build):
+ * they are never looked up, their dependencies are not followed, they are never reported as
+ * missing, and they appear in neither `nodes` nor `conflicts`.
  */
-export async function resolveGraph(roots: Coordinate[], lookup: Lookup): Promise<Resolution> {
+export async function resolveGraph(
+  allRoots: Coordinate[],
+  lookup: Lookup,
+  options: ResolveOptions = {},
+): Promise<Resolution> {
+  const exclude = options.exclude ?? new Set<string>();
+  const included = (c: Coordinate): boolean => !exclude.has(keyOf(c));
+  const roots = allRoots.filter(included);
   const cache = new Map<string, ResolvedNode | null>();
 
   let requested = new Map<string, Set<string>>();
@@ -93,14 +110,16 @@ export async function resolveGraph(roots: Coordinate[], lookup: Lookup): Promise
       }
       live.set(keyOf(c), node);
       for (const dep of node.dependencies) {
-        if (selected.has(keyOf(dep))) reach(keyOf(dep), id); // new keys are picked up after the recompute
+        if (included(dep) && selected.has(keyOf(dep))) reach(keyOf(dep), id); // new keys are picked up after the recompute
       }
     }
 
     // Recompute requests from the roots and live nodes only.
     requested = new Map();
     for (const root of roots) addRequest(requested, root);
-    for (const node of live.values()) for (const dep of node.dependencies) addRequest(requested, dep);
+    for (const node of live.values()) {
+      for (const dep of node.dependencies) if (included(dep)) addRequest(requested, dep);
+    }
     const next = highest(requested);
 
     const stable = next.size === selected.size && [...next].every(([k, v]) => selected.get(k) === v);
