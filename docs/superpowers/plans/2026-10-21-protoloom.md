@@ -396,7 +396,7 @@ The user chose scheme A · Ink and asked for next-themes. The direction wasn't n
 ### Task 12: Web app foundation: auth, principal, bootstrap, scheduler
 
 **Files:**
-- Create: `apps/web` (Next.js App Router, `output: "standalone"`, `src/` dir, depends on `@protoloom/ui`, `@protoloom/core`, `@protoloom/db`), `src/env.ts` (t3-env `createEnv` with the server schema from Global Constraints; `skipValidation` when `SKIP_ENV_VALIDATION` is set, for Docker builds), `src/server/context.ts`, `src/server/auth.ts`, `src/app/api/auth/[...all]/route.ts`, `src/server/principal.ts`, `src/server/bootstrap.ts`, `src/server/scheduler.ts`, `src/instrumentation.ts`
+- Create: `apps/web` (Next.js App Router, `output: "standalone"`, `src/` dir, depends on `@protoloom/ui`, `@protoloom/core`, `@protoloom/db`), `apps/web/next.config.ts` (loads the **repo-root `.env`** with `loadEnvConfig` from `@next/env`, pointed at the monorepo root, before t3-env runs. Secrets live only in that root `.env`, which the user has already filled in and which is git-ignored; never read or print its values), a root `.env.example` listing every variable from Global Constraints with empty values, `turbo.json` updates so the root `.env` is a global input (`globalDependencies`) and env vars reach tasks (`globalPassThroughEnv` or `envMode: "loose"`), `src/env.ts` (t3-env `createEnv` with the server schema from Global Constraints; `skipValidation` when `SKIP_ENV_VALIDATION` is set, for Docker builds), `src/server/context.ts`, `src/server/auth.ts`, `src/app/api/auth/[...all]/route.ts`, `src/server/principal.ts`, `src/server/bootstrap.ts`, `src/server/scheduler.ts`, `src/instrumentation.ts`
 - Test: `apps/web/src/server/principal.test.ts`, `apps/web/src/server/bootstrap.test.ts`
 
 **Interfaces:**
