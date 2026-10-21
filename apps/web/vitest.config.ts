@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig, mergeConfig } from "vitest/config";
 import shared from "@protoloom/config/vitest.shared";
 
@@ -15,6 +16,8 @@ const testEnv = {
 export default mergeConfig(
   shared,
   defineConfig({
+    // Mirrors the `@/*` path of tsconfig.json so route modules resolve the same way under Vitest.
+    resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
     test: { env: testEnv, testTimeout: 30_000, hookTimeout: 120_000 },
   }),
 );
