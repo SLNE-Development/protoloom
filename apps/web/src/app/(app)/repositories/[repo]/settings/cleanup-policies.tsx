@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheckIcon, CircleXIcon, EyeIcon, PencilIcon, PlayIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -46,6 +46,9 @@ export function CleanupPolicies({ repository }: { repository: string }) {
   const [deleting, setDeleting] = useState<Policy | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [confirmRun, setConfirmRun] = useState(false);
+  const [running, setRunning] = useState(false);
+  // Stable while the dialog is open, so re-renders (e.g. a pending save) don't reset the form.
+  const initial = useMemo(() => (editing?.policy ? toFormValues(editing.policy) : null), [editing]);
 
   const refresh = async () => {
     await Promise.all([
@@ -88,8 +91,8 @@ export function CleanupPolicies({ repository }: { repository: string }) {
           <EyeIcon />
           Preview
         </Button>
-        <Button variant="outline" size="sm" onClick={() => setConfirmRun(true)} disabled={!anyEnabled}>
-          <PlayIcon />
+        <Button variant="outline" size="sm" onClick={() => setConfirmRun(true)} disabled={!anyEnabled || running}>
+          {running ? <Spinner /> : <PlayIcon />}
           Run now
         </Button>
         <Button size="sm" onClick={() => setEditing({ policy: null })}>
@@ -98,7 +101,7 @@ export function CleanupPolicies({ repository }: { repository: string }) {
         </Button>
       </div>
 
-      <RunStatus repository={repository} confirm={confirmRun} onConfirmChange={setConfirmRun} />
+      <RunStatus repository={repository} confirm={confirmRun} onConfirmChange={setConfirmRun} onRunningChange={setRunning} />
 
       {policies.isError ? (
         <Alert variant="destructive">
@@ -166,7 +169,7 @@ export function CleanupPolicies({ repository }: { repository: string }) {
       <PolicyDialog
         open={editing !== null}
         onOpenChange={(open) => !open && setEditing(null)}
-        initial={editing?.policy ? toFormValues(editing.policy) : null}
+        initial={initial}
         submitting={upsert.isPending}
         onSubmit={async (values) => {
           await upsert.mutateAsync(toPolicyInput(repository, editing?.policy?.id, values));
@@ -271,10 +274,13 @@ function RunStatus({
   repository,
   confirm,
   onConfirmChange,
+  onRunningChange,
 }: {
   repository: string;
   confirm: boolean;
   onConfirmChange: (open: boolean) => void;
+  /** Whether a run is being queued or its job is still in progress (Run now stays disabled meanwhile). */
+  onRunningChange: (running: boolean) => void;
 }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
@@ -299,7 +305,8 @@ function RunStatus({
     ...trpc.policies.job.queryOptions({ jobId: jobId ?? "" }),
     enabled: jobId !== null,
     retry: false,
-    refetchInterval: (query) => (query.state.data && FINISHED.has(query.state.data.state) ? false : 1000),
+    refetchInterval: (query) =>
+      query.state.status === "error" || (query.state.data && FINISHED.has(query.state.data.state)) ? false : 1000,
   });
 
   const state = job.data?.state;
@@ -371,6 +378,8 @@ function RunStatus({
   }
 
   const finished = startError !== null || (jobId !== null && (job.isError || (state !== undefined && FINISHED.has(state))));
+  const running = run.isPending || (jobId !== null && !finished);
+  useEffect(() => onRunningChange(running), [running, onRunningChange]);
 
   return (
     <>

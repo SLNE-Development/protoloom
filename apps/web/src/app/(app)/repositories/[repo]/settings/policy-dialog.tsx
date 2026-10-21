@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { TriangleAlertIcon } from "lucide-react";
@@ -45,8 +45,11 @@ export function PolicyDialog({
   onSubmit: (values: PolicyFormValues) => Promise<unknown>;
 }) {
   const form = useForm<PolicyFormValues>({ resolver: zodResolver(policyFormSchema), defaultValues: initial ?? EMPTY });
+  // Reset only when the dialog opens, never while it is being edited (a failed save keeps the input).
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (open) form.reset(initial ?? EMPTY);
+    if (open && !wasOpen.current) form.reset(initial ?? EMPTY);
+    wasOpen.current = open;
   }, [open, initial, form]);
 
   const [kind, value, includeReleases, groupPrefix] = useWatch({

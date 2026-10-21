@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accessOptionsFor, keyFormSchema, summarizePermissions, toCreateKeyInput } from "./api-keys";
+import { accessOptionsFor, keyFormSchema, summarizePermissions, toCreateKeyInput, withheldSecret } from "./api-keys";
 
 describe("accessOptionsFor", () => {
   it("offers only read to viewers and read + write to everyone else", () => {
@@ -16,7 +16,10 @@ describe("summarizePermissions", () => {
         { repository: "main", groupPrefix: null, access: "write" },
         { repository: "team", groupPrefix: "com.acme", access: "read" },
       ]),
-    ).toEqual(["write main", "read team · com.acme.*"]);
+    ).toEqual([
+      { text: "write main", access: "write" },
+      { text: "read team · com.acme.*", access: "read" },
+    ]);
   });
 });
 
@@ -60,5 +63,20 @@ describe("toCreateKeyInput", () => {
       toCreateKeyInput({ name: "ci", expiry: "90", permissions: [{ repository: "main", groupPrefix: "", access: "read" }] })
         .expiresInDays,
     ).toBe(90);
+  });
+});
+
+describe("withheldSecret", () => {
+  it("hands the secret to the callback and resolves without it", async () => {
+    const seen: string[] = [];
+    const input = { name: "ci", permissions: [{ repository: "main", groupPrefix: null, access: "read" as const }] };
+    const run = withheldSecret(
+      async () => ({ id: "key-1", key: "pl_secret" }),
+      (key, received) => seen.push(`${received.name}:${key}`),
+    );
+    const result = await run(input);
+    expect(result).toEqual({ id: "key-1" });
+    expect(JSON.stringify(result)).not.toContain("pl_secret");
+    expect(seen).toEqual(["ci:pl_secret"]);
   });
 });

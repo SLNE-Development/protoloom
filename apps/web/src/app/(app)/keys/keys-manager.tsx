@@ -147,11 +147,11 @@ export function KeysManager({ role, openCreate }: { role: Role; openCreate: bool
                   {all && <TableCell className="text-sm">{key.ownerName ?? "unknown user"}</TableCell>}
                   <TableCell className="whitespace-normal">
                     <div className="flex max-w-md flex-wrap gap-1">
-                      {summarizePermissions(key.permissions).map((text, i) => (
+                      {summarizePermissions(key.permissions).map(({ text, access }, i) => (
                         <Badge
-                          key={i}
+                          key={`${i}:${text}`}
                           variant="outline"
-                          className={`font-mono text-[11px] ${key.permissions[i]?.access === "write" ? "border-foreground/40" : "text-muted-foreground"}`}
+                          className={`font-mono text-[11px] ${access === "write" ? "border-foreground/40" : "text-muted-foreground"}`}
                         >
                           {text}
                         </Badge>

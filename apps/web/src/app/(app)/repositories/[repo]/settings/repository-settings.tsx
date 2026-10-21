@@ -118,7 +118,7 @@ export function RepositorySettings({ name }: { name: string }) {
           <Skeleton className="h-96 w-full" />
         ) : (
           <RepositoryForm
-            key={repo.dataUpdatedAt}
+            key={name}
             mode="edit"
             defaultValues={toFormValues(repo.data)}
             submitting={update.isPending}

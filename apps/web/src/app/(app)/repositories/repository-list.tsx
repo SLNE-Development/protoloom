@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { DatabaseIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@protoloom/ui/components/alert";
@@ -9,7 +8,6 @@ import { Button } from "@protoloom/ui/components/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@protoloom/ui/components/empty";
 import { Skeleton } from "@protoloom/ui/components/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@protoloom/ui/components/table";
-import { useCommandActions } from "@/components/command-actions";
 import { PageBody, PageHeader } from "@/components/manage/page-header";
 import { AcceptsBadges, VisibilityBadge } from "@/components/manage/visibility-badge";
 import { errorMessage } from "@/lib/trpc-error";
@@ -18,14 +16,9 @@ import { useTRPC } from "@/trpc/client";
 /** Repository table. Admins see settings, counts and policies (`repositories.list`); others a read-only list (`browse.repositories`). */
 export function RepositoryList({ isAdmin }: { isAdmin: boolean }) {
   const trpc = useTRPC();
-  const router = useRouter();
   const admin = useQuery({ ...trpc.repositories.list.queryOptions(), enabled: isAdmin });
   const browse = useQuery({ ...trpc.browse.repositories.queryOptions(), enabled: !isAdmin });
   const query = isAdmin ? admin : browse;
-
-  useCommandActions(
-    isAdmin ? [{ id: "repositories.new", label: "New repository", icon: PlusIcon, onSelect: () => router.push("/repositories/new") }] : [],
-  );
 
   const newButton = isAdmin && (
     <Button asChild size="sm">

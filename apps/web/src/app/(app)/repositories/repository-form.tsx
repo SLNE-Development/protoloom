@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { GlobeIcon, LockIcon } from "lucide-react";
@@ -54,6 +54,12 @@ export function RepositoryForm({
 }) {
   const form = useForm<RepositorySettingsValues>({ resolver: zodResolver(repositorySettingsSchema), defaultValues });
   const dirty = form.formState.isDirty;
+
+  // Take newer server values (a refetch after a save elsewhere) unless the user is editing.
+  const serverValues = JSON.stringify(defaultValues);
+  useEffect(() => {
+    if (!form.formState.isDirty) form.reset(JSON.parse(serverValues) as RepositorySettingsValues);
+  }, [serverValues, form]);
 
   async function submit(values: RepositorySettingsValues) {
     try {

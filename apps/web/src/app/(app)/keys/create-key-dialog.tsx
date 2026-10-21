@@ -15,9 +15,17 @@ import { Input } from "@protoloom/ui/components/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@protoloom/ui/components/select";
 import { Spinner } from "@protoloom/ui/components/spinner";
 import { CopyButton } from "@/components/manage/copy-button";
-import { EXPIRY_OPTIONS, accessOptionsFor, keyFormSchema, toCreateKeyInput, type KeyFormValues } from "@/lib/api-keys";
+import {
+  EXPIRY_OPTIONS,
+  accessOptionsFor,
+  keyFormSchema,
+  toCreateKeyInput,
+  withheldSecret,
+  type CreateKeyInput,
+  type KeyFormValues,
+} from "@/lib/api-keys";
 import { errorMessage } from "@/lib/trpc-error";
-import { useTRPC } from "@/trpc/client";
+import { useTRPC, useTRPCClient } from "@/trpc/client";
 
 const emptyRow = { repository: "", groupPrefix: "", access: "read" } as const;
 const DEFAULTS: KeyFormValues = { name: "", expiry: "90", permissions: [{ ...emptyRow }] };
@@ -29,6 +37,7 @@ const DEFAULTS: KeyFormValues = { name: "", expiry: "90", permissions: [{ ...emp
  */
 export function CreateKeyDialog({ open, onOpenChange, role }: { open: boolean; onOpenChange: (open: boolean) => void; role: Role }) {
   const trpc = useTRPC();
+  const trpcClient = useTRPCClient();
   const queryClient = useQueryClient();
   const [secret, setSecret] = useState<{ name: string; key: string } | null>(null);
   const repositories = useQuery({ ...trpc.browse.repositories.queryOptions(), enabled: open });
@@ -37,22 +46,26 @@ export function CreateKeyDialog({ open, onOpenChange, role }: { open: boolean; o
   const form = useForm<KeyFormValues>({ resolver: zodResolver(keyFormSchema), defaultValues: DEFAULTS });
   const rows = useFieldArray({ control: form.control, name: "permissions" });
 
+  // The secret never enters the mutation cache: `withheldSecret` hands it to component state and
+  // the mutation only keeps `{ id }`.
+  const create = useMutation({
+    mutationFn: withheldSecret(
+      (input: CreateKeyInput) => trpcClient.keys.create.mutate(input),
+      (key, input) => setSecret({ name: input.name, key }),
+    ),
+    gcTime: 0,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: trpc.keys.list.queryKey() }),
+    onError: (error) => toast.error("Couldn't create the key", { description: errorMessage(error) }),
+  });
+  const resetCreate = create.reset;
+
   useEffect(() => {
     if (open) return;
-    // Forget the secret and the input once the dialog is closed.
+    // Forget the secret, the mutation state and the input once the dialog is closed.
     setSecret(null);
+    resetCreate();
     form.reset(DEFAULTS);
-  }, [open, form]);
-
-  const create = useMutation(
-    trpc.keys.create.mutationOptions({
-      onSuccess: async ({ key }, input) => {
-        setSecret({ name: input.name, key });
-        await queryClient.invalidateQueries({ queryKey: trpc.keys.list.queryKey() });
-      },
-      onError: (error) => toast.error("Couldn't create the key", { description: errorMessage(error) }),
-    }),
-  );
+  }, [open, form, resetCreate]);
 
   const repoNames = repositories.data?.map((r) => r.name) ?? [];
 
@@ -60,8 +73,9 @@ export function CreateKeyDialog({ open, onOpenChange, role }: { open: boolean; o
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-2xl"
-        // With the secret on screen, only the explicit Done button closes the dialog.
+        // With the secret on screen, only Done or the close button closes the dialog.
         onInteractOutside={(event) => secret && event.preventDefault()}
+        onEscapeKeyDown={(event) => secret && event.preventDefault()}
       >
         {secret ? (
           <>
