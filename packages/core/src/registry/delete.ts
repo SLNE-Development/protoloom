@@ -4,8 +4,73 @@ import { recordAudit } from "../audit.js";
 import { formatCoordinate, type Coordinate } from "../coordinates.js";
 import { RegistryError } from "../errors.js";
 import { canDeleteVersions, type Principal } from "../permissions.js";
-import { deleteBlobLogged, versionLockKey, type RegistryContext } from "./lookup.js";
+import { deleteBlobLogged, versionLockKey, type Queryable, type RegistryContext } from "./lookup.js";
 import { assertNoDependents, findDependents, readableRepository } from "./read.js";
+
+/** The rows identifying one version of an artifact. */
+export interface VersionTarget {
+  versionId: string;
+  artifactId: string;
+  updatedAt: Date;
+}
+
+/** Takes the transaction-scoped advisory lock that serializes every mutation of one version. */
+export async function lockVersion(tx: Queryable, repositoryName: string, c: Coordinate): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${versionLockKey(repositoryName, c)}))`);
+}
+
+/** Finds a version in a repository by coordinate; null when it does not exist. */
+export async function findVersionTarget(
+  db: Queryable,
+  repositoryId: string,
+  c: Coordinate,
+): Promise<VersionTarget | null> {
+  const [target] = await db
+    .select({ versionId: version.id, artifactId: artifact.id, updatedAt: version.updatedAt })
+    .from(version)
+    .innerJoin(artifact, eq(artifact.id, version.artifactId))
+    .where(
+      and(
+        eq(artifact.repositoryId, repositoryId),
+        eq(artifact.group, c.group),
+        eq(artifact.name, c.name),
+        eq(version.version, c.version),
+      ),
+    );
+  return target ?? null;
+}
+
+/**
+ * Deletes a version with all its builds, files and dependency edges, and the artifact row once
+ * its last version is gone. Returns the storage keys of the deleted builds; the caller removes
+ * those blobs with {@link deleteBlobLogged} after the transaction commits.
+ */
+export async function deleteVersionRows(tx: Queryable, target: VersionTarget): Promise<string[]> {
+  const builds = await tx
+    .select({ storageKey: build.storageKey })
+    .from(build)
+    .where(eq(build.versionId, target.versionId));
+  await tx.delete(version).where(eq(version.id, target.versionId));
+  const [remaining] = await tx
+    .select({ id: version.id })
+    .from(version)
+    .where(eq(version.artifactId, target.artifactId))
+    .limit(1);
+  if (!remaining) await tx.delete(artifact).where(eq(artifact.id, target.artifactId));
+  return builds.map((b) => b.storageKey);
+}
+
+/**
+ * Deletes one build (with its files and dependency edges) of a version. Returns its storage key
+ * for removal after commit, or null when the build does not exist.
+ */
+export async function deleteBuildRow(tx: Queryable, versionId: string, buildNumber: number): Promise<string | null> {
+  const [deleted] = await tx
+    .delete(build)
+    .where(and(eq(build.versionId, versionId), eq(build.buildNumber, buildNumber)))
+    .returning({ storageKey: build.storageKey });
+  return deleted?.storageKey ?? null;
+}
 
 /**
  * Deletes a version with all its builds, files and dependency edges, then removes the archive
@@ -26,45 +91,24 @@ export async function deleteVersion(
   }
 
   const storageKeys = await ctx.db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${versionLockKey(repo.name, c)}))`);
-    const [target] = await tx
-      .select({ versionId: version.id, artifactId: artifact.id })
-      .from(version)
-      .innerJoin(artifact, eq(artifact.id, version.artifactId))
-      .where(
-        and(
-          eq(artifact.repositoryId, repo.id),
-          eq(artifact.group, c.group),
-          eq(artifact.name, c.name),
-          eq(version.version, c.version),
-        ),
-      );
+    await lockVersion(tx, repo.name, c);
+    const target = await findVersionTarget(tx, repo.id, c);
     if (!target) throw new RegistryError("not_found", `Version ${formatCoordinate(c)} was not found`);
     const dependents = await findDependents(tx, c);
     const forced = assertNoDependents(p, c, dependents, opts.force);
 
-    const builds = await tx
-      .select({ storageKey: build.storageKey })
-      .from(build)
-      .where(eq(build.versionId, target.versionId));
-    await tx.delete(version).where(eq(version.id, target.versionId));
-    const [remaining] = await tx
-      .select({ id: version.id })
-      .from(version)
-      .where(eq(version.artifactId, target.artifactId))
-      .limit(1);
-    if (!remaining) await tx.delete(artifact).where(eq(artifact.id, target.artifactId));
+    const keys = await deleteVersionRows(tx, target);
 
     await recordAudit(tx, {
       actor: p,
       action: "delete",
       target: `${repo.name}/${formatCoordinate(c)}`,
       details: forced
-        ? { builds: builds.length, dependents: dependents.map(({ repository, coordinate }) => ({ repository, coordinate })) }
-        : { builds: builds.length },
+        ? { builds: keys.length, dependents: dependents.map(({ repository, coordinate }) => ({ repository, coordinate })) }
+        : { builds: keys.length },
       forced,
     });
-    return builds.map((b) => b.storageKey);
+    return keys;
   });
 
   await Promise.all(storageKeys.map((key) => deleteBlobLogged(ctx.blobs, key)));

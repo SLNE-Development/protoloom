@@ -7,3 +7,5 @@ export * from "./archive.js";
 export * from "./validation.js";
 export * from "./registry/index.js";
 export * from "./audit.js";
+export * from "./cleanup.js";
+export * from "./settings.js";
