@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { BrowsePreview } from "@/components/landing/browse-preview";
 import { Clients } from "@/components/landing/clients";
-import { loadLandingData } from "@/components/landing/data";
+import { loadLandingData } from "@/server/landing-data";
 import { Features } from "@/components/landing/features";
 import { Footer } from "@/components/landing/footer";
 import { Hero } from "@/components/landing/hero";
@@ -36,6 +36,7 @@ function JsonLd({ url }: { url: string }) {
     description: SITE_DESCRIPTION,
     applicationCategory: "DeveloperApplication",
     operatingSystem: "Linux (Docker)",
+    offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
   };
   // Escape "<" so the JSON can never close the script element.
   const json = JSON.stringify(data).replace(/</g, "\\u003c");

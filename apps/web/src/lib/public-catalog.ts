@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join, sep } from "node:path";
-import { and, asc, countDistinct, eq } from "drizzle-orm";
-import { artifact, repository, version, type Db } from "@protoloom/db";
+import { and, asc, countDistinct, eq, exists, sql } from "drizzle-orm";
+import { artifact, build, repository, version, type Db } from "@protoloom/db";
 
 /**
  * Where the docs Markdown lives (`content/docs/**\/*.md`, path = URL), relative to the app root.
@@ -40,14 +40,19 @@ export interface PublicStats {
   artifacts: number;
 }
 
-/** Number of public repositories and of artifacts (group:name) in them. */
+/** Number of public repositories, and of artifacts (group:name) in them with at least one published build. */
 export async function getPublicStats(db: Db): Promise<PublicStats> {
-  const [row] = await db
-    .select({ repositories: countDistinct(repository.id), artifacts: countDistinct(artifact.id) })
-    .from(repository)
-    .leftJoin(artifact, eq(artifact.repositoryId, repository.id))
-    .where(eq(repository.visibility, "public"));
-  return { repositories: row?.repositories ?? 0, artifacts: row?.artifacts ?? 0 };
+  const isPublic = eq(repository.visibility, "public");
+  const [[repos], [artifacts]] = await Promise.all([
+    db.select({ count: countDistinct(repository.id) }).from(repository).where(isPublic),
+    db
+      .select({ count: countDistinct(artifact.id) })
+      .from(artifact)
+      .innerJoin(repository, and(eq(repository.id, artifact.repositoryId), isPublic))
+      .innerJoin(version, eq(version.artifactId, artifact.id))
+      .innerJoin(build, eq(build.versionId, version.id)),
+  ]);
+  return { repositories: repos?.count ?? 0, artifacts: artifacts?.count ?? 0 };
 }
 
 /** A crawlable browse page of a public repository. */
@@ -64,8 +69,8 @@ function segment(value: string): string {
 }
 
 /**
- * Browse pages of public repositories: each repository, each artifact and each version, sorted by
- * path. Private repositories never appear.
+ * Browse pages of public repositories: each repository, and each artifact and version that has a
+ * published build, sorted by path. Private repositories never appear.
  */
 export async function listPublicBrowsePages(db: Db): Promise<BrowsePage[]> {
   const [repos, versions] = await Promise.all([
@@ -85,6 +90,8 @@ export async function listPublicBrowsePages(db: Db): Promise<BrowsePage[]> {
       .from(version)
       .innerJoin(artifact, eq(artifact.id, version.artifactId))
       .innerJoin(repository, and(eq(repository.id, artifact.repositoryId), eq(repository.visibility, "public")))
+      // Only versions with a published build have a page.
+      .where(exists(db.select({ one: sql`1` }).from(build).where(eq(build.versionId, version.id))))
       .limit(MAX_BROWSE_PAGES),
   ]);
 

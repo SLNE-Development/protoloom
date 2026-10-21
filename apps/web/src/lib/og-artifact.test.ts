@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createRegistry, type BlobStore, type Registry } from "@protoloom/core";
 import { startTestDb } from "@protoloom/db/testing";
 import { artifactCard, GENERIC_ARTIFACT_CARD } from "./og-artifact";
-import { insertRepository, insertVersion } from "./test-catalog";
+import { insertRepository, insertVersion } from "@/test/catalog";
 
 describe("artifact share card content", () => {
   let testDb: Awaited<ReturnType<typeof startTestDb>>;

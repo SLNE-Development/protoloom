@@ -17,6 +17,11 @@ describe("share cards", () => {
     expect(normalizeSvg(LOGO_INVERTED_SVG)).toBe(normalizeSvg(asset));
   });
 
+  it("default to a short Cache-Control instead of next/og's immutable year", async () => {
+    const response = await renderOgCard({ eyebrow: "e", title: "t" });
+    expect(response.headers.get("cache-control")).toBe("public, max-age=300, s-maxage=300");
+  });
+
   it("render a 1200×630 PNG with the bundled fonts", async () => {
     const response = await renderOgCard(
       { eyebrow: "Docs · Clients", title: "Gradle plugin", subtitle: "Every option.", meta: ["3 files"] },

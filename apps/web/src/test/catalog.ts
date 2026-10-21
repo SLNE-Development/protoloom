@@ -1,3 +1,4 @@
+/** Test-only helpers: insert catalog rows directly into a test database. */
 import { randomUUID } from "node:crypto";
 import { artifact, build, buildFile, dependency, repository, version, type Db } from "@protoloom/db";
 

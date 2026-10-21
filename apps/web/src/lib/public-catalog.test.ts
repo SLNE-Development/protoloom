@@ -2,10 +2,10 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Db } from "@protoloom/db";
+import { artifact, version, type Db } from "@protoloom/db";
 import { startTestDb } from "@protoloom/db/testing";
 import { getPublicStats, listDocsPaths, listPublicBrowsePages } from "./public-catalog";
-import { insertRepository, insertVersion } from "./test-catalog";
+import { insertRepository, insertVersion } from "@/test/catalog";
 
 describe("listDocsPaths", () => {
   let dir: string;
@@ -55,13 +55,20 @@ describe("public catalog queries", () => {
     await insertVersion(db, releases, { group: "dev.surf.economy", name: "economy-contracts", version: "1.5.0-SNAPSHOT" });
     await insertVersion(db, releases, { group: "dev.surf.core", name: "core-types", version: "2.1.0" });
     await insertVersion(db, internal, { group: "dev.secret", name: "hidden-contracts", version: "1.0.0" });
+    // An artifact without versions, and a version without a build (both left behind by deletes).
+    await db.insert(artifact).values({ repositoryId: releases, group: "dev.surf.empty", name: "no-versions" });
+    const [orphan] = await db
+      .insert(artifact)
+      .values({ repositoryId: releases, group: "dev.surf.orphan", name: "no-builds" })
+      .returning({ id: artifact.id });
+    await db.insert(version).values({ artifactId: orphan!.id, version: "0.1.0", isSnapshot: false });
   });
 
   afterAll(async () => {
     await testDb?.stop();
   });
 
-  it("counts public repositories and the artifacts in them, never private ones", async () => {
+  it("counts public repositories and their artifacts that have a published build, never private ones", async () => {
     expect(await getPublicStats(db)).toEqual({ repositories: 2, artifacts: 2 });
   });
 
@@ -78,6 +85,7 @@ describe("public catalog queries", () => {
       "/browse/releases/dev.surf.economy/economy-contracts/1.5.0-SNAPSHOT",
     ]);
     expect(paths.join(" ")).not.toContain("internal");
+    expect(paths.join(" ")).not.toMatch(/no-versions|no-builds/);
     expect(paths.join(" ")).not.toContain("hidden");
     expect(pages.find((p) => p.path.endsWith("/1.4.0"))?.lastModified).toBeInstanceOf(Date);
   });

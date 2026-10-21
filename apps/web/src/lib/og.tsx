@@ -219,14 +219,30 @@ export function OgCard({ eyebrow, title, subtitle, subtitleMono, footer, badge, 
   );
 }
 
+/** Default `Cache-Control` of share cards: short, because titles, versions and visibility change. */
+export const OG_CACHE_CONTROL = "public, max-age=300, s-maxage=300";
+
 /**
- * Renders a share card as a PNG response. `headers` overrides the defaults, e.g. a short
- * `Cache-Control` for cards whose content changes.
+ * Renders a share card as a PNG response with a short `Cache-Control` (next/og would default to
+ * a year, immutable). `headers` overrides or adds headers.
  */
 export async function renderOgCard(input: OgCardInput, init: { headers?: Record<string, string> } = {}): Promise<ImageResponse> {
   return new ImageResponse(<OgCard {...input} footer={input.footer ?? instanceHost()} />, {
     ...OG_IMAGE_SIZE,
     fonts: await loadFonts(),
-    headers: init.headers,
+    headers: { "cache-control": OG_CACHE_CONTROL, ...init.headers },
+  });
+}
+
+/** The PNG bytes of a share card. */
+export async function renderOgPng(input: OgCardInput): Promise<Uint8Array> {
+  return new Uint8Array(await (await renderOgCard(input)).arrayBuffer());
+}
+
+/** A PNG response with exactly these headers, so every card a route serves looks the same on the wire. */
+export function ogPngResponse(png: Uint8Array, cacheControl: string = OG_CACHE_CONTROL): Response {
+  return new Response(png.slice(), {
+    status: 200,
+    headers: { "content-type": "image/png", "content-length": String(png.byteLength), "cache-control": cacheControl },
   });
 }

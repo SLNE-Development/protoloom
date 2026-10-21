@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import { env } from "@/env";
 
 export const SITE_NAME = "Protoloom";
+/** Meta description; at most 160 characters so search results show it whole. */
 export const SITE_DESCRIPTION =
-  "Self-hosted registry for .proto files. Publish protobuf contracts from Gradle as versioned artifacts, validated on publish, and fetch them with their dependencies in Gradle and Node builds.";
+  "Self-hosted registry for .proto files: publish versioned protobuf contracts from Gradle, checked on publish, and fetch them with their dependencies.";
 
 /** Size of every share card (Open Graph and Twitter). */
 export const OG_IMAGE_SIZE = { width: 1200, height: 630 } as const;

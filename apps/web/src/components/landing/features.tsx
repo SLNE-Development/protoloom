@@ -9,7 +9,7 @@ const FEATURES = [
   {
     icon: "✓",
     title: "Checked on publish",
-    text: "Artifacts that don't compile, or that import files from undeclared dependencies, are rejected with a readable error.",
+    text: "Artifacts that don't compile, or that import files from undeclared dependencies, are rejected. The build log names each file, line and problem.",
   },
   {
     icon: "→",

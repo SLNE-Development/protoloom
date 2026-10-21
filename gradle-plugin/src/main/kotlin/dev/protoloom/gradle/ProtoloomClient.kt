@@ -64,11 +64,19 @@ internal data class PublishResponse(val coordinate: String, val buildNumber: Int
 private data class ErrorBody(val error: ErrorDetail)
 
 @Serializable
-private data class ErrorDetail(val code: String, val message: String)
+private data class ErrorDetail(val code: String, val message: String, val details: JsonElement? = null)
+
+/** One entry of `details.issues` in a `validation_failed` error body. */
+@Serializable
+private data class ValidationIssue(val path: String = "", val line: Int? = null, val message: String)
+
+@Serializable
+private data class ValidationDetails(val issues: List<ValidationIssue> = emptyList())
 
 /**
  * Client for the Protoloom REST API (`/api/v1`). Every non-2xx response becomes a
- * [GradleException] of the form `<code>: <message>` taken from the server's error body.
+ * [GradleException] of the form `<code>: <message>` taken from the server's error body; for
+ * `validation_failed` each issue follows on its own line as `  <path>:<line>: <message>`.
  */
 internal class ProtoloomClient(baseUrl: String, private val token: String?) {
     private val baseUrl = baseUrl.trimEnd('/')
@@ -182,9 +190,25 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
             null
         }
         return if (error != null) {
-            GradleException("${error.code}: ${error.message}")
+            GradleException("${error.code}: ${error.message}" + validationIssueLines(error))
         } else {
             GradleException("Protoloom $action failed with HTTP $status: ${body.take(500)}")
+        }
+    }
+
+    /** One `\n  <path>:<line>: <message>` line per issue of a `validation_failed` error (line and path left out when absent). */
+    private fun validationIssueLines(error: ErrorDetail): String {
+        if (error.code != "validation_failed" || error.details == null) return ""
+        val issues = try {
+            json.decodeFromJsonElement(ValidationDetails.serializer(), error.details).issues
+        } catch (_: SerializationException) {
+            return ""
+        } catch (_: IllegalArgumentException) {
+            return ""
+        }
+        return issues.joinToString("") { issue ->
+            val location = listOfNotNull(issue.path.ifEmpty { null }, issue.line?.toString()).joinToString(":")
+            if (location.isEmpty()) "\n  ${issue.message}" else "\n  $location: ${issue.message}"
         }
     }
 

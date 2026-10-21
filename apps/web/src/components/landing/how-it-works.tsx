@@ -32,9 +32,11 @@ const STEPS: { n: string; title: string; text: string; terminal: ReactNode; labe
     label: "A rejected publish",
     terminal: (
       <>
+        <Prompt>./gradlew publishProtos</Prompt>
+        {"\n"}
         <span className="text-snapshot">✗</span> validation_failed: Proto validation failed
-        {"\n  "}surf/protection/v1/region.proto:5
-        {"\n  "}import &quot;surf/economy/v1/money.proto&quot; does not exist
+        {"\n  "}surf/protection/v1/region.proto:4: imported file does not exist: surf/economy/v1/money.proto
+        {"\n  "}surf/protection/v1/region.proto:6: cannot find `surf.economy.v1.Money` in this scope
       </>
     ),
   },

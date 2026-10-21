@@ -18,7 +18,7 @@ const DEPENDENTS = ["protection-contracts:2.0.0", "shop-contracts:1.2.0", "quest
 
 function PanelHeading({ children }: { children: React.ReactNode }) {
   return (
-    <h4 className="px-3.5 pb-2 font-mono text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">{children}</h4>
+    <h3 className="px-3.5 pb-2 font-mono text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">{children}</h3>
   );
 }
 

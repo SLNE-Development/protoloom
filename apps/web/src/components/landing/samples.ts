@@ -112,14 +112,15 @@ export function cliConfig(origin: string): string {
 export const CLI_PACKAGE_JSON = `{
   "scripts": {
     "protos": "protoloom fetch",
-    "postinstall": "protoloom fetch"
+    "prebuild": "protoloom fetch"
   }
 }
 `;
 
 /** Compose excerpt for the self-hosting section, with this instance's public URL. */
 export function composeSnippet(origin: string): string {
-  return `services:
+  return `# excerpt — see docker-compose.prod.yml for the full stack
+services:
   protoloom:
     image: ghcr.io/slne-development/protoloom:latest
     command: ["web"]

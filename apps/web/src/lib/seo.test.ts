@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultMetadata, instanceHost, pageMetadata, siteUrl } from "./seo";
+import { defaultMetadata, instanceHost, pageMetadata, SITE_DESCRIPTION, siteUrl } from "./seo";
 
 // vitest.config.ts sets BETTER_AUTH_URL=http://localhost:3000.
 describe("siteUrl", () => {
@@ -11,6 +11,12 @@ describe("siteUrl", () => {
 
   it("names the instance host", () => {
     expect(instanceHost()).toBe("localhost:3000");
+  });
+});
+
+describe("SITE_DESCRIPTION", () => {
+  it("fits a search result snippet (at most 160 characters)", () => {
+    expect(SITE_DESCRIPTION.length).toBeLessThanOrEqual(160);
   });
 });
 

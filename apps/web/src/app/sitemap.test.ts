@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { setting, type Db } from "@protoloom/db";
 import { startTestDb } from "@protoloom/db/testing";
 import type { ServerContext } from "@/server/context";
-import { insertRepository, insertVersion } from "@/lib/test-catalog";
+import { insertRepository, insertVersion } from "@/test/catalog";
 import sitemap from "./sitemap";
 
 const holder = vi.hoisted(() => ({ db: undefined as Db | undefined, docs: [] as string[] }));
