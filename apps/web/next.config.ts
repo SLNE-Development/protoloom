@@ -13,8 +13,16 @@ const config: NextConfig = {
   outputFileTracingRoot: monorepoRoot,
   transpilePackages: ["@protoloom/ui"],
   serverExternalPackages: ["pg"],
-  // Workspace packages are bundled; @protoloom/db reads its SQL migrations from disk at runtime.
-  outputFileTracingIncludes: { "/*": ["../../packages/db/drizzle/**/*"] },
+  // Workspace packages are bundled but read files at runtime that the tracer cannot see:
+  // @protoloom/db its SQL migrations, @protoloom/core the buf binary of the installed platform package.
+  outputFileTracingIncludes: {
+    "/*": [
+      "../../packages/db/drizzle/**/*",
+      "../../packages/core/node_modules/@bufbuild/buf/package.json",
+      "../../node_modules/.pnpm/@bufbuild+buf*/node_modules/@bufbuild/*/package.json",
+      "../../node_modules/.pnpm/@bufbuild+buf*/node_modules/@bufbuild/*/bin/**/*",
+    ],
+  },
 };
 
 export default config;

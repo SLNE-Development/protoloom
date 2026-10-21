@@ -15,6 +15,13 @@
       "when": 1792607605116,
       "tag": "0001_invite",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792608729147,
+      "tag": "0002_invite_role_check",
+      "breakpoints": true
     }
   ]
 }

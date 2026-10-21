@@ -13,6 +13,7 @@ const server = {
   S3_REGION: z.string().optional(),
   S3_ACCESS_KEY_ID: z.string().optional(),
   S3_SECRET_ACCESS_KEY: z.string().optional(),
+  VALKEY_URL: z.url().optional(),
   BETTER_AUTH_SECRET: z.string().min(32),
   BETTER_AUTH_URL: z.url(),
   INITIAL_ADMIN: z
@@ -38,7 +39,7 @@ const OAUTH_PAIRS = [
 /**
  * Validates the server environment from `source`. Empty strings count as unset, each OAuth
  * provider needs both its id and its secret or neither, at least one provider must be complete
- * (login is OAuth only), and validation is skipped entirely when `SKIP_ENV_VALIDATION` is set
+ * (login is OAuth only), and validation is skipped entirely when `SKIP_ENV_VALIDATION` is `1` or `true`
  * (Docker image builds). Throws an error naming the offending variables, never their values.
  */
 export function createAppEnv(source: Record<string, string | undefined>) {
@@ -50,7 +51,7 @@ export function createAppEnv(source: Record<string, string | undefined>) {
     server,
     runtimeEnv,
     emptyStringAsUndefined: true,
-    skipValidation: Boolean(source.SKIP_ENV_VALIDATION),
+    skipValidation: source.SKIP_ENV_VALIDATION === "1" || source.SKIP_ENV_VALIDATION === "true",
     onValidationError: (issues) => {
       const details = issues
         .map((issue) => `${issue.path?.map(String).join(".") || "(env)"}: ${issue.message}`)

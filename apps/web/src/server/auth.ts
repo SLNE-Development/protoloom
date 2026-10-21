@@ -7,6 +7,7 @@ import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { account, apikey, session, user, verification, type Db } from "@protoloom/db";
 import { env, type Env } from "../env";
 import { isSecureUrl } from "./invite";
+import { trackTransactions } from "./transactions";
 import { createUserGate } from "./user-gate";
 
 /** The part of the environment the auth configuration depends on. */
@@ -67,7 +68,15 @@ function socialProviders(source: SocialEnv) {
  * linking only explicitly through `linkSocial` while signed in.
  */
 export function buildAuthOptions(db: Db, source: AuthEnv = env) {
-  const gate = createUserGate({ db, secret: source.BETTER_AUTH_SECRET, initialAdmin: source.INITIAL_ADMIN });
+  // Better Auth creates a user and its account in one transaction; the gate claims invites in it.
+  const tracked = trackTransactions(db);
+  const gate = createUserGate({
+    db,
+    currentDb: tracked.current,
+    secret: source.BETTER_AUTH_SECRET,
+    initialAdmin: source.INITIAL_ADMIN,
+    secureCookies: isSecureUrl(source.BETTER_AUTH_URL),
+  });
   return {
     secret: source.BETTER_AUTH_SECRET,
     // BETTER_AUTH_URL is the only source of the public URL: behind the proxy / tunnel requests
@@ -78,7 +87,11 @@ export function buildAuthOptions(db: Db, source: AuthEnv = env) {
       useSecureCookies: isSecureUrl(source.BETTER_AUTH_URL),
       trustedProxyHeaders: false,
     },
-    database: drizzleAdapter(db, { provider: "pg", schema: { user, session, account, verification, apikey } }),
+    database: drizzleAdapter(tracked.db, {
+      provider: "pg",
+      schema: { user, session, account, verification, apikey },
+      transaction: true,
+    }),
     socialProviders: socialProviders(source),
     user: { validateUserInfo: gate.validateUserInfo },
     databaseHooks: gate.databaseHooks,

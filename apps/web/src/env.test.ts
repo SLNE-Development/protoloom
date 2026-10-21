@@ -47,7 +47,16 @@ describe("createAppEnv", () => {
     expect(() => createAppEnv({ ...base, ...github, INITIAL_ADMIN: "gitlab:octo" })).toThrow(/INITIAL_ADMIN/);
   });
 
-  it("skips validation when SKIP_ENV_VALIDATION is set", () => {
+  it("skips validation only when SKIP_ENV_VALIDATION is 1 or true", () => {
     expect(() => createAppEnv({ SKIP_ENV_VALIDATION: "1" })).not.toThrow();
+    expect(() => createAppEnv({ SKIP_ENV_VALIDATION: "true" })).not.toThrow();
+    expect(() => createAppEnv({ SKIP_ENV_VALIDATION: "0" })).toThrow(/Invalid environment variables/);
+    expect(() => createAppEnv({ SKIP_ENV_VALIDATION: "false" })).toThrow(/Invalid environment variables/);
+  });
+
+  it("accepts an optional VALKEY_URL and validates it as a URL", () => {
+    expect(createAppEnv({ ...base, ...github }).VALKEY_URL).toBeUndefined();
+    expect(createAppEnv({ ...base, ...github, VALKEY_URL: "redis://localhost:6379" }).VALKEY_URL).toBe("redis://localhost:6379");
+    expect(() => createAppEnv({ ...base, ...github, VALKEY_URL: "not a url" })).toThrow(/VALKEY_URL/);
   });
 });

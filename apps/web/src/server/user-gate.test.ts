@@ -67,13 +67,13 @@ async function provision(
 
 describe("user creation gate", () => {
   it("refuses without an invite", async () => {
-    const gate = createUserGate({ db, secret: SECRET, initialAdmin: undefined });
+    const gate = createUserGate({ db, secret: SECRET, initialAdmin: undefined, secureCookies: false });
     const result = await provision(gate, { providerId: "github", profile: { login: "someone", id: 1 } });
     expect(result.refused).toEqual({ error: "invite_required", errorDescription: INVITE_REQUIRED_MESSAGE });
   });
 
   it("allows a valid invite, assigns its role and marks it used", async () => {
-    const gate = createUserGate({ db, secret: SECRET, initialAdmin: undefined });
+    const gate = createUserGate({ db, secret: SECRET, initialAdmin: undefined, secureCookies: false });
     const { row, cookie } = await createInvite({ role: "maintainer" });
     const result = await provision(gate, { providerId: "github", profile: { login: "someone", id: 1 }, cookie });
     expect(result.user?.role).toBe("maintainer");
@@ -83,14 +83,14 @@ describe("user creation gate", () => {
   });
 
   it("refuses an expired invite", async () => {
-    const gate = createUserGate({ db, secret: SECRET, initialAdmin: undefined });
+    const gate = createUserGate({ db, secret: SECRET, initialAdmin: undefined, secureCookies: false });
     const { cookie } = await createInvite({ expiresAt: new Date(Date.now() - 1000) });
     const result = await provision(gate, { providerId: "discord", profile: { id: "123" }, cookie });
     expect(result.refused?.error).toBe("invite_required");
   });
 
   it("refuses a used invite, including a second sign-up with the same link", async () => {
-    const gate = createUserGate({ db, secret: SECRET, initialAdmin: undefined });
+    const gate = createUserGate({ db, secret: SECRET, initialAdmin: undefined, secureCookies: false });
     const { cookie: usedCookie } = await createInvite({ usedAt: new Date() });
     expect((await provision(gate, { providerId: "discord", profile: { id: "1" }, cookie: usedCookie })).refused?.error).toBe(
       "invite_required",
@@ -104,7 +104,7 @@ describe("user creation gate", () => {
   });
 
   it("refuses an invite cookie signed with another secret", async () => {
-    const gate = createUserGate({ db, secret: "another-secret-another-secret-another", initialAdmin: undefined });
+    const gate = createUserGate({ db, secret: "another-secret-another-secret-another", initialAdmin: undefined, secureCookies: false });
     const { cookie } = await createInvite();
     expect((await provision(gate, { providerId: "github", profile: { login: "x" }, cookie })).refused?.error).toBe(
       "invite_required",
@@ -112,13 +112,13 @@ describe("user creation gate", () => {
   });
 
   it("lets INITIAL_ADMIN create the first admin, matching the GitHub login case-insensitively", async () => {
-    const gate = createUserGate({ db, secret: SECRET, initialAdmin: "github:octo" });
+    const gate = createUserGate({ db, secret: SECRET, initialAdmin: "github:octo", secureCookies: false });
     const result = await provision(gate, { providerId: "github", profile: { login: "Octo", id: 42 } });
     expect(result.user?.role).toBe("admin");
   });
 
   it("matches a Discord INITIAL_ADMIN by numeric user id", async () => {
-    const gate = createUserGate({ db, secret: SECRET, initialAdmin: "discord:80351110224678912" });
+    const gate = createUserGate({ db, secret: SECRET, initialAdmin: "discord:80351110224678912", secureCookies: false });
     const wrong = await provision(gate, { providerId: "discord", profile: { id: "80351110224678913", username: "x" } });
     expect(wrong.refused?.error).toBe("invite_required");
     const right = await provision(gate, { providerId: "discord", profile: { id: "80351110224678912", username: "x" } });
@@ -126,24 +126,24 @@ describe("user creation gate", () => {
   });
 
   it("is inert once an admin exists", async () => {
-    const gate = createUserGate({ db, secret: SECRET, initialAdmin: "github:octo" });
+    const gate = createUserGate({ db, secret: SECRET, initialAdmin: "github:octo", secureCookies: false });
     expect((await provision(gate, { providerId: "github", profile: { login: "Octo" } })).user?.role).toBe("admin");
     const again = await provision(gate, { providerId: "github", profile: { login: "octo" } });
     expect(again.refused?.error).toBe("invite_required");
   });
 
   it("refuses a provider account that does not match INITIAL_ADMIN", async () => {
-    const gate = createUserGate({ db, secret: SECRET, initialAdmin: "github:other" });
+    const gate = createUserGate({ db, secret: SECRET, initialAdmin: "github:other", secureCookies: false });
     expect((await provision(gate, { providerId: "github", profile: { login: "octo" } })).refused?.error).toBe("invite_required");
     // Same login on another provider does not match either.
-    const crossProvider = createUserGate({ db, secret: SECRET, initialAdmin: "github:octo" });
+    const crossProvider = createUserGate({ db, secret: SECRET, initialAdmin: "github:octo", secureCookies: false });
     expect((await provision(crossProvider, { providerId: "discord", profile: { id: "1", username: "octo" } })).refused?.error).toBe(
       "invite_required",
     );
   });
 
   it("refuses user creation through any non-OAuth method, such as the admin API", async () => {
-    const gate = createUserGate({ db, secret: SECRET, initialAdmin: undefined });
+    const gate = createUserGate({ db, secret: SECRET, initialAdmin: undefined, secureCookies: false });
     const ctx = { headers: new Headers() } as unknown as GenericEndpointContext;
     const verdict = await gate.validateUserInfo(
       { user: { email: "a@example.com" }, source: { action: "create-user", method: "admin" } },
@@ -153,14 +153,25 @@ describe("user creation gate", () => {
   });
 
   it("refuses creation when the before hook runs without a gate decision", async () => {
-    const gate = createUserGate({ db, secret: SECRET, initialAdmin: "github:octo" });
+    const gate = createUserGate({ db, secret: SECRET, initialAdmin: "github:octo", secureCookies: false });
     const now = new Date();
     const data = { id: "u1", name: "x", email: "x@example.com", emailVerified: true, createdAt: now, updatedAt: now };
     await expect(gate.databaseHooks.user.create.before(data, null)).rejects.toThrow(INVITE_REQUIRED_MESSAGE);
   });
 
+  it("stores only known invite roles (database check constraint)", async () => {
+    await expect(createInvite({ role: "owner" })).rejects.toThrow();
+  });
+
+  it("treats a comma-separated role list containing admin as an existing admin", async () => {
+    const now = new Date();
+    await db.insert(user).values({ id: randomUUID(), name: "a", email: "a@example.com", role: "maintainer, admin", createdAt: now, updatedAt: now });
+    const gate = createUserGate({ db, secret: SECRET, initialAdmin: "github:octo", secureCookies: false });
+    expect((await provision(gate, { providerId: "github", profile: { login: "octo" } })).refused?.error).toBe("invite_required");
+  });
+
   it("does not gate sign-in or account linking of existing users", async () => {
-    const gate = createUserGate({ db, secret: SECRET, initialAdmin: undefined });
+    const gate = createUserGate({ db, secret: SECRET, initialAdmin: undefined, secureCookies: false });
     const ctx = { headers: new Headers() } as unknown as GenericEndpointContext;
     for (const action of ["sign-in", "link-account"] as const) {
       const verdict = await gate.validateUserInfo(

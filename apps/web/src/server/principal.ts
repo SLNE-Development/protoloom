@@ -3,21 +3,7 @@ import { RegistryError, type KeyPermission, type Principal, type Role } from "@p
 import { apiKeyPermission, user, type Db } from "@protoloom/db";
 import type { Auth } from "./auth";
 import { getServerContext } from "./context";
-
-const ROLE_RANK: Record<Role, number> = { viewer: 0, maintainer: 1, admin: 2 };
-
-/**
- * The effective role for a stored admin-plugin role string, which may list several roles
- * separated by commas. The highest known role wins; anything else counts as `viewer`.
- */
-export function toRole(raw: string | null | undefined): Role {
-  let best: Role = "viewer";
-  for (const part of (raw ?? "").split(",")) {
-    const role = part.trim() as Role;
-    if (role in ROLE_RANK && ROLE_RANK[role] > ROLE_RANK[best]) best = role;
-  }
-  return best;
-}
+import { effectiveRole } from "./roles";
 
 function unauthorized(message = "Invalid API key"): RegistryError {
   return new RegistryError("unauthorized", message);
@@ -31,7 +17,7 @@ async function loadActiveRole(db: Db, userId: string): Promise<Role | null> {
     .where(eq(user.id, userId));
   if (!owner) return null;
   const banned = owner.banned === true && (owner.banExpires === null || owner.banExpires.getTime() > Date.now());
-  return banned ? null : toRole(owner.role);
+  return banned ? null : effectiveRole(owner.role);
 }
 
 /** The token of an `Authorization: Bearer <token>` header; `""` for an empty bearer, `null` without one. */
