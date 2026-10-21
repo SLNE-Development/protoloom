@@ -59,8 +59,22 @@ export function producerConnection(url: string): ConnectionOptions {
 /** Default upper bound for a producer operation before it reports the queue as unavailable. */
 export const PRODUCER_TIMEOUT_MS = 5_000;
 
-/** Thrown by producer operations when Valkey can't be reached in time. */
+/** Process-wide brand of {@link QueueUnavailableError} instances, shared by every copy of this module. */
+const QUEUE_UNAVAILABLE = Symbol.for("protoloom.QueueUnavailableError");
+
+/**
+ * Thrown by producer operations when Valkey can't be reached in time.
+ *
+ * `instanceof` checks a process-wide brand instead of the prototype chain, because Next.js bundles
+ * this package once per entry point and errors can cross from one bundle to another.
+ */
 export class QueueUnavailableError extends Error {
+  static override [Symbol.hasInstance](value: unknown): boolean {
+    return typeof value === "object" && value !== null && (value as Record<symbol, unknown>)[QUEUE_UNAVAILABLE] === true;
+  }
+
+  readonly [QUEUE_UNAVAILABLE] = true;
+
   constructor(cause?: unknown) {
     super("The job queue (Valkey) is unavailable", { cause });
     this.name = "QueueUnavailableError";
