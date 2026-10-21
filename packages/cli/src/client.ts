@@ -1,28 +1,35 @@
+import { z } from "zod";
 import { CliError } from "./config.js";
 
-/** One artifact entry of the `/api/v1/resolve` response. */
-export interface ResolvedArtifact {
-  repository: string;
-  coordinate: string;
-  group: string;
-  name: string;
-  version: string;
-  buildNumber: number;
-  sha256: string;
-  archiveUrl: string;
-}
+const resolveSchema = z.object({
+  artifacts: z.array(
+    z.object({
+      repository: z.string(),
+      coordinate: z.string(),
+      group: z.string(),
+      name: z.string(),
+      version: z.string(),
+      buildNumber: z.number(),
+      sha256: z.string().regex(/^[0-9a-f]{64}$/),
+      archiveUrl: z.string().min(1),
+    }),
+  ),
+  conflicts: z.array(
+    z.object({
+      group: z.string(),
+      name: z.string(),
+      requested: z.array(z.string()),
+      selected: z.string(),
+    }),
+  ),
+});
 
-export interface ResolveConflict {
-  group: string;
-  name: string;
-  requested: string[];
-  selected: string;
-}
+/** Validated `/api/v1/resolve` response. */
+export type ResolveResponse = z.infer<typeof resolveSchema>;
+export type ResolvedArtifact = ResolveResponse["artifacts"][number];
+export type ResolveConflict = ResolveResponse["conflicts"][number];
 
-export interface ResolveResponse {
-  artifacts: ResolvedArtifact[];
-  conflicts: ResolveConflict[];
-}
+const DEFAULT_TIMEOUT_MS = 60_000;
 
 export interface Downloaded {
   data: Buffer;
@@ -37,6 +44,7 @@ export class RegistryClient {
   constructor(
     url: string,
     private readonly token?: string,
+    private readonly timeoutMs = DEFAULT_TIMEOUT_MS,
   ) {
     this.base = new URL(url);
   }
@@ -60,7 +68,20 @@ export class RegistryClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ repositories, dependencies }),
     });
-    return (await res.json()) as ResolveResponse;
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      throw new CliError("Malformed response from registry: resolve body is not valid JSON");
+    }
+    const parsed = resolveSchema.safeParse(body);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      throw new CliError(
+        `Malformed response from registry: ${issue?.path.join(".") || "(root)"}: ${issue?.message}`,
+      );
+    }
+    return parsed.data;
   }
 
   async download(archiveUrl: string): Promise<Downloaded> {
@@ -76,8 +97,11 @@ export class RegistryClient {
     if (this.token) headers.set("authorization", `Bearer ${this.token}`);
     let res: Response;
     try {
-      res = await fetch(url, { ...init, headers });
+      res = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(this.timeoutMs) });
     } catch (err) {
+      if (err instanceof Error && err.name === "TimeoutError") {
+        throw new CliError(`Request to ${url.origin} timed out after ${this.timeoutMs / 1000}s`);
+      }
       const reason = err instanceof Error && err.cause instanceof Error ? err.cause.message : (err as Error).message;
       throw new CliError(`Cannot reach ${url.origin}: ${reason}`);
     }

@@ -41,13 +41,18 @@ export async function run(
       },
     });
     const command = positionals[0];
-    if (values.help || command === undefined) {
+    if (values.help) {
       io.out(HELP);
-      return values.help ? 0 : 1;
+      return 0;
+    }
+    if (command === undefined) {
+      io.err(HELP);
+      return 1;
     }
     if (command !== "fetch") throw new CliError(`Unknown command "${command}". Run protoloom --help.`);
 
-    const config = await loadConfig(resolve(cwd, values.config ?? "protoloom.json"));
+    const configPath = resolve(cwd, values.config ?? "protoloom.json");
+    const config = await loadConfig(configPath);
     const result = await fetchProtos({
       url: resolveUrl(config, env),
       token: env.PROTOLOOM_TOKEN || undefined,
@@ -55,6 +60,8 @@ export async function run(
       dependencies: config.dependencies,
       outDir: resolveOutDir(config, values.out, cwd),
       cacheDir: defaultCacheDir(cwd),
+      cwd,
+      configPath,
       warn: (m) => io.err(`warning: ${m}\n`),
     });
     io.out(`Fetched ${result.files} file(s) from ${result.artifacts} artifact(s)\n`);

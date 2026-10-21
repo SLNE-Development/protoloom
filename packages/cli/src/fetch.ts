@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { extractArchive, sha256, type ProtoFile } from "@protoloom/core";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { extractArchive, sha256, type ProtoFile } from "@protoloom/core/archive";
 import { RegistryClient, type ResolveConflict } from "./client.js";
 import { CliError } from "./config.js";
 
@@ -13,6 +13,14 @@ export interface FetchOptions {
   dependencies: string[];
   outDir: string;
   cacheDir: string;
+  /** Directory relative paths and safety checks are based on; defaults to the process cwd. */
+  cwd?: string;
+  /** Config file in use; the output directory may not contain it. */
+  configPath?: string;
+  /** Request timeout in milliseconds. */
+  timeoutMs?: number;
+  /** Replaces fs `rename` for the final directory swap (failure injection in tests). */
+  renameFn?: typeof rename;
   /** Receives non-fatal notices such as version conflicts. */
   warn?: (message: string) => void;
 }
@@ -91,12 +99,85 @@ async function writeAtomic(path: string, data: Buffer): Promise<void> {
   await rename(tmp, path);
 }
 
-function assertSafeOutDir(outDir: string): void {
-  const rel = relative(outDir, process.cwd());
-  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
-    throw new CliError(`Refusing to replace ${outDir}: it is or contains the working directory`);
+/** Name of the file that marks a directory as created (and replaceable) by protoloom. */
+export const OUTPUT_MARKER = ".protoloom-output";
+
+/** Resolves symlinks of the deepest existing ancestor and re-appends the not-yet-existing rest. */
+async function realResolve(path: string): Promise<string> {
+  let current = resolve(path);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return join(await realpath(current), ...rest.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return current;
+      rest.push(basename(current));
+      current = parent;
+    }
   }
-  if (dirname(outDir) === outDir) throw new CliError("Refusing to replace the file system root");
+}
+
+const norm = (p: string): string => (process.platform === "win32" ? p.toLowerCase() : p);
+
+/** True when `child` is `parent` or lies inside it. */
+function contains(parent: string, child: string): boolean {
+  const rel = relative(norm(parent), norm(child));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+/**
+ * Guards the directory that is about to be deleted and replaced: it must not be
+ * (or contain) the working directory, config file, cache or node_modules, and an
+ * existing non-empty directory must carry protoloom's marker file.
+ */
+async function assertSafeOutDir(outDir: string, opts: FetchOptions, cwd: string): Promise<void> {
+  const real = await realResolve(outDir);
+  if (dirname(real) === real) throw new CliError("Refusing to replace the file system root");
+  const protectedPaths: [string, string][] = [
+    ["the working directory", cwd],
+    ["the cache directory", opts.cacheDir],
+    ["node_modules", join(cwd, "node_modules")],
+  ];
+  if (opts.configPath) protectedPaths.push(["the config file", opts.configPath]);
+  for (const [label, path] of protectedPaths) {
+    if (contains(real, await realResolve(path))) {
+      throw new CliError(`Refusing to replace ${outDir}: it is or contains ${label}`);
+    }
+  }
+  let entries: string[];
+  try {
+    entries = await readdir(real);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw new CliError(`${outDir} exists and is not a directory`);
+  }
+  if (entries.length > 0 && !entries.includes(OUTPUT_MARKER)) {
+    throw new CliError(
+      `${outDir} exists and wasn't created by protoloom; remove it or choose another outDir`,
+    );
+  }
+}
+
+const exists = (path: string): Promise<boolean> =>
+  stat(path).then(
+    () => true,
+    () => false,
+  );
+
+/** Moves `tmpDir` into place; the previous `outDir` is renamed aside first and restored if the swap fails. */
+async function swapIn(tmpDir: string, outDir: string, swap: typeof rename): Promise<void> {
+  const oldDir = `${outDir}.old-${process.pid}`;
+  await rm(oldDir, { recursive: true, force: true });
+  const hadOld = await exists(outDir);
+  if (hadOld) await rename(outDir, oldDir);
+  try {
+    await swap(tmpDir, outDir);
+  } catch (err) {
+    if (hadOld) await rename(oldDir, outDir);
+    throw err;
+  }
+  if (hadOld) await rm(oldDir, { recursive: true, force: true }).catch(() => undefined);
 }
 
 function describeConflict(c: ResolveConflict): string {
@@ -109,9 +190,10 @@ function describeConflict(c: ResolveConflict): string {
  * Nothing is written to `outDir` unless every artifact verified and every path is safe.
  */
 export async function fetchProtos(opts: FetchOptions): Promise<FetchResult> {
-  const outDir = resolve(opts.outDir);
-  assertSafeOutDir(outDir);
-  const client = new RegistryClient(opts.url, opts.token);
+  const cwd = resolve(opts.cwd ?? process.cwd());
+  const outDir = resolve(cwd, opts.outDir);
+  await assertSafeOutDir(outDir, opts, cwd);
+  const client = new RegistryClient(opts.url, opts.token, opts.timeoutMs);
   const resolution = await client.resolve(opts.repositories, opts.dependencies);
   for (const conflict of resolution.conflicts) opts.warn?.(`Version conflict: ${describeConflict(conflict)}`);
 
@@ -140,17 +222,17 @@ export async function fetchProtos(opts: FetchOptions): Promise<FetchResult> {
 
   const placed = placeFiles(extracted);
 
-  const tmpDir = `${outDir}.tmp`;
+  const tmpDir = `${outDir}.tmp-${process.pid}`;
   await rm(tmpDir, { recursive: true, force: true });
   await mkdir(tmpDir, { recursive: true });
   try {
+    await writeFile(join(tmpDir, OUTPUT_MARKER), "Managed by protoloom; this directory is replaced on every fetch.\n");
     for (const { file } of placed) {
       const target = join(tmpDir, ...file.path.split("/"));
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, file.content, "utf8");
     }
-    await rm(outDir, { recursive: true, force: true });
-    await rename(tmpDir, outDir);
+    await swapIn(tmpDir, outDir, opts.renameFn ?? rename);
   } catch (err) {
     await rm(tmpDir, { recursive: true, force: true });
     throw err;
