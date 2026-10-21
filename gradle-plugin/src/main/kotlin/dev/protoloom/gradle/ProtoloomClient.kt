@@ -206,11 +206,26 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
         } catch (_: IllegalArgumentException) {
             return ""
         }
-        return issues.joinToString("") { issue ->
-            val location = listOfNotNull(issue.path.ifEmpty { null }, issue.line?.toString()).joinToString(":")
-            if (location.isEmpty()) "\n  ${issue.message}" else "\n  $location: ${issue.message}"
+        val listed = issues.take(MAX_LISTED_ISSUES).joinToString("") { issue ->
+            val path = sanitize(issue.path)
+            val message = sanitize(issue.message)
+            val location = listOfNotNull(path.ifEmpty { null }, issue.line?.toString()).joinToString(":")
+            if (location.isEmpty()) "\n  $message" else "\n  $location: $message"
         }
+        val rest = issues.size - MAX_LISTED_ISSUES
+        return if (rest > 0) "$listed\n  … and $rest more" else listed
     }
+
+    /**
+     * Makes server-provided text safe for one log line: drops ANSI escape sequences (ESC- and
+     * C1-introduced) and other C0/C1 control characters, turns line breaks and tabs into spaces.
+     */
+    private fun sanitize(text: String): String =
+        text.replace(ANSI_ESCAPE, "")
+            .replace(LINE_CONTROLS, " ")
+            .replace(OTHER_CONTROLS, "")
+            .replace(SPACES, " ")
+            .trim()
 
     private fun <T> decode(serializer: KSerializer<T>, body: String): T =
         try {
@@ -238,6 +253,15 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
 
     private companion object {
         const val API_PREFIX = "/api/v1/"
+
+        /** Validation issues listed in a failed publish; the rest are summarised as a count. */
+        const val MAX_LISTED_ISSUES = 20
+
+        /** CSI (`ESC [` or C1 `0x9B`) and OSC (`ESC ]` … BEL / ST) sequences, then any other two-char ESC sequence. */
+        val ANSI_ESCAPE = Regex("(?:\u001B\\[|\u009B)[0-?]*[ -/]*[@-~]|(?:\u001B\\]|\u009D)[^\u0007\u001B\u009C]*(?:\u0007|\u001B\\\\|\u009C)?|\u001B[@-_]?")
+        val LINE_CONTROLS = Regex("[\r\n\t]+")
+        val OTHER_CONTROLS = Regex("[\u0000-\u001F\u007F-\u009F]")
+        val SPACES = Regex(" {2,}")
         val json = Json { ignoreUnknownKeys = true }
         val logger: Logger = Logging.getLogger(ProtoloomClient::class.java)
 

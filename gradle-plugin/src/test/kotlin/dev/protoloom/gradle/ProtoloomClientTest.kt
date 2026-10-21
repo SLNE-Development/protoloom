@@ -75,6 +75,32 @@ class ProtoloomClientTest {
     }
 
     @Test
+    fun `at most 20 issues are listed, followed by a count of the rest`() {
+        val issues = (1..25).joinToString(",") { """{"path":"f$it.proto","line":$it,"message":"bad $it"}""" }
+        val body = """{"error":{"code":"validation_failed","message":"Proto validation failed","details":{"issues":[$issues]}}}"""
+
+        val lines = publishAgainst(422, body).message!!.lines()
+
+        assertEquals(22, lines.size)
+        assertEquals("  f1.proto:1: bad 1", lines[1])
+        assertEquals("  f20.proto:20: bad 20", lines[20])
+        assertEquals("  … and 5 more", lines[21])
+    }
+
+    @Test
+    fun `control characters and ANSI escapes are stripped from issue paths and messages`() {
+        val body = """
+            {"error":{"code":"validation_failed","message":"Proto validation failed","details":{"issues":[
+              {"path":"a\u001b[31m.proto\u0007","line":2,"message":"red\u001b[0m text\r\nInjected: line\u009b1m"}
+            ]}}}
+        """.trimIndent()
+
+        val error = publishAgainst(422, body)
+
+        assertEquals("validation_failed: Proto validation failed\n  a.proto:2: red text Injected: line", error.message)
+    }
+
+    @Test
     fun `other errors keep the single-line code and message`() {
         val error = publishAgainst(409, """{"error":{"code":"immutable","message":"already exists","details":{"x":1}}}""")
 
