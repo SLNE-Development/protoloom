@@ -13,7 +13,8 @@
 ## Global Constraints
 
 - Product name **Protoloom**; npm scope `@protoloom/*`; CLI package and binary `protoloom`; Gradle plugin id `dev.protoloom`, group `dev.protoloom`.
-- Env vars (server): `DATABASE_URL`, `STORAGE_DRIVER` (`local` | `s3`), `STORAGE_LOCAL_PATH`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`.
+- Env vars (server): `DATABASE_URL`, `STORAGE_DRIVER` (`local` | `s3`), `STORAGE_LOCAL_PATH`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and optionally `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`. All of them are validated with **t3-env** (`@t3-oss/env-nextjs`) in `apps/web/src/env.ts`. The app imports `env` from there and never reads `process.env` directly. Empty strings count as unset (`emptyStringAsUndefined: true`). Each OAuth provider needs both its id and its secret, or neither.
+- **Social sign-in (decided by the user):** GitHub and Discord through Better Auth `socialProviders`. A provider is enabled only when both of its env vars are set. **No automatic account linking:** signing in with a provider never attaches it to an existing user by matching email, and never creates a new user (sign-up stays disabled). A provider signs a user in only if that user already connected it explicitly while signed in, on the Account page (`/account`), which also allows disconnecting it. OAuth callback URLs: `${BETTER_AUTH_URL}/api/auth/callback/github` and `${BETTER_AUTH_URL}/api/auth/callback/discord`.
 - Env vars (clients): `PROTOLOOM_URL`, `PROTOLOOM_TOKEN`.
 - Gradle output root: `build/protoloom/protos/`. CLI config file: `protoloom.json`, default `outDir` `./protos`.
 - Roles: `admin`, `maintainer`, `viewer`. Sign-up disabled.
@@ -395,19 +396,22 @@ The user chose scheme A · Ink and asked for next-themes. The direction wasn't n
 ### Task 12: Web app foundation: auth, principal, bootstrap, scheduler
 
 **Files:**
-- Create: `apps/web` (Next.js App Router, `output: "standalone"`, `src/` dir, depends on `@protoloom/ui`, `@protoloom/core`, `@protoloom/db`), `src/server/env.ts` (zod-validated env), `src/server/context.ts`, `src/server/auth.ts`, `src/app/api/auth/[...all]/route.ts`, `src/server/principal.ts`, `src/server/bootstrap.ts`, `src/server/scheduler.ts`, `src/instrumentation.ts`
+- Create: `apps/web` (Next.js App Router, `output: "standalone"`, `src/` dir, depends on `@protoloom/ui`, `@protoloom/core`, `@protoloom/db`), `src/env.ts` (t3-env `createEnv` with the server schema from Global Constraints; `skipValidation` when `SKIP_ENV_VALIDATION` is set, for Docker builds), `src/server/context.ts`, `src/server/auth.ts`, `src/app/api/auth/[...all]/route.ts`, `src/server/principal.ts`, `src/server/bootstrap.ts`, `src/server/scheduler.ts`, `src/instrumentation.ts`
 - Test: `apps/web/src/server/principal.test.ts`, `apps/web/src/server/bootstrap.test.ts`
 
 **Interfaces:**
 - Produces:
   - `getServerContext(): { db: Db; blobs: BlobStore; registry: Registry; auth: Auth }` (lazy singletons)
   - `auth`: Better Auth with the drizzle adapter, `emailAndPassword: { enabled: true, disableSignUp: true }`, plugins `admin({ defaultRole: "viewer", adminRoles: ["admin"] })` with roles `admin | maintainer | viewer`, and `apiKey({ rateLimit: { enabled: false }, enableMetadata: true })`. Rate limiting is off so Gradle builds aren't throttled.
+    - `socialProviders`: `github` and `discord`, each added only when configured, with implicit sign-up disabled (`disableImplicitSignUp: true` / `disableSignUp: true` as the installed version names it).
+    - `account.accountLinking`: `enabled: true` only for explicit linking through `linkSocial` while signed in. `trustedProviders: []`, and no linking on email match: `disableImplicitLinking: true` or the installed version's equivalent. Check the installed Better Auth docs, and record the exact options used in the report.
+    - `getEnabledSocialProviders(): ("github" | "discord")[]`, used by the login page and the Account page.
   - `getPrincipal(req: Request): Promise<Principal>`. A `Bearer` header goes through `auth.api.verifyApiKey`. An invalid, expired or revoked key throws `RegistryError("unauthorized")`, and so does a banned owner. Otherwise the owner's current role is loaded together with the `apiKeyPermission` rows. Without a bearer, the session cookie gives a user principal, and with neither the result is anonymous.
   - `bootstrapAdmin(): Promise<void>`: when the user table is empty and both `ADMIN_EMAIL` and `ADMIN_PASSWORD` are set, it creates that user with role `admin`.
   - `startScheduler()`: `croner` at `0 3 * * *` calls `runAllCleanups`.
   - `instrumentation.ts` `register()`: only when `NEXT_RUNTIME === "nodejs"`, it runs `migrate`, then `bootstrapAdmin`, then `startScheduler`.
 
-- [ ] **Step 1: Write failing tests** against `startTestDb` with the auth instance built from the test db:
+- [ ] **Step 1: Write failing tests** for env and auth config, without a db: `createEnv` throws when only `GITHUB_CLIENT_ID` is set without its secret. `getEnabledSocialProviders()` returns `[]` with no OAuth env, `["github"]` with only GitHub, and both with both. The built auth options have implicit sign-up disabled for each enabled provider and no trusted providers for automatic linking. Then, against `startTestDb` with the auth instance built from the test db:
   - No header returns anonymous.
   - A valid key for a maintainer returns `{kind:"apikey", role:"maintainer", permissions:[...]}`.
   - Garbage, expired and revoked keys throw `unauthorized`.
@@ -491,7 +495,7 @@ The user chose scheme A · Ink and asked for next-themes. The direction wasn't n
 **Depends on:** Tasks 2a and 14. It can start before 2b is finished, because it only uses tokens and never hard-coded colors.
 
 **Files:**
-- Create: `apps/web/src/app/layout.tsx` (imports `@protoloom/ui/globals.css`, wraps everything in `ThemeProvider` from `@protoloom/ui` (next-themes, light/dark/system), with `suppressHydrationWarning` on `<html>`), `src/components/command-menu.tsx`, `src/app/login/page.tsx`, `src/app/(app)/layout.tsx` (sidebar shell using `@protoloom/ui` `Sidebar`, `Logo`, user menu; nav items filtered by role; anonymous visitors see Browse only plus a "Sign in" button), `src/app/(app)/page.tsx` (dashboard), `src/app/(app)/browse/[repo]/page.tsx`, `src/app/(app)/browse/[repo]/[group]/[name]/page.tsx`, `src/app/(app)/browse/[repo]/[group]/[name]/[version]/page.tsx`, `src/components/proto-viewer.tsx` (shiki `proto` grammar, themes that follow light/dark), `src/components/usage-snippet.tsx`, `src/middleware.ts` (cookie presence check only)
+- Create: `apps/web/src/app/layout.tsx` (imports `@protoloom/ui/globals.css`, wraps everything in `ThemeProvider` from `@protoloom/ui` (next-themes, light/dark/system), with `suppressHydrationWarning` on `<html>`), `src/components/command-menu.tsx`, `src/app/login/page.tsx` (email + password form, plus "Continue with GitHub" / "Continue with Discord" buttons only for enabled providers. When a provider sign-in finds no linked account, it shows "This GitHub account isn't connected to a Protoloom user. Sign in with your password and connect it under Account."), `src/app/(app)/layout.tsx` (sidebar shell using `@protoloom/ui` `Sidebar`, `Logo`, user menu; nav items filtered by role; anonymous visitors see Browse only plus a "Sign in" button), `src/app/(app)/page.tsx` (dashboard), `src/app/(app)/browse/[repo]/page.tsx`, `src/app/(app)/browse/[repo]/[group]/[name]/page.tsx`, `src/app/(app)/browse/[repo]/[group]/[name]/[version]/page.tsx`, `src/components/proto-viewer.tsx` (shiki `proto` grammar, themes that follow light/dark), `src/components/usage-snippet.tsx`, `src/middleware.ts` (cookie presence check only)
 
 **Interfaces:**
 - Consumes: the tRPC routers from Task 14.
@@ -528,12 +532,13 @@ The user chose scheme A · Ink and asked for next-themes. The direction wasn't n
 **Depends on:** Task 15.
 
 **Files:**
-- Create: `src/app/(app)/repositories/page.tsx`, `repositories/new/page.tsx`, `repositories/[repo]/settings/page.tsx` (General form: description, visibility, allow redeploy, accept releases/snapshots, resolution priority; a Cleanup policies section: table + add/edit dialog, a Preview button that shows candidates in a dialog, a Run now button with confirmation), `src/app/(app)/keys/page.tsx` (table: name, permissions summary, expiry, last used, revoke; Create dialog with a permission row editor — repository select, group prefix input, access select limited by role — and a one-time secret display with copy and the warning "You won't see this key again"), `src/app/(app)/admin/users/page.tsx`, `admin/settings/page.tsx` (an "Allow anonymous view" switch with a description), `admin/audit/page.tsx` (infinite table, action filter)
+- Create: `src/app/(app)/repositories/page.tsx`, `repositories/new/page.tsx`, `repositories/[repo]/settings/page.tsx` (General form: description, visibility, allow redeploy, accept releases/snapshots, resolution priority; a Cleanup policies section: table + add/edit dialog, a Preview button that shows candidates in a dialog, a Run now button with confirmation), `src/app/(app)/keys/page.tsx` (table: name, permissions summary, expiry, last used, revoke; Create dialog with a permission row editor — repository select, group prefix input, access select limited by role — and a one-time secret display with copy and the warning "You won't see this key again"), `src/app/(app)/admin/users/page.tsx`, `admin/settings/page.tsx` (an "Allow anonymous view" switch with a description), `admin/audit/page.tsx` (infinite table, action filter), `src/app/(app)/account/page.tsx` (profile and password change, plus a **Connected accounts** card listing GitHub and Discord when enabled, each with Connect (`authClient.linkSocial`) or Disconnect (`authClient.unlinkAccount`), and a guard so a user can't remove their last sign-in method)
 - Test: `apps/web/e2e/manage.spec.ts`
 
 - [ ] **Step 1: Write a failing Playwright test:**
   - Admin creates a repo `team-private` (private), then creates a key with write on `team-private`. The secret is visible once. After closing the dialog and reloading, the secret text doesn't appear anywhere on the page.
   - Toggling anonymous view on lets a fresh browser context visit `/browse/public-repo` without logging in, and `team-private` isn't listed.
+  - With the GitHub env set in the e2e environment (dummy values), `/login` shows "Continue with GitHub" and no Discord button, and `/account` shows a Connect button for GitHub.
   - Admin creates a viewer user. Logged in as that viewer, the Users and Settings nav items are absent, and the key dialog's access select offers only `read`.
 - [ ] **Step 2:** Run it. Expected: FAIL.
 - [ ] **Step 3:** Implement. Forms use `@protoloom/ui` `Form` with zod, and toasts use `sonner`.
