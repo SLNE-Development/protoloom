@@ -281,6 +281,8 @@ export async function applyCleanup(
  */
 export async function runAllCleanups(db: Db, blobs: BlobStore, now: Date): Promise<number> {
   const lockClient = await db.$client.connect();
+  // Set when unlocking fails: releasing with it destroys the connection, which drops the session lock.
+  let unlockError: Error | undefined;
   try {
     const { rows } = await lockClient.query<{ locked: boolean }>("select pg_try_advisory_lock($1) as locked", [
       CLEANUP_LOCK_KEY,
@@ -305,9 +307,14 @@ export async function runAllCleanups(db: Db, blobs: BlobStore, now: Date): Promi
       if (errors.length > 0) throw new AggregateError(errors, `Cleanup failed for ${errors.length} repositories`);
       return deleted;
     } finally {
-      await lockClient.query("select pg_advisory_unlock($1)", [CLEANUP_LOCK_KEY]);
+      try {
+        await lockClient.query("select pg_advisory_unlock($1)", [CLEANUP_LOCK_KEY]);
+      } catch (error) {
+        unlockError = error instanceof Error ? error : new Error(String(error));
+        console.warn("protoloom: releasing the cleanup lock failed; discarding its connection", unlockError);
+      }
     }
   } finally {
-    lockClient.release();
+    lockClient.release(unlockError);
   }
 }
