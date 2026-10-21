@@ -9,15 +9,15 @@
 //     `keys.create` tRPC procedure), plus its permission row.
 // The key is printed as the LAST line on stdout; progress goes to stderr.
 //
-// In the Docker image this file is a self-contained esbuild bundle (see docker/Dockerfile):
-//   docker compose exec app node apps/web/scripts/seed-smoke.mjs
-// From a checkout (after `pnpm build`), it runs as is with DATABASE_URL, BETTER_AUTH_SECRET and
-// BETTER_AUTH_URL set. Never point it at a production database.
+// It is NOT part of the image. scripts/e2e-smoke.sh bundles it with esbuild into one file and
+// copies it into the running app container (docker cp), then runs it with plain node.
+// Guards: it runs only with PROTOLOOM_SMOKE_SEED=1, and refuses a database that has any user
+// other than the smoke admin. Needs DATABASE_URL, BETTER_AUTH_SECRET and BETTER_AUTH_URL.
 import { randomUUID } from "node:crypto";
 import { apiKey } from "@better-auth/api-key";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { betterAuth } from "better-auth";
-import { eq } from "drizzle-orm";
+import { eq, ne } from "drizzle-orm";
 import { account, apikey, apiKeyPermission, createDb, repository, session, user, verification } from "@protoloom/db";
 
 const ADMIN_EMAIL = "smoke-admin@protoloom.invalid";
@@ -37,8 +37,21 @@ function required(name) {
 
 const log = (message) => console.error(`seed-smoke: ${message}`);
 
+if (process.env.PROTOLOOM_SMOKE_SEED !== "1") {
+  console.error("seed-smoke: refusing to run without PROTOLOOM_SMOKE_SEED=1 (smoke-test stacks only)");
+  process.exit(1);
+}
+
 const db = createDb(required("DATABASE_URL"));
 try {
+  // A database with any other user is a real instance: never add an admin and a key to it.
+  const [other] = await db.select({ id: user.id }).from(user).where(ne(user.email, ADMIN_EMAIL)).limit(1);
+  if (other) {
+    console.error("seed-smoke: refusing to run, the database has users other than the smoke admin");
+    await db.$client.end();
+    process.exit(1);
+  }
+
   let [admin] = await db.select({ id: user.id }).from(user).where(eq(user.email, ADMIN_EMAIL));
   if (!admin) {
     [admin] = await db

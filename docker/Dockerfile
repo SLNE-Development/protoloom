@@ -36,7 +36,6 @@ RUN pnpm turbo run build --filter=web --filter=@protoloom/worker
 
 # Runtime tree:
 #   /out/app            Next standalone server (apps/web/server.js), static assets, public/
-#   /out/app/apps/web/scripts/seed-smoke.mjs  smoke-test seed, bundled
 #   /out/app/apps/worker  self-contained worker (dist + prod node_modules), via `pnpm deploy`
 #   /out/migrate        self-contained @protoloom/db (dist + drizzle migrations + prod node_modules)
 RUN mkdir -p /out/app \
@@ -44,14 +43,6 @@ RUN mkdir -p /out/app \
  && mkdir -p /out/app/apps/web/.next \
  && cp -r apps/web/.next/static /out/app/apps/web/.next/static \
  && if [ -d apps/web/public ]; then cp -r apps/web/public /out/app/apps/web/public; fi
-# Smoke-test seed (scripts/e2e-smoke.sh): bundled into one file so plain `node` runs it in the image.
-# Runs before `pnpm deploy`, while the workspace's dev dependencies (esbuild) are still installed.
-RUN mkdir -p /out/app/apps/web/scripts \
- && cd apps/web \
- && ./node_modules/.bin/esbuild scripts/seed-smoke.mjs --bundle --platform=node --format=esm \
-      --target=node22 --log-level=warning --external:pg-native \
-      "--banner:js=import { createRequire as __seedCreateRequire } from 'node:module'; const require = __seedCreateRequire(import.meta.url);" \
-      --outfile=/out/app/apps/web/scripts/seed-smoke.mjs
 # Proto validation runs buf from its per-platform package (@bufbuild/buf-linux-x64 / -aarch64),
 # which pnpm installs for the build platform only and Next traces into the standalone output
 # (next.config.ts outputFileTracingIncludes). Fail the build if that binary is missing or not executable.

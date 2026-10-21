@@ -4,8 +4,10 @@
 # validation rejects a broken bundle, fetches the bundle back with the CLI, runs a cleanup job
 # through the worker and checks the public pages. Tears everything down afterwards.
 #
-# Requires: docker (compose v2), a JDK for Gradle, node, curl, tar, and `pnpm build` already run
-# (packages/cli/dist). Prints SMOKE OK on success.
+# Requires: docker (compose v2), a JDK for Gradle, node, curl, tar, and `pnpm install && pnpm build`
+# already run (packages/cli/dist, packages/db/dist and esbuild for the seed bundle). The seed
+# (apps/web/scripts/seed-smoke.mjs) is not part of the image; it is bundled here and copied into
+# the app container. Prints SMOKE OK on success.
 set -euo pipefail
 
 # Git Bash on Windows would rewrite container paths such as /app/... into Windows paths.
@@ -17,8 +19,6 @@ cd "$ROOT"
 PROJECT="protoloom-smoke"
 PORT="${SMOKE_PORT:-3100}"
 URL="http://localhost:${PORT}"
-# Command run inside the app container; must print the API key as its LAST stdout line.
-SEED_CMD="${SMOKE_SEED_CMD:-node apps/web/scripts/seed-smoke.mjs}"
 WORK="$(mktemp -d)"
 # With path conversion off, hand Windows binaries (docker, node, curl) a C:/... path on Git Bash.
 if command -v cygpath >/dev/null 2>&1; then
@@ -68,7 +68,13 @@ for i in $(seq 1 90); do
 done
 
 echo "==> 2. seed admin, 'releases' repository and API key"
-TOKEN="$(compose exec -T app $SEED_CMD | tail -n 1 | tr -d '\r\n')"
+# The seed is not in the image: bundle it into one file here and copy it into the running container.
+"$ROOT/apps/web/node_modules/.bin/esbuild" "$ROOT/apps/web/scripts/seed-smoke.mjs" --bundle --platform=node \
+  --format=esm --target=node22 --log-level=warning --external:pg-native \
+  "--banner:js=import { createRequire as __seedCreateRequire } from 'node:module'; const require = __seedCreateRequire(import.meta.url);" \
+  --outfile="$WORK/seed-smoke.mjs"
+docker cp "$WORK/seed-smoke.mjs" "$(compose ps -q app):/tmp/seed-smoke.mjs"
+TOKEN="$(compose exec -T -e PROTOLOOM_SMOKE_SEED=1 app node /tmp/seed-smoke.mjs | tail -n 1 | tr -d '\r\n')"
 case "$TOKEN" in pl_*) ;; *) fail "seed printed no API key (got '${TOKEN}')" ;; esac
 
 echo "==> 3. publish with the Gradle plugin"
