@@ -6,6 +6,8 @@ name: Release
 #   - the Gradle plugin dev.protoloom to https://reposilite.slne.dev/releases/
 #                                                      (secrets SLNE_RELEASES_REPO_USERNAME, SLNE_RELEASES_REPO_PASSWORD)
 # The tag must match the versions in packages/cli/package.json and gradle-plugin/build.gradle.kts.
+# npm and Gradle publish only after the image was built and pushed.
+# Third-party actions are pinned to commit SHAs; the comment names the release.
 on:
   push:
     tags: ["v*"]
@@ -20,7 +22,7 @@ jobs:
     outputs:
       version: ${{ steps.tag.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: tag
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - name: Compare
@@ -41,15 +43,15 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: docker/Dockerfile
@@ -67,7 +69,7 @@ jobs:
 
   cli:
     name: CLI to npm
-    needs: versions
+    needs: [versions, image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -75,8 +77,8 @@ jobs:
     env:
       TURBO_TELEMETRY_DISABLED: "1"
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           registry-url: https://registry.npmjs.org
@@ -98,18 +100,18 @@ jobs:
 
   gradle-plugin:
     name: Gradle plugin to reposilite.slne.dev
-    needs: versions
+    needs: [versions, image]
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: gradle-plugin
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: "21"
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
       - run: ./gradlew test --no-daemon --console=plain
       - name: Publish
         env:
