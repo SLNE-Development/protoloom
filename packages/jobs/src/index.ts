@@ -38,38 +38,137 @@ export const CLEANUP_JOB_OPTIONS: DefaultJobOptions = {
 };
 
 /**
- * Connection options for a Valkey/Redis URL such as `redis://localhost:6379`. Commands wait for
- * a reconnect instead of failing after a few retries, as BullMQ workers require.
+ * Connection options for a BullMQ **worker** on a Valkey/Redis URL such as
+ * `redis://localhost:6379`. Commands wait for a reconnect instead of failing after a few retries,
+ * as BullMQ workers require. Producers use {@link producerConnection} instead.
  */
 export function redisConnection(url: string): ConnectionOptions {
   return { url, maxRetriesPerRequest: null };
 }
 
-/** Opens the cleanup queue on the given connection with {@link CLEANUP_JOB_OPTIONS} as job defaults. */
-export function createQueue(connection: ConnectionOptions): CleanupQueue {
-  return new Queue<CleanupJobData, CleanupJobResult>(CLEANUP_QUEUE, {
+/**
+ * Connection options for a **producer** queue (the web app enqueueing jobs). While Valkey is
+ * unreachable, commands fail at once instead of waiting in an offline queue (one retry per
+ * request), so a request handler can report the outage. The connection keeps reconnecting in the
+ * background and recovers when Valkey is back.
+ */
+export function producerConnection(url: string): ConnectionOptions {
+  return { url, enableOfflineQueue: false, maxRetriesPerRequest: 1, connectTimeout: 2_000 };
+}
+
+/** Default upper bound for a producer operation before it reports the queue as unavailable. */
+export const PRODUCER_TIMEOUT_MS = 5_000;
+
+/** Thrown by producer operations when Valkey can't be reached in time. */
+export class QueueUnavailableError extends Error {
+  constructor(cause?: unknown) {
+    super("The job queue (Valkey) is unavailable", { cause });
+    this.name = "QueueUnavailableError";
+  }
+}
+
+/** Options of producer operations. */
+export interface ProducerOptions {
+  /** Give up after this many milliseconds (default {@link PRODUCER_TIMEOUT_MS}). */
+  timeoutMs?: number;
+}
+
+/**
+ * Awaits `operation`, turning its failure or a run longer than `timeoutMs` into
+ * {@link QueueUnavailableError}. (A connection that never became ready makes BullMQ wait forever.)
+ */
+async function withinTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new QueueUnavailableError()), timeoutMs);
+  });
+  // A rejection that arrives after the timeout won must not surface as an unhandled rejection.
+  operation.catch(() => undefined);
+  try {
+    return await Promise.race([operation, timeout]);
+  } catch (error) {
+    throw error instanceof QueueUnavailableError ? error : new QueueUnavailableError(error);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Options of {@link createQueue}. */
+export interface QueueOptions {
+  /** Receives connection errors (default: logged), so they never go unhandled. */
+  onError?: (error: Error) => void;
+}
+
+/**
+ * Opens the cleanup queue on the given connection with {@link CLEANUP_JOB_OPTIONS} as job
+ * defaults and an `error` listener attached.
+ */
+export function createQueue(connection: ConnectionOptions, options: QueueOptions = {}): CleanupQueue {
+  const queue = new Queue<CleanupJobData, CleanupJobResult>(CLEANUP_QUEUE, {
     connection,
     defaultJobOptions: CLEANUP_JOB_OPTIONS,
   });
+  queue.on("error", options.onError ?? ((error: Error) => console.error("protoloom: cleanup queue error:", error.message)));
+  return queue;
 }
 
-/** Enqueues a cleanup of one repository and returns the job id. */
-export async function enqueueCleanup(queue: CleanupQueue, repository: string): Promise<string> {
-  const job = await queue.add("cleanup:repo", { kind: "cleanup:repo", repository });
+/** Length of the window in which manual runs of one repository share a job id. */
+export const MANUAL_RUN_WINDOW_MS = 60_000;
+
+/**
+ * The deterministic id of a manual cleanup of `repository` started at `now`:
+ * `cleanup-repo-<repository>-<minute bucket>` (BullMQ forbids `:` in custom ids).
+ */
+export function manualCleanupJobId(repository: string, now: Date = new Date()): string {
+  return `cleanup-repo-${repository}-${Math.floor(now.getTime() / MANUAL_RUN_WINDOW_MS)}`;
+}
+
+/**
+ * Enqueues a cleanup of one repository and returns the job id. Throws
+ * {@link QueueUnavailableError} when Valkey can't be reached within the timeout.
+ *
+ * The job id is {@link manualCleanupJobId}: BullMQ ignores an add whose id already exists (while
+ * the job is queued, running, or kept after finishing), so every run requested for the same
+ * repository within the same minute, including a retry after an add that timed out but was
+ * delivered, maps to one job and the cleanup runs once. Such a request returns the existing job's id.
+ */
+export async function enqueueCleanup(
+  queue: CleanupQueue,
+  repository: string,
+  options: ProducerOptions & { now?: Date } = {},
+): Promise<string> {
+  const job = await withinTimeout(
+    queue.add(
+      "cleanup:repo",
+      { kind: "cleanup:repo", repository },
+      { jobId: manualCleanupJobId(repository, options.now) },
+    ),
+    options.timeoutMs ?? PRODUCER_TIMEOUT_MS,
+  );
   if (!job.id) throw new Error("BullMQ returned a job without an id");
   return job.id;
 }
 
-/** Looks up a cleanup job; `state` is `unknown` when the id does not exist (or was already removed). */
-export async function getJobState(queue: CleanupQueue, jobId: string): Promise<CleanupJobStatus> {
-  const job = await queue.getJob(jobId);
-  if (!job) return { state: "unknown", result: null, failedReason: null };
-  const state = await job.getState();
-  return {
-    state,
-    result: state === "completed" ? (job.returnvalue ?? null) : null,
-    failedReason: state === "failed" ? (job.failedReason ?? null) : null,
+/**
+ * Looks up a cleanup job; `state` is `unknown` when the id does not exist (or was already
+ * removed). Throws {@link QueueUnavailableError} when Valkey can't be reached within the timeout.
+ */
+export async function getJobState(
+  queue: CleanupQueue,
+  jobId: string,
+  options: ProducerOptions = {},
+): Promise<CleanupJobStatus> {
+  const lookup = async (): Promise<CleanupJobStatus> => {
+    const job = await queue.getJob(jobId);
+    if (!job) return { state: "unknown", result: null, failedReason: null };
+    const state = await job.getState();
+    return {
+      state,
+      result: state === "completed" ? (job.returnvalue ?? null) : null,
+      failedReason: state === "failed" ? (job.failedReason ?? null) : null,
+    };
   };
+  return withinTimeout(lookup(), options.timeoutMs ?? PRODUCER_TIMEOUT_MS);
 }
 
 /** Creates or updates the daily cleanup scheduler; calling it again never adds a second one. */
