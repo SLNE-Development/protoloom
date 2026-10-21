@@ -30,9 +30,7 @@
     "lucide-react": "1.61.0",
     "next-themes": "0.4.6",
     "radix-ui": "1.8.1",
-    "react": "19.3.1",
     "react-day-picker": "10.0.2",
-    "react-dom": "19.3.1",
     "react-hook-form": "7.90.0",
     "react-resizable-panels": "4.14.7",
     "recharts": "3.8.0",
@@ -42,6 +40,10 @@
     "vaul": "1.1.2",
     "zod": "4.6.7"
   },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
   "devDependencies": {
     "@protoloom/config": "workspace:*",
     "@tailwindcss/postcss": "4.3.3",
@@ -49,6 +51,8 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "eslint": "10.13.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "shadcn": "4.22.1",
     "tailwindcss": "4.3.3",
     "typescript": "6.0.3",

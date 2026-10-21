@@ -166,15 +166,17 @@
   [role="checkbox"],
   [role="switch"],
   [role="radio"],
+  [role="slider"],
   a[href],
   label[for],
   select,
   summary {
     cursor: pointer;
   }
+  /* cmdk marks enabled items data-disabled="false", so skip those. */
   :disabled,
   [aria-disabled="true"],
-  [data-disabled] {
+  [data-disabled]:not([data-disabled="false"]) {
     cursor: not-allowed;
   }
 }
