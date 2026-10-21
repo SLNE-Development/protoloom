@@ -47,7 +47,9 @@ class LocalModulesTest {
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":service:fetchProtos")?.outcome)
         assertEquals(
-            Json.parseToJsonElement("""{"repositories":["releases"],"dependencies":["dev.example:remote:1.0.0"]}"""),
+            Json.parseToJsonElement(
+                """{"repositories":["releases"],"dependencies":["dev.example:remote:1.0.0"],"exclude":["dev.example:contracts"]}""",
+            ),
             Json.parseToJsonElement(stub.resolveBodies.single()),
         )
         val protos = projectDir.resolve("service/build/protoloom/protos")
@@ -112,7 +114,10 @@ class LocalModulesTest {
         gradle(":app:fetchProtos", ":app:publishProtos").build()
 
         assertEquals(
-            Json.parseToJsonElement("""{"repositories":["releases"],"dependencies":["dev.example:remote:1.0.0"]}"""),
+            Json.parseToJsonElement(
+                """{"repositories":["releases"],"dependencies":["dev.example:remote:1.0.0"],""" +
+                    """"exclude":["dev.example:contracts","dev.example:service"]}""",
+            ),
             Json.parseToJsonElement(stub.resolveBodies.single()),
         )
         assertEquals(CONTRACTS_PROTO, projectDir.resolve("app/build/protoloom/protos/contracts/v1/a.proto").readText())
@@ -131,6 +136,94 @@ class LocalModulesTest {
 
         assertTrue(
             result.output.contains("File contracts/v1/a.proto is provided by both project :contracts and dev.example:remote:1.0.0"),
+            result.output,
+        )
+    }
+
+    @Test
+    fun `fetchProtos excludes local modules from resolution so their remote dependencies stay out`() {
+        // dev.example:x:1.0.0 -> dev.example:contracts:1.0.0 (which is :contracts here) -> dev.example:legacy:1.0.0
+        stub.coordinate = "dev.example:x:1.0.0"
+        stub.files = mapOf("x/v1/x.proto" to remoteContent)
+        stub.extraArtifacts = mapOf(
+            "dev.example:contracts:1.0.0" to mapOf("contracts/v1/a.proto" to "// remote copy\n"),
+            "dev.example:legacy:1.0.0" to mapOf("legacy/v1/legacy.proto" to "// legacy\n"),
+        )
+        stub.artifactDependencies = mapOf(
+            "dev.example:x:1.0.0" to listOf("dev.example:contracts:1.0.0"),
+            "dev.example:contracts:1.0.0" to listOf("dev.example:legacy:1.0.0"),
+        )
+        writeProjects(contractsDependencies = "")
+        projectDir.resolve("service/build.gradle.kts").appendText("dependencies {\n    protoloom(\"dev.example:x:1.0.0\")\n}\n")
+
+        val result = gradle(":service:fetchProtos").build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":service:fetchProtos")?.outcome)
+        assertEquals(
+            Json.parseToJsonElement(
+                """{"repositories":["releases"],"dependencies":["dev.example:x:1.0.0"],"exclude":["dev.example:contracts"]}""",
+            ),
+            Json.parseToJsonElement(stub.resolveBodies.single()),
+        )
+        assertEquals(listOf("/api/v1/repos/releases/artifacts/dev.example/x/1.0.0/archive"), stub.archivePaths.toList())
+        val protos = projectDir.resolve("service/build/protoloom/protos")
+        assertEquals(
+            listOf("contracts/v1/a.proto", "x/v1/x.proto"),
+            protos.walk().filter { it.isFile }.map { it.relativeTo(protos).invariantSeparatorsPath }.sorted().toList(),
+        )
+        assertEquals(CONTRACTS_PROTO, protos.resolve("contracts/v1/a.proto").readText())
+    }
+
+    @Test
+    fun `two local modules publishing the same group and name fail naming both`() {
+        writeProjects(contractsDependencies = "")
+        projectDir.resolve("settings.gradle.kts").appendText("include(\":contracts2\")\n")
+        projectDir.resolve("contracts2/src/main/proto/other/v1").mkdirs()
+        projectDir.resolve("contracts2/src/main/proto/other/v1/b.proto").writeText("syntax = \"proto3\";\n")
+        projectDir.resolve("contracts2/build.gradle.kts").writeText(
+            projectDir.resolve("contracts/build.gradle.kts").readText(),
+        )
+        projectDir.resolve("service/build.gradle.kts").appendText(
+            "dependencies {\n    protoloom(project(\":contracts2\"))\n    protoloom(\"dev.example:x:1.0.0\")\n}\n",
+        )
+
+        val result = gradle(":service:fetchProtos").buildAndFail()
+
+        assertTrue(result.output.contains("Projects :contracts and :contracts2 both publish dev.example:contracts"), result.output)
+        assertEquals(0, stub.resolveBodies.size)
+    }
+
+    @Test
+    fun `the client drops a local module's artifact when the server ignores exclude`() {
+        stub.ignoreExclude = true
+        stub.coordinate = "dev.example:x:1.0.0"
+        stub.files = mapOf("x/v1/x.proto" to remoteContent)
+        stub.extraArtifacts = mapOf("dev.example:contracts:1.0.0" to mapOf("contracts/v1/a.proto" to "// remote copy\n"))
+        writeProjects(contractsDependencies = "")
+        projectDir.resolve("service/build.gradle.kts").appendText("dependencies {\n    protoloom(\"dev.example:x:1.0.0\")\n}\n")
+
+        val result = gradle(":service:fetchProtos", "--info").build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":service:fetchProtos")?.outcome)
+        assertEquals(listOf("/api/v1/repos/releases/artifacts/dev.example/x/1.0.0/archive"), stub.archivePaths.toList())
+        assertEquals(1, Regex("Using project :contracts instead of dev.example:contracts:1.0.0").findAll(result.output).count(), result.output)
+        val protos = projectDir.resolve("service/build/protoloom/protos")
+        assertEquals(CONTRACTS_PROTO, protos.resolve("contracts/v1/a.proto").readText())
+        assertEquals(remoteContent, protos.resolve("x/v1/x.proto").readText())
+    }
+
+    @Test
+    fun `a remote artifact with another name still collides with a local module`() {
+        stub.coordinate = "dev.example:x:1.0.0"
+        stub.files = mapOf("x/v1/x.proto" to remoteContent, "contracts/v1/a.proto" to "// x's copy\n")
+        stub.extraArtifacts = mapOf("dev.example:contracts:1.0.0" to mapOf("contracts/v1/a.proto" to "// remote copy\n"))
+        writeProjects(contractsDependencies = "")
+        projectDir.resolve("service/build.gradle.kts").appendText("dependencies {\n    protoloom(\"dev.example:x:1.0.0\")\n}\n")
+
+        val result = gradle(":service:fetchProtos").buildAndFail()
+
+        assertTrue(
+            result.output.contains("File contracts/v1/a.proto is provided by both project :contracts and dev.example:x:1.0.0"),
             result.output,
         )
     }

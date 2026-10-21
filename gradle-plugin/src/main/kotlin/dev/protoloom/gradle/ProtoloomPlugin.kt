@@ -28,11 +28,7 @@ class ProtoloomPlugin : Plugin<Project> {
         }
         val externalCoordinates = protoloom.map { configuration ->
             configuration.dependencies.withType(ExternalModuleDependency::class.java).map { dependency ->
-                val version = dependency.version?.takeIf { it.isNotBlank() }
-                    ?: throw GradleException("protoloom dependency ${dependency.group}:${dependency.name} needs a version.")
-                val group = dependency.group?.takeIf { it.isNotBlank() }
-                    ?: throw GradleException("protoloom dependency ${dependency.name}:$version needs a group (group:name:version).")
-                "$group:${dependency.name}:$version"
+                externalCoordinate(dependency.group, dependency.name, dependency.version)
             }
         }
 
@@ -58,6 +54,7 @@ class ProtoloomPlugin : Plugin<Project> {
             localSources.from(localModules.sources)
             localSourceProjects.set(localModules.sourceProjects)
             localManifests.from(localModules.manifests)
+            localManifestProjects.set(localModules.manifestProjects)
             cacheDir.set(File(project.gradle.gradleUserHomeDir, "caches/protoloom"))
             outputDir.set(project.layout.buildDirectory.dir("protoloom/protos"))
         }
@@ -100,4 +97,13 @@ class ProtoloomPlugin : Plugin<Project> {
         const val TASK_GROUP = "protoloom"
         internal const val PROTO_PATTERN = "**/*.proto"
     }
+}
+
+/** The `group:name:version` of an external `protoloom` dependency; group and version are required. */
+internal fun externalCoordinate(group: String?, name: String, version: String?): String {
+    val checkedVersion = version?.takeIf { it.isNotBlank() }
+        ?: throw GradleException("protoloom dependency $group:$name needs a version.")
+    val checkedGroup = group?.takeIf { it.isNotBlank() }
+        ?: throw GradleException("protoloom dependency $name:$checkedVersion needs a group (group:name:version).")
+    return "$checkedGroup:$name:$checkedVersion"
 }
