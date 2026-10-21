@@ -6,7 +6,8 @@ const monorepoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 // Secrets live only in the repo-root `.env`. Load it before anything reads the environment;
 // `src/env.ts` validates it when the server starts (instrumentation) and refuses to boot if invalid.
-loadEnvConfig(monorepoRoot, process.env.NODE_ENV !== "production");
+// forceReload: Next has already loaded (and cached) the env files of apps/web by the time this runs.
+loadEnvConfig(monorepoRoot, process.env.NODE_ENV !== "production", undefined, true);
 
 const config: NextConfig = {
   output: "standalone",
