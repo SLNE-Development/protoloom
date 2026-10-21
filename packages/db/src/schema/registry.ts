@@ -151,12 +151,17 @@ export const cleanupPolicy = pgTable("cleanup_policy", {
   createdAt: createdAt(),
 });
 
-export const apiKeyPermission = pgTable("api_key_permission", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  apiKeyId: text("api_key_id")
-    .notNull()
-    .references(() => apikey.id, { onDelete: "cascade" }),
-  repository: text("repository").notNull(),
-  groupPrefix: text("group_prefix"),
-  access: accessEnum("access").notNull(),
-});
+export const apiKeyPermission = pgTable(
+  "api_key_permission",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    apiKeyId: text("api_key_id")
+      .notNull()
+      .references(() => apikey.id, { onDelete: "cascade" }),
+    repository: text("repository").notNull(),
+    groupPrefix: text("group_prefix"),
+    access: accessEnum("access").notNull(),
+  },
+  // Every authenticated API request loads its key's permissions by key id.
+  (t) => [index("api_key_permission_api_key_id_idx").on(t.apiKeyId)],
+);

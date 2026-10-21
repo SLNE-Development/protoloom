@@ -29,6 +29,13 @@
       "when": 1792619568047,
       "tag": "0003_deleted_release",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792620048802,
+      "tag": "0004_api_key_permission_key_idx",
+      "breakpoints": true
     }
   ]
 }
