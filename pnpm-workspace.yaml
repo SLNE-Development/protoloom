@@ -5,6 +5,7 @@ allowBuilds:
   '@bufbuild/buf': true
   cpu-features: false
   esbuild: false
+  msgpackr-extract: false
   protobufjs: false
   ssh2: false
 minimumReleaseAgeExclude:

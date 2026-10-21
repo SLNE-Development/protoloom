@@ -15,6 +15,19 @@ services:
       timeout: 5s
       retries: 15
 
+  # Job queue for the background worker (BullMQ).
+  valkey:
+    image: valkey/valkey:9.1.2-alpine
+    ports:
+      - "127.0.0.1:${VALKEY_PORT:-6379}:6379"
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli ping | grep -q PONG"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
   # S3-compatible object storage for development (MinIO no longer publishes images).
   seaweedfs:
     image: chrislusf/seaweedfs:4.48
@@ -24,7 +37,8 @@ services:
     volumes:
       - seaweedfs-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9333/cluster/status"]
+      # Healthy once both the master and the filer answer, so the bucket init cannot race the filer.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9333/cluster/status && wget -q -O /dev/null http://127.0.0.1:8888/"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -37,6 +51,31 @@ services:
     entrypoint: ["/bin/sh", "-c", "echo 's3.bucket.create -name protoloom' | weed shell -master=seaweedfs:9333"]
     restart: "no"
 
+  # SeaweedFS admin panel: http://127.0.0.1:23646
+  seaweedfs-admin:
+    image: chrislusf/seaweedfs:4.48
+    command:
+      - admin
+      - -master=seaweedfs:9333
+      - -port=23646
+      - -dataDir=/data
+      - -adminUser=${SEAWEEDFS_ADMIN_USER:-admin}
+      - -adminPassword=${SEAWEEDFS_ADMIN_PASSWORD:-admin}
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:23646:23646"
+    volumes:
+      - seaweedfs-admin-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:23646/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
 volumes:
   postgres-data:
+  valkey-data:
   seaweedfs-data:
+  seaweedfs-admin-data:
