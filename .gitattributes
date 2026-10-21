@@ -1,0 +1,4 @@
+# Scripts executed inside Linux containers or by bash must keep LF line endings on Windows checkouts.
+*.sh text eol=lf
+docker/Dockerfile text eol=lf
+gradle-plugin/gradlew text eol=lf

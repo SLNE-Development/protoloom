@@ -1,0 +1,5 @@
+{
+  "repositories": ["releases"],
+  "dependencies": ["dev.smoke:sample:1.0.0"],
+  "outDir": "./protos"
+}
