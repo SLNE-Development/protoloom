@@ -5,6 +5,7 @@ import {
   clearInviteCookie,
   generateInviteToken,
   hashInviteToken,
+  inviteCookieValue,
   isSecureUrl,
   readInviteToken,
   serializeInviteCookie,
@@ -55,5 +56,14 @@ describe("invite cookie", () => {
     expect(readInviteToken(valid.replace("tok", "tak"), SECRET)).toBeNull();
     expect(readInviteToken(valid, "another-secret-another-secret-another")).toBeNull();
     expect(readInviteToken(valid, SECRET, new Date(Date.now() + 16 * 60_000))).toBeNull();
+  });
+});
+
+describe("inviteCookieValue", () => {
+  it("is the signed value that readInviteToken accepts, for setting the cookie through a cookie store", () => {
+    const now = new Date("2026-01-01T00:00:00Z");
+    const value = inviteCookieValue("tok", { secret: SECRET, now });
+    expect(cookieHeader(serializeInviteCookie("tok", { secret: SECRET, secure: false, now }))).toBe(`${INVITE_COOKIE}=${value}`);
+    expect(readInviteToken(`${INVITE_COOKIE}=${value}`, SECRET, now)).toBe("tok");
   });
 });
