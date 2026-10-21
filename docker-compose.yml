@@ -48,7 +48,17 @@ services:
     depends_on:
       seaweedfs:
         condition: service_healthy
-    entrypoint: ["/bin/sh", "-c", "echo 's3.bucket.create -name protoloom' | weed shell -master=seaweedfs:9333"]
+    # Idempotent: an existing bucket (persisted volume) counts as success.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        out=$$(echo 's3.bucket.create -name protoloom' | weed shell -master=seaweedfs:9333 2>&1)
+        echo "$$out"
+        case "$$out" in
+          *"created bucket"*|*"already exists"*) exit 0 ;;
+          *) exit 1 ;;
+        esac
     restart: "no"
 
   # SeaweedFS admin panel: http://127.0.0.1:23646
