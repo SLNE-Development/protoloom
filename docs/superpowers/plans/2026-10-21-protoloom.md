@@ -25,7 +25,9 @@
 - Name rules (*plan's call*): repository `^[a-z0-9][a-z0-9-]{0,62}$`; group `^[a-z0-9_]+(\.[a-z0-9_-]+)*$`; name `^[a-z0-9][a-z0-9._-]{0,99}$`; version `^\d+(\.\d+){0,3}(-[0-9A-Za-z.-]+)?$`, max 64 chars.
 - REST error body: `{ "error": { "code": string, "message": string, "details"?: unknown } }`. Codes and statuses: `invalid_request` 400, `unauthorized` 401, `forbidden` 403, `not_found` 404, `immutable` 409, `has_dependents` 409, `payload_too_large` 413, `validation_failed` 422.
 - **UI:** every clickable element (buttons, links, menu items, tabs, checkboxes, switches, selects, table rows with actions) shows `cursor: pointer`. Apply it once in `packages/ui` (base layer and component classes), not per page.
-- **UI:** do **not** use the default shadcn neutral/"paper" theme. The color scheme and design direction come from the user's choice (Task 2b is blocked on it).
+- **UI:** do **not** use the default shadcn neutral/"paper" theme. The user chose scheme **A · Ink**, and the controller ruled direction **1 · Console** (see Task 2b). Theme switching uses **next-themes** (light / dark / system).
+- **UI:** English only. No i18n framework.
+- **UI:** a **Ctrl+K / Cmd+K command dialog** is available on every app page (see Task 15).
 - Every UI screen uses components from `@protoloom/ui`; no ad-hoc re-styled HTML controls where a ui component exists.
 - Pin exact dependency versions at install time (no `^` in `package.json`), and use the latest stable versions available at install time.
 - Commits: Conventional Commits in English, ending with the `Co-Authored-By` trailer from the session.
@@ -109,14 +111,40 @@ scripts/e2e-smoke.sh
 - [ ] **Step 5:** Run `pnpm --filter @protoloom/ui typecheck test`. Expected: pass.
 - [ ] **Step 6:** Commit with `feat(ui): add shadcn component package with pointer cursors`.
 
-### Task 2b: Design system theme (**BLOCKED until the user picks a color scheme and direction**)
+### Task 2b: Design system theme: scheme **A · Ink**, direction **1 · Console**
+
+The user chose scheme A · Ink and asked for next-themes. The direction wasn't named; the controller ruled Console because it fits the Ctrl+K command palette and the developer audience.
 
 **Files:**
 - Modify: `packages/ui/src/styles/globals.css` (tokens for `:root` and `.dark`, radius, fonts), plus component class tweaks the direction requires.
+- Create: `packages/ui/src/components/theme-provider.tsx` (wraps `next-themes` `ThemeProvider` with `attribute="class"`, `defaultTheme="system"`, `enableSystem`, `disableTransitionOnChange`) and `packages/ui/src/components/theme-toggle.tsx` (Light / Dark / System dropdown).
 
-- [ ] **Step 1:** Implement the chosen scheme as shadcn CSS variables (`--background`, `--foreground`, `--primary`, `--muted`, `--accent`, `--destructive`, `--border`, `--ring`, `--chart-1..5`, `--sidebar-*`) for light and dark. Set the fonts and radius the direction calls for. No neutral/stone/zinc "paper" defaults.
-- [ ] **Step 2:** Add a `packages/ui/src/theme.test.ts` asserting that `globals.css` defines `--primary` in both `:root` and `.dark`, and does not equal the shadcn neutral default `oklch(0.205 0 0)`.
-- [ ] **Step 3:** Run `pnpm --filter @protoloom/ui test`. Expected: pass. Commit with `feat(ui): add protoloom design system theme`.
+**Ink tokens** (hex; convert to oklch or keep hex in the CSS variables):
+
+| Token | Light | Dark |
+|---|---|---|
+| `--background` | `#ffffff` | `#0a0a0a` |
+| `--card` / `--popover` | `#ffffff` | `#111111` |
+| surface / `--muted` | `#fafafa` | `#111111` (muted surface `#1a1a1a`) |
+| `--foreground` | `#0a0a0a` | `#ededed` |
+| `--muted-foreground` | `#6b6b6b` | `#8f8f8f` |
+| `--border` / `--input` | `#e6e6e6` | `#262626` |
+| `--primary` / `--primary-foreground` | `#0a0a0a` / `#ffffff` | `#fafafa` / `#0a0a0a` |
+| `--secondary`, `--accent` | `#f2f2f2` | `#1a1a1a` |
+| `--ring` | `#0a0a0a` | `#fafafa` |
+| `--link` (new) | `#1f5eff` | `#7aa2ff` |
+| `--release` / `--release-soft` (new) | `#15803d` / `#e6f4ea` | `#4ade80` / `#0f2417` |
+| `--snapshot` / `--snapshot-soft` (new) | `#b45309` / `#fdf1e3` | `#f59e0b` / `#2a1f0d` |
+| `--destructive` | `#dc2626` | `#f87171` |
+| `--sidebar` / `--sidebar-foreground` | `#0a0a0a` / `#e5e5e5` | `#000000` / `#ededed` |
+| `--sidebar-accent` | `rgb(229 229 229 / 12%)` | `rgb(237 237 237 / 12%)` |
+| `--chart-1..5` | `#0a0a0a`, `#1f5eff`, `#15803d`, `#b45309`, `#6b6b6b` | `#ededed`, `#7aa2ff`, `#4ade80`, `#f59e0b`, `#8f8f8f` |
+
+**Console direction:** Geist (UI) and Geist Mono (coordinates, versions, code) via `next/font` or `@fontsource`. Radius `0.375rem` (6px), hairline borders, compact table rows, a dark sidebar in both modes. Expose Tailwind utilities for the new tokens (`text-link`, `bg-release-soft`, `text-snapshot`, and so on) through `@theme inline`.
+
+- [ ] **Step 1:** Implement the tokens for `:root` and `.dark`, the fonts, the radius, the Tailwind theme mappings, `ThemeProvider` and `ThemeToggle`.
+- [ ] **Step 2:** Add a `packages/ui/src/theme.test.ts` asserting that `globals.css` defines `--link`, `--release` and `--snapshot` in both `:root` and `.dark`, that the light `--background` is white (`#ffffff` or `oklch(1 0 0)`), and that `--radius` is `0.375rem`.
+- [ ] **Step 3:** Run `pnpm --filter @protoloom/ui test typecheck`. Expected: pass. Commit with `feat(ui): add ink design system theme`.
 
 ### Task 3: Coordinates and versions
 
@@ -437,7 +465,7 @@ scripts/e2e-smoke.sh
     - `maintainerProcedure`: role maintainer or admin.
     - `adminProcedure`: role admin.
   - Routers:
-    - `browse`: `repositories()`, `artifacts({repository, search?})`, `versions({repository, group, name})`, `version({repository, coordinate})` (returns `VersionInfo` plus `dependents`), `file({repository, coordinate, path})`
+    - `browse`: `repositories()`, `search({ query, limit≤20 })` (case-insensitive match on group, name or `group:name` across all repositories the caller can browse; returns `{ repository, group, name, latestVersion }[]`, used by the command dialog), `artifacts({repository, search?})`, `versions({repository, group, name})`, `version({repository, coordinate})` (returns `VersionInfo` plus `dependents`), `file({repository, coordinate, path})`
     - `repositories` (admin): `list`, `get`, `create`, `update`, `delete`. Delete is allowed only when the repository has no artifacts, otherwise `PRECONDITION_FAILED`.
     - `policies` (admin): `list({repository})`, `upsert`, `delete`, `preview({repository})` (returns `planCleanup`), `runNow({repository})` (returns `applyCleanup`)
     - `keys` (authed): `list` (own keys; admins can pass `all: true`), `create({ name, expiresInDays?: number, permissions: KeyPermission[] })` (returns `{ id, key }`; this is the only time the secret is returned), `revoke({ id })` (own keys, or any key for admins). `create` rejects `write` entries for a viewer with `FORBIDDEN`, and rejects unknown repository names.
@@ -463,7 +491,7 @@ scripts/e2e-smoke.sh
 **Depends on:** Tasks 2a and 14. It can start before 2b is finished, because it only uses tokens and never hard-coded colors.
 
 **Files:**
-- Create: `apps/web/src/app/layout.tsx` (imports `@protoloom/ui/globals.css`, theme provider with light/dark/system), `src/app/login/page.tsx`, `src/app/(app)/layout.tsx` (sidebar shell using `@protoloom/ui` `Sidebar`, `Logo`, user menu; nav items filtered by role; anonymous visitors see Browse only plus a "Sign in" button), `src/app/(app)/page.tsx` (dashboard), `src/app/(app)/browse/[repo]/page.tsx`, `src/app/(app)/browse/[repo]/[group]/[name]/page.tsx`, `src/app/(app)/browse/[repo]/[group]/[name]/[version]/page.tsx`, `src/components/proto-viewer.tsx` (shiki `proto` grammar, themes that follow light/dark), `src/components/usage-snippet.tsx`, `src/middleware.ts` (cookie presence check only)
+- Create: `apps/web/src/app/layout.tsx` (imports `@protoloom/ui/globals.css`, wraps everything in `ThemeProvider` from `@protoloom/ui` (next-themes, light/dark/system), with `suppressHydrationWarning` on `<html>`), `src/components/command-menu.tsx`, `src/app/login/page.tsx`, `src/app/(app)/layout.tsx` (sidebar shell using `@protoloom/ui` `Sidebar`, `Logo`, user menu; nav items filtered by role; anonymous visitors see Browse only plus a "Sign in" button), `src/app/(app)/page.tsx` (dashboard), `src/app/(app)/browse/[repo]/page.tsx`, `src/app/(app)/browse/[repo]/[group]/[name]/page.tsx`, `src/app/(app)/browse/[repo]/[group]/[name]/[version]/page.tsx`, `src/components/proto-viewer.tsx` (shiki `proto` grammar, themes that follow light/dark), `src/components/usage-snippet.tsx`, `src/middleware.ts` (cookie presence check only)
 
 **Interfaces:**
 - Consumes: the tRPC routers from Task 14.
@@ -477,12 +505,20 @@ scripts/e2e-smoke.sh
   - **Usage:** a Gradle `protoloom("g:n:v")` snippet and a `protoloom.json` snippet.
   - A **delete** button for maintainers, which opens a dialog. On `has_dependents` the dialog lists the dependents, and admins get "Delete anyway", which requires typing the coordinate.
 
+- **Command dialog** (`command-menu.tsx`, mounted in `(app)/layout.tsx`): `Ctrl+K` / `Cmd+K` toggles it (shadcn `CommandDialog`), and so does a "Search… Ctrl K" button in the sidebar header. It has these groups:
+  - **Artifacts:** live results from `browse.search` (debounced 150 ms, shown once at least 2 characters are typed). Enter opens the artifact page.
+  - **Go to:** Dashboard, Browse, Repositories, API keys, Users, Settings, Audit log. Filtered by role; anonymous visitors see only Dashboard and Browse.
+  - **Actions:** "Create API key" (opens `/keys?create=1`, which opens the dialog), "Create repository" (admin), "Copy coordinate" (only on a version page, copies `g:n:v`), "Copy Gradle snippet" (version page), and "Theme: Light / Dark / System".
+  - **Account:** "Sign out", or "Sign in" when anonymous.
+
+  The dialog is the same on every page. Page-specific actions come from a small React context (`useCommandActions(actions)`) that a page registers on mount.
 - [ ] **Step 1: Write a failing Playwright test** in `e2e/browse.spec.ts`. It starts the app with a seeded db through Playwright `webServer` and a `globalSetup` that uses `startTestDb`, seeds the admin and publishes a fixture artifact through `registry.publish`. The test:
   - visits `/` anonymously and expects a redirect to `/login`
   - logs in as admin and opens the version page
   - expects the file tree to contain `money.proto` and the viewer to show `message Money`
   - expects the Usage tab to contain `protoloom("dev.example:demo:1.0.0")`
   - expects `getComputedStyle(button).cursor === "pointer"` for the first sidebar link and the delete button
+  - presses `Control+K`, types `demo`, expects an option `dev.example:demo` and presses Enter, which lands on the artifact page. Presses `Control+K` again, picks "Theme: Dark", and expects `<html>` to have class `dark`.
 - [ ] **Step 2:** Run `pnpm --filter web e2e browse`. Expected: FAIL.
 - [ ] **Step 3:** Implement.
 - [ ] **Step 4:** Run the e2e test. Expected: PASS. Commit with `feat(web): add app shell, login and artifact browser`.
