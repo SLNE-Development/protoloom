@@ -23,6 +23,13 @@ const config: NextConfig = {
       "../../node_modules/.pnpm/@bufbuild+buf*/node_modules/@bufbuild/*/package.json",
       "../../node_modules/.pnpm/@bufbuild+buf*/node_modules/@bufbuild/*/bin/**/*",
     ],
+    // The docs read their Markdown at request time, and their share cards read WOFF fonts.
+    "/docs/**/*": ["./content/docs/**/*"],
+    "/og/docs/**/*": [
+      "./content/docs/**/*",
+      "./node_modules/@fontsource/geist/files/geist-latin-*-normal.woff",
+      "./node_modules/@fontsource/geist-mono/files/geist-mono-latin-*-normal.woff",
+    ],
   },
 };
 
