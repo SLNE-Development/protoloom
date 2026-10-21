@@ -2,6 +2,7 @@ packages:
   - "apps/*"
   - "packages/*"
 allowBuilds:
+  '@bufbuild/buf': true
   cpu-features: false
   esbuild: false
   protobufjs: false
