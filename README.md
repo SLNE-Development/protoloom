@@ -119,7 +119,7 @@ dependencies {
 }
 ```
 
-- `./gradlew publishProtos` uploads the bundle. Releases are immutable unless the repository allows redeploys; `-SNAPSHOT` versions always create a new build.
+- `./gradlew publishProtos` uploads the bundle. Releases are immutable unless the repository allows redeploys; `-SNAPSHOT` versions always create a new build. A deleted release stays reserved: without redeploy it can only be published again with identical content (same sha256).
 - `./gradlew fetchProtos` resolves the declared dependencies (transitively) into `build/protoloom/protos/`; read it through `protoloom.protosDir`.
 
 ## CLI

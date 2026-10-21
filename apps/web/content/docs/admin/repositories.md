@@ -44,7 +44,7 @@ Writing always needs a key with `write` access, also for public repositories.
 
 ### Allow redeploy
 
-Off by default. When off, a release version can be published once and never replaced (`409 immutable`). When on, publishing an existing release replaces it, unless other versions depend on it. See [Versions and snapshots](/docs/versions#redeploy).
+Off by default. When off, a release version can be published once and never replaced (`409 immutable`). That also holds after the release is deleted: it can be published again only with identical content (same sha256). When on, publishing an existing release replaces it, unless other versions depend on it, and a deleted release can be published again with any content. See [Versions and snapshots](/docs/versions#redeploy).
 
 Turn it on only for repositories where builds don't need to be reproducible, such as a playground. Snapshots can always be published again, whatever this setting says.
 

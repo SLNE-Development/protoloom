@@ -118,6 +118,26 @@ export const dependency = pgTable(
   ],
 );
 
+/**
+ * Tombstone of a deleted release version: its coordinate and the sha256 of the deleted archive.
+ * While a repository disallows redeploy, the release may only be published again with identical
+ * content; the tombstone is removed when it is.
+ */
+export const deletedRelease = pgTable(
+  "deleted_release",
+  {
+    repositoryId: uuid("repository_id")
+      .notNull()
+      .references(() => repository.id, { onDelete: "cascade" }),
+    group: text("group").notNull(),
+    name: text("name").notNull(),
+    version: text("version").notNull(),
+    sha256: text("sha256").notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.repositoryId, t.group, t.name, t.version] })],
+);
+
 export const cleanupPolicy = pgTable("cleanup_policy", {
   id: uuid("id").primaryKey().defaultRandom(),
   repositoryId: uuid("repository_id")

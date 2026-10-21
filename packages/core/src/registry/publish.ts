@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { eq, inArray, max, sql } from "drizzle-orm";
+import { and, eq, inArray, max, sql } from "drizzle-orm";
 import { z } from "zod";
-import { artifact, build, buildFile, dependency, version } from "@protoloom/db";
+import { artifact, build, buildFile, deletedRelease, dependency, version } from "@protoloom/db";
 import { recordAudit } from "../audit.js";
 import { extractArchive, sha256 } from "../archive.js";
 import {
@@ -94,9 +94,21 @@ function parseManifest(input: unknown): Manifest {
   return parsed.data;
 }
 
+/** Matches the tombstone of a deleted release `c` in the repository `repositoryId`. */
+function tombstoneOf(repositoryId: string, c: Coordinate) {
+  return and(
+    eq(deletedRelease.repositoryId, repositoryId),
+    eq(deletedRelease.group, c.group),
+    eq(deletedRelease.name, c.name),
+    eq(deletedRelease.version, c.version),
+  );
+}
+
 /**
- * Checks publishing over an existing release: rejects it as `immutable` unless the repository
- * allows redeploy, and applies the dependents rule. Returns the build being replaced (null for
+ * Checks publishing a release over an existing or a deleted one. Over an existing release it
+ * rejects as `immutable` unless the repository allows redeploy, and applies the dependents rule.
+ * Over a deleted release (a tombstone) in a repository without redeploy, only content identical
+ * to the deleted archive (`digest`) is accepted. Returns the build being replaced (null for
  * snapshots and new releases) and whether the replacement is forced.
  */
 async function checkExistingRelease(
@@ -104,12 +116,27 @@ async function checkExistingRelease(
   p: Principal,
   repo: RepositoryRow,
   c: Coordinate,
+  digest: string,
   force: boolean | undefined,
 ): Promise<{ existing: BuildRow | null; forced: boolean; dependents: Dependent[] }> {
   const none = { existing: null, forced: false, dependents: [] };
   if (isSnapshot(c.version)) return none;
   const existing = await findLatestBuild(db, repo.id, c);
-  if (!existing) return none;
+  if (!existing) {
+    if (!repo.allowRedeploy) {
+      const [tombstone] = await db
+        .select({ sha256: deletedRelease.sha256 })
+        .from(deletedRelease)
+        .where(tombstoneOf(repo.id, c));
+      if (tombstone && tombstone.sha256 !== digest) {
+        throw new RegistryError(
+          "immutable",
+          `Release ${formatCoordinate(c)} was deleted; re-publishing is only allowed with identical content (or enable redeploy)`,
+        );
+      }
+    }
+    return none;
+  }
   if (!repo.allowRedeploy) {
     throw new RegistryError("immutable", `${formatCoordinate(c)} already exists in ${repo.name} and releases are immutable`);
   }
@@ -176,7 +203,8 @@ export async function publish(ctx: RegistryContext, p: Principal, input: Publish
 
   const files = await extractArchive(input.archive);
   if (files.length === 0) throw new RegistryError("invalid_request", "The archive contains no .proto files");
-  await checkExistingRelease(ctx.db, p, repo, c, input.force);
+  const digest = sha256(input.archive);
+  await checkExistingRelease(ctx.db, p, repo, c, digest, input.force);
 
   const declared = manifest.dependencies.map(parseCoordinate);
   const { resolution, buildIds } = await resolveDependencies(ctx, p, repo, c, declared);
@@ -196,7 +224,6 @@ export async function publish(ctx: RegistryContext, p: Principal, input: Publish
   const issues = await ctx.validate({ files, dependencyFiles: [...depFiles.values()].flat() });
   if (issues.length > 0) throw validationFailed("Proto validation failed", { issues });
 
-  const digest = sha256(input.archive);
   const storageKey = `${repo.name}/${c.group}/${c.name}/${c.version}/${randomUUID()}.tar.gz`;
   await ctx.blobs.put(storageKey, input.archive);
 
@@ -215,7 +242,9 @@ export async function publish(ctx: RegistryContext, p: Principal, input: Publish
           throw validationFailed("A dependency was removed or replaced during publishing; retry");
         }
       }
-      const { existing, forced, dependents } = await checkExistingRelease(tx, p, repo, c, input.force);
+      const { existing, forced, dependents } = await checkExistingRelease(tx, p, repo, c, digest, input.force);
+      // The release exists again; deleting it later records a fresh tombstone.
+      if (!snapshot) await tx.delete(deletedRelease).where(tombstoneOf(repo.id, c));
 
       const [art] = await tx
         .insert(artifact)
