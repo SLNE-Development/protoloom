@@ -70,10 +70,12 @@ COPY --from=builder --chown=node:node /out/app/ /app/
 COPY --from=builder --chown=node:node /out/migrate/ /app/migrate/
 RUN mkdir -p /data/storage && chown -R node:node /data
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=0755 docker/healthcheck.sh /usr/local/bin/healthcheck.sh
 USER node
 EXPOSE 3000
 VOLUME ["/data/storage"]
+# Command-aware: HTTP /api/health for `web`, process liveness for `worker`.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+  CMD ["/usr/local/bin/healthcheck.sh"]
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["web"]

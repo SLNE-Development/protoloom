@@ -173,7 +173,7 @@ Set `PROTOLOOM_IMAGE` to pin a version (e.g. `ghcr.io/slne-development/protoloom
 Put a TLS-terminating reverse proxy in front of port 3000 and set `BETTER_AUTH_URL` to its https URL.
 Storage defaults to the `storage-data` volume; for S3 set `STORAGE_DRIVER=s3` and the `S3_*` variables.
 
-The image runs as a non-root user, exposes port 3000 and has a healthcheck on `/api/health`.
+The image runs as a non-root user, exposes port 3000 and has a command-aware healthcheck (`docker/healthcheck.sh`): `/api/health` for the web app, process liveness for the worker.
 Commands: `web` (default, migrates first) and `worker`. Set `RUN_MIGRATIONS=true|false` to override the migration default.
 
 ## Deploy on Coolify
