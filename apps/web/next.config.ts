@@ -12,9 +12,8 @@ const config: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: monorepoRoot,
   transpilePackages: ["@protoloom/ui"],
-  // Server-only workspace packages run as plain Node modules: @protoloom/db locates its SQL
-  // migrations and @protoloom/core its buf binary on disk relative to their own files.
-  serverExternalPackages: ["pg", "@protoloom/db", "@protoloom/core"],
+  serverExternalPackages: ["pg"],
+  // Workspace packages are bundled; @protoloom/db reads its SQL migrations from disk at runtime.
   outputFileTracingIncludes: { "/*": ["../../packages/db/drizzle/**/*"] },
 };
 
