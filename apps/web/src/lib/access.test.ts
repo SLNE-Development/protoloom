@@ -98,6 +98,12 @@ describe("safeNextPath", () => {
       "//evil",
       "/\\evil",
       "\t//evil",
+      "/.//evil",
+      "/..//evil",
+      "/%2e%2e//evil",
+      "/%2E%2E/%2F/evil",
+      "/a/../..//evil",
+      "/%2F%2Fevil",
     ]) {
       expect(safeNextPath(value), JSON.stringify(value)).toBe("/dashboard");
     }

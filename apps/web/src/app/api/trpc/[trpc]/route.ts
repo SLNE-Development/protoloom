@@ -11,10 +11,8 @@ function handler(req: Request): Promise<Response> {
     endpoint: "/api/trpc",
     req,
     router: appRouter,
+    // Unexpected failures are logged by the error formatter in server/trpc/init.ts.
     createContext: () => createTrpcContext({ headers: req.headers }),
-    onError({ error, path }) {
-      if (error.code === "INTERNAL_SERVER_ERROR") console.error(`protoloom: tRPC ${path ?? "?"} failed`, error.cause ?? error);
-    },
   });
 }
 

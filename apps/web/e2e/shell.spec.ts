@@ -67,7 +67,13 @@ test.describe("signed-in users", () => {
 
   test("the login page never redirects a signed-in user off-site", async ({ page }) => {
     await loginAs(page, USERS.viewer.id);
-    for (const next of ["%2F%09%2Fevil.example", "%2F%5C%2Fevil.example", "%2F%2Fevil.example"]) {
+    for (const next of [
+      "%2F%09%2Fevil.example",
+      "%2F%5C%2Fevil.example",
+      "%2F%2Fevil.example",
+      "%2F.%2F%2Fevil.example",
+      "%2F%252e%252e%2F%2Fevil.example",
+    ]) {
       await page.goto(`/login?next=${next}`);
       await expect(page).toHaveURL("/dashboard");
     }

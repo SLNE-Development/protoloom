@@ -1,22 +1,71 @@
-import Link from "next/link";
+import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { Logo } from "@protoloom/ui/components/logo";
-import { DASHBOARD_PATH } from "@/lib/access";
-import { getAppSession } from "@/server/session";
+import { BrowsePreview } from "@/components/landing/browse-preview";
+import { Clients } from "@/components/landing/clients";
+import { loadLandingData } from "@/server/landing-data";
+import { Features } from "@/components/landing/features";
+import { Footer } from "@/components/landing/footer";
+import { Hero } from "@/components/landing/hero";
+import { HowItWorks } from "@/components/landing/how-it-works";
+import { InviteCta } from "@/components/landing/invite-cta";
+import { SelfHosting } from "@/components/landing/self-hosting";
+import { TopBar } from "@/components/landing/top-bar";
+import { instanceHost, pageMetadata, SITE_DESCRIPTION, SITE_NAME, siteUrl } from "@/lib/seo";
+import { getEnabledSocialProviders } from "@/server/auth";
 
-/**
- * Public landing page (placeholder; the final content follows separately). Signed-in users go
- * straight to the dashboard; anonymous visitors always see this page.
- */
+// Session, settings and the instance URL are read per request.
+export const dynamic = "force-dynamic";
+
+export function generateMetadata(): Metadata {
+  return pageMetadata({
+    title: "Protoloom · Versioned .proto contracts for every build",
+    absoluteTitle: true,
+    description: SITE_DESCRIPTION,
+    path: "/",
+  });
+}
+
+/** schema.org description of the product for search engines. */
+function JsonLd({ url }: { url: string }) {
+  const data = {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    name: SITE_NAME,
+    url,
+    description: SITE_DESCRIPTION,
+    applicationCategory: "DeveloperApplication",
+    operatingSystem: "Linux (Docker)",
+    offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+  };
+  // Escape "<" so the JSON can never close the script element.
+  const json = JSON.stringify(data).replace(/</g, "\\u003c");
+  return <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: json }} />;
+}
+
+/** The public landing page. Signed-in users go straight to their dashboard. */
 export default async function LandingPage() {
-  const { user } = await getAppSession();
-  if (user) redirect(DASHBOARD_PATH);
+  const data = await loadLandingData(await headers());
+  if (data.signedIn) redirect("/dashboard");
+
+  const providers = getEnabledSocialProviders();
+  const host = instanceHost();
+  const origin = new URL(siteUrl()).origin;
+
   return (
-    <main data-testid="landing" className="flex min-h-svh flex-col items-center justify-center gap-6 px-4">
-      <Logo variant="full" />
-      <Link href="/login" className="text-sm text-link underline-offset-4 hover:underline">
-        Sign in
-      </Link>
-    </main>
+    <>
+      <JsonLd url={siteUrl()} />
+      <TopBar showBrowse={data.anonymousView} />
+      <main>
+        <Hero host={host} stats={data.stats} providers={providers} showBrowse={data.anonymousView} />
+        <HowItWorks />
+        <BrowsePreview />
+        <Clients origin={origin} />
+        <Features />
+        <SelfHosting origin={origin} />
+        <InviteCta providers={providers} />
+      </main>
+      <Footer host={host} />
+    </>
   );
 }

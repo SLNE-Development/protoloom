@@ -32,7 +32,11 @@ export const dashboardRouter = router({
     const ids = [...byId.keys()];
 
     const [artifactRows, versionRows, recent] = await Promise.all([
-      ctx.db.select({ repositoryId: artifact.repositoryId, group: artifact.group }).from(artifact).where(inArray(artifact.repositoryId, ids)),
+      ctx.db
+        .select({ repositoryId: artifact.repositoryId, group: artifact.group, artifacts: count() })
+        .from(artifact)
+        .where(inArray(artifact.repositoryId, ids))
+        .groupBy(artifact.repositoryId, artifact.group),
       ctx.db
         .select({ repositoryId: artifact.repositoryId, group: artifact.group, versions: count(version.id) })
         .from(version)
@@ -63,7 +67,7 @@ export const dashboardRouter = router({
     const readable = (row: { repositoryId: string; group: string }) => canReadGroup(ctx.principal, byId.get(row.repositoryId)!, row.group);
     return {
       repositories: repos.length,
-      artifacts: artifactRows.filter(readable).length,
+      artifacts: artifactRows.filter(readable).reduce((sum, row) => sum + row.artifacts, 0),
       versions: versionRows.filter(readable).reduce((sum, row) => sum + row.versions, 0),
       recentPublishes: recent
         .filter(readable)

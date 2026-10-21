@@ -112,17 +112,37 @@ export function createQueue(connection: ConnectionOptions, options: QueueOptions
   return queue;
 }
 
+/** Length of the window in which manual runs of one repository share a job id. */
+export const MANUAL_RUN_WINDOW_MS = 60_000;
+
+/**
+ * The deterministic id of a manual cleanup of `repository` started at `now`:
+ * `cleanup-repo-<repository>-<minute bucket>` (BullMQ forbids `:` in custom ids).
+ */
+export function manualCleanupJobId(repository: string, now: Date = new Date()): string {
+  return `cleanup-repo-${repository}-${Math.floor(now.getTime() / MANUAL_RUN_WINDOW_MS)}`;
+}
+
 /**
  * Enqueues a cleanup of one repository and returns the job id. Throws
  * {@link QueueUnavailableError} when Valkey can't be reached within the timeout.
+ *
+ * The job id is {@link manualCleanupJobId}: BullMQ ignores an add whose id already exists (while
+ * the job is queued, running, or kept after finishing), so every run requested for the same
+ * repository within the same minute, including a retry after an add that timed out but was
+ * delivered, maps to one job and the cleanup runs once. Such a request returns the existing job's id.
  */
 export async function enqueueCleanup(
   queue: CleanupQueue,
   repository: string,
-  options: ProducerOptions = {},
+  options: ProducerOptions & { now?: Date } = {},
 ): Promise<string> {
   const job = await withinTimeout(
-    queue.add("cleanup:repo", { kind: "cleanup:repo", repository }),
+    queue.add(
+      "cleanup:repo",
+      { kind: "cleanup:repo", repository },
+      { jobId: manualCleanupJobId(repository, options.now) },
+    ),
     options.timeoutMs ?? PRODUCER_TIMEOUT_MS,
   );
   if (!job.id) throw new Error("BullMQ returned a job without an id");

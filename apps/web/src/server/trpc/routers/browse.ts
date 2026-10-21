@@ -42,21 +42,32 @@ function newest(versions: string[]): string | null {
   return versions.reduce<string | null>((best, v) => (best === null || compareVersions(v, best) > 0 ? v : best), null);
 }
 
-/** Artifact and version counts per repository id. */
-async function countsByRepository(db: Db, repositoryIds: string[]) {
+/**
+ * Artifact and version counts per repository id, counting only the groups the principal may read
+ * (API keys can be limited to group prefixes).
+ */
+async function countsByRepository(db: Db, p: Principal, repos: RepositoryRow[]) {
   const out = new Map<string, { artifactCount: number; versionCount: number }>();
-  if (repositoryIds.length === 0) return out;
+  if (repos.length === 0) return out;
+  const byId = new Map(repos.map((r) => [r.id, r]));
   const rows = await db
     .select({
       repositoryId: artifact.repositoryId,
+      group: artifact.group,
       artifactCount: countDistinct(artifact.id),
       versionCount: count(version.id),
     })
     .from(artifact)
     .leftJoin(version, eq(version.artifactId, artifact.id))
-    .where(inArray(artifact.repositoryId, repositoryIds))
-    .groupBy(artifact.repositoryId);
-  for (const row of rows) out.set(row.repositoryId, { artifactCount: row.artifactCount, versionCount: row.versionCount });
+    .where(inArray(artifact.repositoryId, [...byId.keys()]))
+    .groupBy(artifact.repositoryId, artifact.group);
+  for (const row of rows) {
+    if (!canReadGroup(p, byId.get(row.repositoryId)!, row.group)) continue;
+    const sum = out.get(row.repositoryId) ?? { artifactCount: 0, versionCount: 0 };
+    sum.artifactCount += row.artifactCount;
+    sum.versionCount += row.versionCount;
+    out.set(row.repositoryId, sum);
+  }
   return out;
 }
 
@@ -120,10 +131,7 @@ export const browseRouter = router({
   /** Repositories the caller may browse, by name, with artifact and version counts. */
   repositories: browseProcedure.query(async ({ ctx }) => {
     const repos = await browsableRepositories(ctx.db, ctx.principal);
-    const counts = await countsByRepository(
-      ctx.db,
-      repos.map((r) => r.id),
-    );
+    const counts = await countsByRepository(ctx.db, ctx.principal, repos);
     return repos.map((repo) => ({
       name: repo.name,
       description: repo.description,

@@ -52,6 +52,13 @@ function assertNotLastAdmin(target: UserRow, activeAdmins: string[], what: strin
   }
 }
 
+/** Refuses an admin's attempt to ban or remove their own account. */
+function assertNotSelf(principal: UserPrincipal, targetId: string, what: "ban" | "remove"): void {
+  if (principal.userId === targetId) {
+    throw new TRPCError({ code: "FORBIDDEN", message: `You can't ${what} your own account` });
+  }
+}
+
 /** Runs a user change in a transaction with its audit entry. */
 async function changeUser(
   ctx: { db: Db; principal: UserPrincipal },
@@ -67,7 +74,10 @@ async function changeUser(
   return { userId: id };
 }
 
-/** User administration (admin). Every change is audited; the last admin can't be demoted, banned or removed. */
+/**
+ * User administration (admin). Every change is audited; the last admin can't be demoted, banned or
+ * removed, and admins can't ban or remove their own account.
+ */
 export const usersRouter = router({
   list: adminProcedure.query(async ({ ctx }): Promise<UserSummary[]> => {
     const rows = await ctx.db.select().from(user).orderBy(asc(user.name), asc(user.id));
@@ -113,15 +123,16 @@ export const usersRouter = router({
   /** Bans a user (optionally until `expiresInDays`) and ends their sessions; their API keys stop working. */
   ban: adminProcedure
     .input(userId.extend({ reason: z.string().trim().max(200).optional(), expiresInDays: z.number().int().min(1).max(3650).optional() }))
-    .mutation(({ ctx, input }) =>
-      changeUser(ctx, input.userId, "user.ban", async (tx, { target, activeAdmins }) => {
+    .mutation(({ ctx, input }) => {
+      assertNotSelf(ctx.principal, input.userId, "ban");
+      return changeUser(ctx, input.userId, "user.ban", async (tx, { target, activeAdmins }) => {
         assertNotLastAdmin(target, activeAdmins, "banned");
         const banExpires = input.expiresInDays ? new Date(Date.now() + input.expiresInDays * DAY_MS) : null;
         await tx.update(user).set({ banned: true, banReason: input.reason || null, banExpires }).where(eq(user.id, target.id));
         await tx.delete(session).where(eq(session.userId, target.id));
         return { reason: input.reason ?? null, banExpires: banExpires?.toISOString() ?? null };
-      }),
-    ),
+      });
+    }),
 
   unban: adminProcedure.input(userId).mutation(({ ctx, input }) =>
     changeUser(ctx, input.userId, "user.unban", async (tx, { target }) => {
@@ -130,13 +141,14 @@ export const usersRouter = router({
   ),
 
   /** Deletes a user with their sessions, connected accounts and API keys. */
-  remove: adminProcedure.input(userId).mutation(({ ctx, input }) =>
-    changeUser(ctx, input.userId, "user.remove", async (tx, { target, activeAdmins }) => {
+  remove: adminProcedure.input(userId).mutation(({ ctx, input }) => {
+    assertNotSelf(ctx.principal, input.userId, "remove");
+    return changeUser(ctx, input.userId, "user.remove", async (tx, { target, activeAdmins }) => {
       assertNotLastAdmin(target, activeAdmins, "removed");
       // API keys reference their owner without a foreign key, so they are removed explicitly.
       await tx.delete(apikey).where(eq(apikey.referenceId, target.id));
       await tx.delete(user).where(eq(user.id, target.id));
       return { name: target.name, email: target.email };
-    }),
-  ),
+    });
+  }),
 });

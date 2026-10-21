@@ -1,4 +1,5 @@
 import type { Role } from "@protoloom/core";
+import { env } from "../env";
 
 /** Where a signed-in user lands by default. */
 export const DASHBOARD_PATH = "/dashboard";
@@ -49,9 +50,10 @@ export function decideRoleAccess(input: { path: string; role: Role | null; requi
 /**
  * The local path a `next` parameter may send the browser to after sign-in. Anything that is not a
  * same-origin absolute path (external URLs, `//host`, `/\host`, paths with control characters,
- * whitespace or backslashes, raw or percent-encoded) or that points back at the login page falls
- * back to the dashboard, so the parameter can't be used as an open redirect. The result is the
- * normalised pathname, query and fragment.
+ * whitespace or backslashes, raw or percent-encoded, and paths whose dot segments normalise to
+ * `//host`) or that points back at the login page falls back to the dashboard, so the parameter
+ * can't be used as an open redirect. The result is the normalised pathname, query and fragment,
+ * resolved against `BETTER_AUTH_URL`. Server-only (reads `env`).
  */
 export function safeNextPath(next: string | null | undefined): string {
   if (!next || !next.startsWith("/") || UNSAFE_CHARS.test(next)) return DASHBOARD_PATH;
@@ -64,9 +66,19 @@ export function safeNextPath(next: string | null | undefined): string {
     return DASHBOARD_PATH;
   }
   if (UNSAFE_CHARS.test(decoded) || decoded.startsWith("//")) return DASHBOARD_PATH;
-  // Resolve against a placeholder origin: a target that leaves it is not a local path.
-  const url = new URL(next, SAME_ORIGIN_PROBE);
-  if (url.origin !== SAME_ORIGIN_PROBE) return DASHBOARD_PATH;
+  // Resolve against the public base URL: a target that leaves its origin is not a local path.
+  const base = new URL(env.BETTER_AUTH_URL);
+  const url = new URL(next, base);
+  if (url.origin !== base.origin) return DASHBOARD_PATH;
+  // Check the normalised path, not just the input: dot segments (`/.//x`, `/%2e%2e//x`) collapse
+  // to `//x` only here, and a path starting with `//` is a protocol-relative URL to the browser.
+  let normalized: string;
+  try {
+    normalized = decodeURIComponent(url.pathname);
+  } catch {
+    return DASHBOARD_PATH;
+  }
+  if (normalized.startsWith("//") || UNSAFE_CHARS.test(normalized)) return DASHBOARD_PATH;
   if (isUnder(url.pathname, "/login")) return DASHBOARD_PATH;
   return `${url.pathname}${url.search}${url.hash}`;
 }
@@ -74,6 +86,3 @@ export function safeNextPath(next: string | null | undefined): string {
 /** Control characters, whitespace and backslashes, none of which belong in a local `next` path. */
 // eslint-disable-next-line no-control-regex
 const UNSAFE_CHARS = /[\u0000- \u007f\\]/;
-
-/** Origin `safeNextPath` resolves against; only its own paths stay on it. */
-const SAME_ORIGIN_PROBE = "http://protoloom.invalid";

@@ -23,6 +23,20 @@ const config: NextConfig = {
       "../../node_modules/.pnpm/@bufbuild+buf*/node_modules/@bufbuild/*/package.json",
       "../../node_modules/.pnpm/@bufbuild+buf*/node_modules/@bufbuild/*/bin/**/*",
     ],
+    // Share cards (any route's opengraph-image, /og/**) read these fonts through apps/web/node_modules.
+    "/**": [
+      "./node_modules/@fontsource/geist/files/geist-latin-{400,600}-normal.woff",
+      "./node_modules/@fontsource/geist-mono/files/geist-mono-latin-{400,500}-normal.woff",
+    ],
+    // The sitemap lists the docs pages by reading content/docs at request time.
+    "/sitemap.xml": ["./content/docs/**/*.md"],
+    // The docs read their Markdown at request time, and their share cards read WOFF fonts.
+    "/docs/**/*": ["./content/docs/**/*"],
+    "/og/docs/**/*": [
+      "./content/docs/**/*",
+      "./node_modules/@fontsource/geist/files/geist-latin-*-normal.woff",
+      "./node_modules/@fontsource/geist-mono/files/geist-mono-latin-*-normal.woff",
+    ],
   },
 };
 

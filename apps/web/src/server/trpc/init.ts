@@ -71,11 +71,36 @@ export interface RegistryErrorData {
   details: unknown;
 }
 
+/** Message sent instead of the real one when a procedure fails unexpectedly. */
+export const INTERNAL_ERROR_MESSAGE = "Something went wrong";
+
+/** Whether `error` is an unexpected failure (a plain error, not a deliberate tRPC or registry error). */
+function isUnexpected(error: TRPCError): boolean {
+  const cause = error.cause;
+  return (
+    error.code === "INTERNAL_SERVER_ERROR" &&
+    cause instanceof Error &&
+    !(cause instanceof TRPCError) &&
+    !(cause instanceof RegistryError)
+  );
+}
+
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
-  errorFormatter({ shape, error }) {
+  /**
+   * Adds the registry code and details (`data.registry`) and zod field errors. Unexpected failures
+   * are logged here, server-side, and reach the client only as {@link INTERNAL_ERROR_MESSAGE}
+   * without a stack, so internals (SQL, hosts, paths) never leak.
+   */
+  errorFormatter({ shape, error, path }) {
     const registry: RegistryErrorData | null =
       error.cause instanceof RegistryError ? { code: error.cause.code, details: error.cause.details ?? null } : null;
+    if (isUnexpected(error)) {
+      console.error(`protoloom: tRPC ${path ?? "?"} failed`, error.cause);
+      const data = { ...shape.data };
+      delete data.stack;
+      return { ...shape, message: INTERNAL_ERROR_MESSAGE, data: { ...data, registry: null, zodError: null } };
+    }
     return {
       ...shape,
       data: {

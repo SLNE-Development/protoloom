@@ -22,7 +22,7 @@ import { createQueue, producerConnection, type CleanupQueue } from "@protoloom/j
 import { createAuth, type Auth, type AuthEnv } from "../auth";
 import { API_KEY_PREFIX } from "./routers/keys";
 import { appRouter, createCaller } from "./root";
-import { createTrpcContext, type TrpcContext } from "./init";
+import { createTrpcContext, INTERNAL_ERROR_MESSAGE, type TrpcContext } from "./init";
 
 const BASE = "http://localhost:3000";
 
@@ -506,13 +506,26 @@ describe("users", () => {
   it("refuses to demote, ban or remove the last admin", async () => {
     const caller = call(admin());
     expect(await codeOf(caller.users.setRole({ userId: people.admin, role: "maintainer" }))).toBe("PRECONDITION_FAILED");
-    expect(await codeOf(caller.users.ban({ userId: people.admin }))).toBe("PRECONDITION_FAILED");
-    expect(await codeOf(caller.users.remove({ userId: people.admin }))).toBe("PRECONDITION_FAILED");
+    // Another caller with admin rights (the stored role is what counts for the last-admin rule).
+    const other = call(asUser(people.maintainer, "admin"));
+    expect(await codeOf(other.users.ban({ userId: people.admin }))).toBe("PRECONDITION_FAILED");
+    expect(await codeOf(other.users.remove({ userId: people.admin }))).toBe("PRECONDITION_FAILED");
 
     await caller.users.setRole({ userId: people.maintainer, role: "admin" });
     await caller.users.setRole({ userId: people.admin, role: "viewer" });
     const roles = Object.fromEntries((await caller.users.list()).map((u) => [u.id, u.role]));
     expect(roles).toEqual({ [people.admin]: "viewer", [people.maintainer]: "admin", [people.viewer]: "viewer" });
+  });
+
+  it("refuses to let admins ban or remove their own account", async () => {
+    await call(admin()).users.setRole({ userId: people.maintainer, role: "admin" });
+    const self = call(admin());
+    const banSelf = self.users.ban({ userId: people.admin });
+    await expect(banSelf).rejects.toThrow("You can't ban your own account");
+    expect(await codeOf(self.users.ban({ userId: people.admin }))).toBe("FORBIDDEN");
+    await expect(self.users.remove({ userId: people.admin })).rejects.toThrow("You can't remove your own account");
+    expect(await codeOf(self.users.remove({ userId: people.admin }))).toBe("FORBIDDEN");
+    expect((await self.users.list()).find((u) => u.id === people.admin)).toMatchObject({ banned: false, role: "admin" });
   });
 
   it("bans (ending sessions), unbans and removes users, auditing every change", async () => {
@@ -567,5 +580,116 @@ describe("audit", () => {
     expect((await caller.audit.list({ action: "repository.create" })).items).toHaveLength(2);
     expect(await caller.audit.actions()).toEqual(["invite.create", "repository.create"]);
     expect(await codeOf(call(maintainer()).audit.list({}))).toBe("FORBIDDEN");
+  });
+});
+
+describe("review follow-ups", () => {
+  it("drops key scopes of a deleted repository, so a new one with the same name doesn't inherit them", async () => {
+    await call(maintainer()).keys.create({
+      name: "ci",
+      permissions: [
+        { repository: "internal", access: "write" },
+        { repository: "shared", access: "read" },
+      ],
+    });
+    await call(admin()).repositories.delete({ name: "internal" });
+    expect((await db.select().from(apiKeyPermission)).map((p) => p.repository)).toEqual(["shared"]);
+
+    await call(admin()).repositories.create({ name: "internal", visibility: "private" });
+    const [key] = await call(maintainer()).keys.list();
+    expect(key!.permissions).toEqual([{ repository: "shared", groupPrefix: null, access: "read" }]);
+  });
+
+  it("updates only the policy fields that were sent", async () => {
+    const caller = call(admin());
+    const created = await caller.policies.upsert({
+      repository: "shared",
+      kind: "delete_not_downloaded",
+      value: 30,
+      includeReleases: true,
+      groupPrefix: "acme",
+      enabled: false,
+    });
+    const updated = await caller.policies.upsert({ repository: "shared", id: created.id, value: 90 });
+    expect(updated).toMatchObject({
+      kind: "delete_not_downloaded",
+      value: 90,
+      includeReleases: true,
+      groupPrefix: "acme",
+      enabled: false,
+    });
+    expect(await codeOf(caller.policies.upsert({ repository: "shared", kind: "delete_stale_snapshots" }))).toBe("BAD_REQUEST");
+  });
+
+  it("audits run now with the job id", async () => {
+    const { jobId } = await call(admin()).policies.runNow({ repository: "shared" });
+    const entries = await db.select().from(auditEvent).where(eq(auditEvent.action, "policy.runNow"));
+    expect(entries).toEqual([
+      expect.objectContaining({ actorType: "user", actorId: people.admin, target: "shared", details: { jobId } }),
+    ]);
+  });
+
+  it("hides the message and stack of unexpected errors from clients and logs them", async () => {
+    const failing: Registry = {
+      ...registry,
+      getManifest: () => Promise.reject(new Error("connect to db.internal:5432 failed, password hunter2")),
+    };
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const res = await fetchRequestHandler({
+        endpoint: "/api/trpc",
+        router: appRouter,
+        req: new Request(
+          `${BASE}/api/trpc/browse.version?input=${encodeURIComponent(JSON.stringify({ json: { repository: "shared", coordinate: "acme:money:1.0.0" } }))}`,
+        ),
+        createContext: () => contextFor(viewer(), { registry: failing }),
+      });
+      expect(res.status).toBe(500);
+      const text = await res.text();
+      expect(text).not.toContain("hunter2");
+      const body = JSON.parse(text) as { error: { json: { message: string; data: Record<string, unknown> } } };
+      expect(body.error.json.message).toBe(INTERNAL_ERROR_MESSAGE);
+      expect(body.error.json.data).not.toHaveProperty("stack");
+      expect(logged).toHaveBeenCalledOnce();
+      expect(String(logged.mock.calls[0]?.[1])).toContain("hunter2");
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  describe("an API key limited to a group prefix", () => {
+    const scoped = (): Principal => ({
+      kind: "apikey",
+      keyId: "scoped-key",
+      userId: people.viewer,
+      role: "viewer",
+      permissions: [{ repository: "internal", groupPrefix: "corp.secret", access: "read" }],
+    });
+
+    beforeEach(async () => {
+      await publish("shared", "acme:money:1.0.0", moneyFiles);
+      await publish("internal", "corp.secret:vault:2.0.0", moneyFiles);
+      await publish("internal", "corp.secret:vault:2.1.0", moneyFiles);
+      await publish("internal", "corp.other:ledger:1.0.0", moneyFiles);
+    });
+
+    it("sees only its groups in repository counts, artifacts, search and the dashboard", async () => {
+      const caller = call(scoped());
+      const repos = Object.fromEntries((await caller.browse.repositories()).map((r) => [r.name, r]));
+      expect(repos.internal).toMatchObject({ artifactCount: 1, versionCount: 2 });
+      expect(repos.shared).toMatchObject({ artifactCount: 1, versionCount: 1 });
+
+      expect((await caller.browse.artifacts({ repository: "internal" })).map((a) => a.group)).toEqual(["corp.secret"]);
+      expect(await caller.browse.search({ query: "corp" })).toEqual([
+        { repository: "internal", group: "corp.secret", name: "vault", latestVersion: "2.1.0" },
+      ]);
+
+      const stats = await caller.dashboard.stats();
+      expect(stats).toMatchObject({ repositories: 2, artifacts: 2, versions: 3 });
+      expect(stats.recentPublishes.map((p) => p.coordinate)).not.toContain("corp.other:ledger:1.0.0");
+
+      const full = Object.fromEntries((await call(viewer()).browse.repositories()).map((r) => [r.name, r]));
+      expect(full.internal).toMatchObject({ artifactCount: 2, versionCount: 3 });
+    });
   });
 });
