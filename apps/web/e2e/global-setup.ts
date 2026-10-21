@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { account, createDb, invite, session, user } from "@protoloom/db";
 import { BASE_URL, INVITES, SESSION_COOKIE, STATE_FILE, USERS, sessionToken } from "./fixtures";
 import { sessionCookieValue } from "./helpers";
+import { seedArtifacts } from "./seed-artifacts";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -45,6 +46,7 @@ export default async function globalSetup(): Promise<void> {
       { tokenHash: hash(INVITES.viewer), role: "viewer", note: "Welcome to the team", expiresAt: new Date(now.getTime() + 7 * DAY) },
       { tokenHash: hash(INVITES.expired), role: "maintainer", expiresAt: new Date(now.getTime() - DAY) },
     ]);
+    await seedArtifacts(db);
   } finally {
     await db.$client.end();
   }
@@ -52,7 +54,17 @@ export default async function globalSetup(): Promise<void> {
 }
 
 /** Pages compiled up front, so `next dev`'s first-visit compilation doesn't eat into test timeouts. */
-const WARM_UP_PATHS = ["/", "/login", "/dashboard", "/account", `/invite/${INVITES.viewer}`];
+const WARM_UP_PATHS = [
+  "/",
+  "/login",
+  "/dashboard",
+  "/account",
+  `/invite/${INVITES.viewer}`,
+  "/browse",
+  "/browse/releases",
+  "/browse/releases/dev.example/demo",
+  "/browse/releases/dev.example/demo/1.0.0",
+];
 
 async function warmUp(): Promise<void> {
   const cookie = `${SESSION_COOKIE}=${await sessionCookieValue(USERS.admin.id)}`;
