@@ -56,7 +56,7 @@ All variables are validated at startup (`apps/web/src/env.ts`). Empty values cou
 | `S3_SECRET_ACCESS_KEY` | with `s3` | S3 secret key. |
 | `BETTER_AUTH_SECRET` | yes | Session signing secret, e.g. `openssl rand -base64 48`. |
 | `BETTER_AUTH_URL` | yes | Public **https** base URL, e.g. `https://protos.example.com`. Used for OAuth callbacks, trusted origin, secure cookies and every absolute URL the app produces. Never derived from the request host or a platform URL. |
-| `INITIAL_ADMIN` | recommended | First admin: `github:<login>` or `discord:<user id>`. While no admin exists, that account may sign in and becomes `admin`. |
+| `INITIAL_ADMIN` | first deploy | First admin: `github:<login>` or `discord:<user id>`. While no admin exists, that account may sign in and becomes `admin`. Login is OAuth-only and joining needs an invite, so a fresh instance without it has no way to sign in. Inert once an admin exists (you may remove it afterwards). |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | one provider | GitHub OAuth app. Both or neither. |
 | `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` | one provider | Discord OAuth app. Both or neither. |
 
@@ -135,7 +135,8 @@ The app container applies database migrations on start; the worker waits for the
 
 ```sh
 cp .env.example .env
-# set POSTGRES_PASSWORD, BETTER_AUTH_SECRET, BETTER_AUTH_URL, INITIAL_ADMIN and one OAuth provider
+# set POSTGRES_PASSWORD, BETTER_AUTH_SECRET, BETTER_AUTH_URL, one OAuth provider and, for the first
+# deploy, INITIAL_ADMIN (without it nobody can sign in to a fresh instance)
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
@@ -157,10 +158,20 @@ Environment Variables tab:
 | Variable | Notes |
 | --- | --- |
 | `BETTER_AUTH_URL` | **Required.** Your public https URL, e.g. `https://protos.example.com`. |
-| `INITIAL_ADMIN` | `github:<login>` or `discord:<user id>`. |
+| `INITIAL_ADMIN` | **Required for the first deploy** (`github:<login>` or `discord:<user id>`); without it nobody can sign in to a fresh instance. It is optional in the compose file, so you can remove it once the first admin exists. |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`, `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | At least one complete pair. |
 | `STORAGE_DRIVER` | Optional. `s3` (default, bundled SeaweedFS) or `local` (the `storage-data` volume). |
 | `S3_*` | Optional. Point at an external S3 instead of the bundled one. |
+
+**Storage services always start.** The default is the bundled SeaweedFS: `seaweedfs`, `seaweedfs-init` (creates
+the bucket, safe to re-run on every redeploy) and `seaweedfs-admin` always start, and `protoloom` waits for
+`seaweedfs-init`, regardless of `STORAGE_DRIVER`. To use local storage or an external S3 instead:
+
+1. Set the variables: `STORAGE_DRIVER=local`, or `STORAGE_DRIVER=s3` with `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`,
+   `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`.
+2. Edit `docker-compose.coolify.yml` (for example in a fork): delete the `seaweedfs`, `seaweedfs-init` and
+   `seaweedfs-admin` services, the `seaweedfs-init` entry under `protoloom` -> `depends_on`, and the
+   `seaweedfs-data` and `seaweedfs-admin-data` volumes.
 
 **`BETTER_AUTH_URL` versus the service URL.** In Coolify you assign a domain to the `protoloom` service
 (`SERVICE_FQDN_PROTOLOOM_3000`). That value only tells the proxy where to route traffic. With a Cloudflare Tunnel
@@ -176,4 +187,5 @@ Register these OAuth callback URLs:
 
 **SeaweedFS admin panel.** `seaweedfs-admin` gets its own domain (`SERVICE_FQDN_SEAWEEDFSADMIN_23646`) and is
 always password protected: Coolify generates `SERVICE_USER_SEAWEEDFSADMIN` and `SERVICE_PASSWORD_SEAWEEDFSADMIN`
-(visible in the Environment Variables tab). Remove the service from the compose file if you do not want the panel.
+(visible in the Environment Variables tab); the password is handed to `weed admin` through a private options file,
+not on the command line. Remove the service from the compose file if you do not want the panel.

@@ -48,8 +48,9 @@ RUN rm -f .gitignore \
  && pnpm --filter=@protoloom/worker deploy --legacy --prod /out/app/apps/worker \
  && pnpm --filter=@protoloom/db deploy --legacy --prod /out/migrate
 COPY docker/migrate.mjs /out/migrate/run.mjs
-# buf ships its binary in a per-platform package (@bufbuild/buf-linux-x64 / -arm64); keep them all
-# under /out/buf/node_modules/@bufbuild and fail the build if the binary is missing.
+# buf ships its binary in a per-platform optional package; pnpm installs only the one matching the
+# build platform (@bufbuild/buf-linux-x64 or -arm64). Copy @bufbuild/buf plus that package into
+# /out/buf/node_modules/@bufbuild and fail the build if no binary is found.
 RUN mkdir -p /out/buf/node_modules/@bufbuild \
  && for d in node_modules/.pnpm/@bufbuild+buf@*/node_modules/@bufbuild/buf \
              node_modules/.pnpm/@bufbuild+buf-linux-*/node_modules/@bufbuild/buf-linux-*; do \

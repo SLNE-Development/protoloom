@@ -7,6 +7,11 @@ node_modules
 **/dist
 **/build
 .turbo
+**/.turbo
+.data
+**/.data
+*.tsbuildinfo
+**/*.tsbuildinfo
 .gradle
 **/.gradle
 .env
