@@ -4,8 +4,8 @@ import { recordAudit } from "../audit.js";
 import { formatCoordinate, type Coordinate } from "../coordinates.js";
 import { RegistryError } from "../errors.js";
 import { canDeleteVersions, type Principal } from "../permissions.js";
-import { versionLockKey, type RegistryContext } from "./lookup.js";
-import { assertNoDependents, listDependents, readableRepository } from "./read.js";
+import { deleteBlobLogged, versionLockKey, type RegistryContext } from "./lookup.js";
+import { assertNoDependents, findDependents, readableRepository } from "./read.js";
 
 /**
  * Deletes a version with all its builds, files and dependency edges, then removes the archive
@@ -40,7 +40,7 @@ export async function deleteVersion(
         ),
       );
     if (!target) throw new RegistryError("not_found", `Version ${formatCoordinate(c)} was not found`);
-    const dependents = await listDependents(tx, c);
+    const dependents = await findDependents(tx, c);
     const forced = assertNoDependents(p, c, dependents, opts.force);
 
     const builds = await tx
@@ -59,12 +59,13 @@ export async function deleteVersion(
       actor: p,
       action: "delete",
       target: `${repo.name}/${formatCoordinate(c)}`,
-      details: forced ? { builds: builds.length, dependents } : { builds: builds.length },
+      details: forced
+        ? { builds: builds.length, dependents: dependents.map(({ repository, coordinate }) => ({ repository, coordinate })) }
+        : { builds: builds.length },
       forced,
     });
     return builds.map((b) => b.storageKey);
   });
 
-  // The rows are gone; a failed blob delete only leaves an orphaned blob behind.
-  await Promise.all(storageKeys.map((key) => ctx.blobs.delete(key).catch(() => undefined)));
+  await Promise.all(storageKeys.map((key) => deleteBlobLogged(ctx.blobs, key)));
 }

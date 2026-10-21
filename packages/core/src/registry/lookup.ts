@@ -20,6 +20,18 @@ export type Queryable = Db | Tx;
 export type RepositoryRow = typeof repository.$inferSelect;
 export type BuildRow = typeof build.$inferSelect;
 
+/**
+ * Deletes a blob whose rows are already gone (or never committed). A failure only leaves an
+ * orphaned blob behind, so it is logged with the key instead of failing the operation.
+ */
+export async function deleteBlobLogged(blobs: BlobStore, key: string): Promise<void> {
+  try {
+    await blobs.delete(key);
+  } catch (error) {
+    console.warn(`protoloom: failed to delete orphaned blob ${key}`, error);
+  }
+}
+
 /** Loads a repository by name; null when it does not exist. */
 export async function findRepository(db: Queryable, name: string): Promise<RepositoryRow | null> {
   const [row] = await db.select().from(repository).where(eq(repository.name, name));
@@ -37,7 +49,9 @@ export async function findRepositories(db: Queryable, names: string[]): Promise<
 
 /**
  * Repositories consulted when resolving the dependencies of a publish: the target repository
- * first, then every other repository by ascending `resolutionPriority` (lower wins), then name.
+ * first, then every other repository by ascending `resolutionPriority`, then name. A lower
+ * `resolutionPriority` wins: a dependency found in a priority-5 repository is used over the same
+ * coordinate in a priority-10 repository.
  */
 export async function publishRepositoryOrder(db: Queryable, target: RepositoryRow): Promise<RepositoryRow[]> {
   const others = await db

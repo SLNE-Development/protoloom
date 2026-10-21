@@ -18,8 +18,8 @@ import { canAccess, type Principal } from "../permissions.js";
 import { findPathCollisions, resolveGraph, type Resolution } from "../resolution.js";
 import {
   createLookup,
+  deleteBlobLogged,
   findLatestBuild,
-  findRepository,
   loadFiles,
   publishRepositoryOrder,
   versionLockKey,
@@ -28,7 +28,7 @@ import {
   type RegistryContext,
   type RepositoryRow,
 } from "./lookup.js";
-import { assertNoDependents, listDependents, type Dependent } from "./read.js";
+import { assertNoDependents, findDependents, readableRepository, type Dependent } from "./read.js";
 
 function isCoordinateString(s: string): boolean {
   try {
@@ -113,8 +113,9 @@ async function checkExistingRelease(
   if (!repo.allowRedeploy) {
     throw new RegistryError("immutable", `${formatCoordinate(c)} already exists in ${repo.name} and releases are immutable`);
   }
-  const dependents = await listDependents(db, c);
-  return { existing, forced: assertNoDependents(p, c, dependents, force), dependents };
+  const dependents = await findDependents(db, c);
+  const forced = assertNoDependents(p, c, dependents, force);
+  return { existing, forced, dependents: dependents.map(({ repository, coordinate }) => ({ repository, coordinate })) };
 }
 
 /** Resolves the declared dependencies the way publishing does and rejects unusable graphs. */
@@ -160,8 +161,8 @@ export async function publish(ctx: RegistryContext, p: Principal, input: Publish
   if (p.kind === "anonymous") throw new RegistryError("unauthorized", "Publishing requires an API key");
   const manifest = parseManifest(input.manifest);
   const c: Coordinate = { group: manifest.group, name: manifest.name, version: manifest.version };
-  const repo = await findRepository(ctx.db, input.repository);
-  if (!repo) throw new RegistryError("not_found", `Repository ${input.repository} was not found`);
+  // Unreadable repositories look missing, so publishing never discloses that one exists.
+  const repo = await readableRepository(ctx.db, p, input.repository, c.group);
   if (!canAccess(p, repo, c.group, "write")) {
     throw new RegistryError("forbidden", `No write access to ${c.group} in ${repo.name}`);
   }
@@ -272,13 +273,13 @@ export async function publish(ctx: RegistryContext, p: Principal, input: Publish
       return { buildNumber, replaced: existing };
     });
   } catch (error) {
-    await ctx.blobs.delete(storageKey).catch(() => undefined);
+    await deleteBlobLogged(ctx.blobs, storageKey);
     throw error;
   }
 
   if (outcome.replaced) {
     // The new build is committed; a failure here only leaves an orphaned blob behind.
-    await ctx.blobs.delete(outcome.replaced.storageKey).catch(() => undefined);
+    await deleteBlobLogged(ctx.blobs, outcome.replaced.storageKey);
   }
   return { coordinate: c, buildNumber: outcome.buildNumber, sha256: digest, redeployed: outcome.replaced !== null };
 }

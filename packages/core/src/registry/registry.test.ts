@@ -10,6 +10,7 @@ import type { Coordinate } from "../coordinates.js";
 import type { RegistryError } from "../errors.js";
 import type { KeyPermission, Principal, Role } from "../permissions.js";
 import { createLocalStore, type BlobStore } from "../storage/index.js";
+import { validateProtos } from "../validation.js";
 import { createRegistry, type Manifest, type Registry } from "./index.js";
 
 const anonymous: Principal = { kind: "anonymous" };
@@ -166,6 +167,7 @@ describe("registry", () => {
     const blocked = await expectError(publishMoney(), "has_dependents");
     expect(blocked.details).toEqual({
       dependents: [{ repository: "releases", coordinate: coord("acme", "order", "1.0.0") }],
+      hiddenDependents: 0,
     });
 
     await expectError(
@@ -215,7 +217,9 @@ describe("registry", () => {
     });
   }
 
-  it("assigns distinct build numbers to concurrent snapshot publishes", async () => {
+  // The version upsert's row lock already serializes these two transactions; the advisory lock is a
+  // second guard. What this pins down is the outcome: distinct, consecutive build numbers.
+  it("gives concurrent snapshot publishes distinct consecutive build numbers", async () => {
     const racing = racingRegistry();
     const publishSnapshot = async () =>
       racing.publish(maintainer, {
@@ -255,6 +259,13 @@ describe("registry", () => {
     );
   });
 
+  it("does not disclose a private repository the key can't read when publishing", async () => {
+    const outsider = key("maintainer", [write("snapshots")], "key-outsider");
+    const hidden = await expectError(publishMoney(outsider, "releases"), "not_found");
+    const missing = await expectError(publishMoney(outsider, "absent"), "not_found");
+    expect(hidden.message.replace("releases", "X")).toBe(missing.message.replace("absent", "X"));
+  });
+
   it("rejects version kinds the repository does not accept", async () => {
     await expectError(publishMoney(maintainer, "releases", "1.0.0-SNAPSHOT"), "invalid_request");
     await expectError(publishMoney(maintainer, "snapshots", "1.0.0"), "invalid_request");
@@ -290,12 +301,55 @@ describe("registry", () => {
     );
   });
 
-  it("resolves dependencies from other readable repositories by priority", async () => {
+  /** A registry using real validation that records the dependency files of every publish. */
+  function spyingRegistry(): { registry: Registry; dependencyFiles: ProtoFile[][] } {
+    const dependencyFiles: ProtoFile[][] = [];
+    return {
+      dependencyFiles,
+      registry: createRegistry({
+        db: testDb.db,
+        blobs,
+        validate: async (input) => {
+          dependencyFiles.push(input.dependencyFiles);
+          return validateProtos(input);
+        },
+      }),
+    };
+  }
+
+  const currencyMoney = [
+    proto("acme/money/v1/money.proto", "message Money { int64 cents = 1; }\nmessage Currency { string code = 1; }"),
+  ];
+  const currencyOrder = [
+    proto("acme/order/v1/order.proto", "message Order { acme.money.v1.Currency currency = 1; }", [
+      "acme/money/v1/money.proto",
+    ]),
+  ];
+
+  it("validates against the dependency copy in the repository with the lowest resolutionPriority", async () => {
+    // Inserted, and named, in the opposite order of their priority so neither decides the outcome.
+    await insertRepo("alpha", { resolutionPriority: 10 });
+    await insertRepo("zeta", { resolutionPriority: 5 });
+    await publishMoney(key("maintainer", [write("alpha")], "key-alpha"), "alpha");
+    await publishMoney(key("maintainer", [write("zeta")], "key-zeta"), "zeta", "1.0.0", currencyMoney);
+
+    const spy = spyingRegistry();
+    const reader = key("maintainer", [write("releases"), read("alpha"), read("zeta")], "key-reader");
+    const result = await spy.registry.publish(reader, {
+      repository: "releases",
+      manifest: manifest("acme", "order", "1.0.0", ["acme:money:1.0.0"]),
+      archive: await packArchive(currencyOrder),
+    });
+    expect(result.buildNumber).toBe(1);
+    expect(spy.dependencyFiles).toEqual([currencyMoney]);
+  });
+
+  it("skips repositories the publishing key can't read when resolving dependencies", async () => {
     await insertRepo("shared", { resolutionPriority: 10 });
     await insertRepo("other", { resolutionPriority: 5 });
     const sharedWriter = key("maintainer", [write("shared")], "key-shared");
     const otherWriter = key("maintainer", [write("other")], "key-other");
-    // "other" has the higher priority but this key can't read it, so "shared" wins.
+    // "other" has the lower priority value but this key can't read it, so "shared" is used.
     await publishMoney(otherWriter, "other");
     await publishMoney(sharedWriter, "shared");
 
@@ -310,10 +364,14 @@ describe("registry", () => {
   it("prefers the target repository over higher-priority repositories", async () => {
     await insertRepo("shared", { resolutionPriority: 1 });
     await publishMoney(key("maintainer", [write("shared")], "key-shared"), "shared");
-    await publishMoney();
-    await publishOrder();
-    const info = await registry.resolve(maintainer, ["releases"], [coord("acme", "order", "1.0.0")]);
-    expect(info.nodes.find((n) => n.coordinate.name === "money")?.repository).toBe("releases");
+    await publishMoney(maintainer, "releases", "1.0.0", currencyMoney);
+    const spy = spyingRegistry();
+    await spy.registry.publish(maintainer, {
+      repository: "releases",
+      manifest: manifest("acme", "order", "1.0.0", ["acme:money:1.0.0"]),
+      archive: await packArchive(currencyOrder),
+    });
+    expect(spy.dependencyFiles).toEqual([currencyMoney]);
   });
 
   it("does not resolve dependencies from private repositories the key can't read", async () => {
@@ -325,6 +383,9 @@ describe("registry", () => {
 
   it("requires write permission and authentication to publish", async () => {
     await expectError(publishMoney(key("maintainer", [read("releases")])), "forbidden");
+    await testDb.db.update(repository).set({ visibility: "public" }).where(eq(repository.name, "releases"));
+    await expectError(publishMoney(key("maintainer", [])), "forbidden");
+    await testDb.db.update(repository).set({ visibility: "private" }).where(eq(repository.name, "releases"));
     await expectError(publishMoney(key("viewer", [write("releases")])), "forbidden");
     await expectError(publishMoney({ kind: "user", userId: "u1", role: "admin" }), "forbidden");
     await expectError(publishMoney(anonymous), "unauthorized");
@@ -388,6 +449,7 @@ describe("registry", () => {
     );
     expect(blocked.details).toEqual({
       dependents: [{ repository: "releases", coordinate: coord("acme", "order", "1.0.0") }],
+      hiddenDependents: 0,
     });
     await expectError(
       registry.deleteVersion(maintainer, "releases", coord("acme", "money", "1.0.0"), { force: true }),
@@ -412,6 +474,29 @@ describe("registry", () => {
     // With its only dependent gone, money can be deleted too.
     await registry.deleteVersion(maintainer, "releases", coord("acme", "money", "1.0.0"));
     expect(await testDb.db.select().from(build)).toHaveLength(0);
+  });
+
+  it("lists only readable dependents and counts the hidden ones", async () => {
+    await insertRepo("hidden");
+    await publishMoney();
+    await publishOrder();
+    await publishOrder(key("maintainer", [write("hidden"), read("releases")], "key-hidden"), "hidden");
+
+    const blocked = await expectError(
+      registry.deleteVersion(maintainer, "releases", coord("acme", "money", "1.0.0")),
+      "has_dependents",
+    );
+    expect(blocked.details).toEqual({
+      dependents: [{ repository: "releases", coordinate: coord("acme", "order", "1.0.0") }],
+      hiddenDependents: 1,
+    });
+    // Users browse every repository, so an admin user sees both dependents.
+    const asAdminUser = await expectError(
+      registry.deleteVersion({ kind: "user", userId: "u-admin", role: "admin" }, "releases", coord("acme", "money", "1.0.0")),
+      "has_dependents",
+    );
+    expect(asAdminUser.details).toMatchObject({ hiddenDependents: 0 });
+    expect((asAdminUser.details as { dependents: unknown[] }).dependents).toHaveLength(2);
   });
 
   it("lets an admin force-delete a depended-on version", async () => {

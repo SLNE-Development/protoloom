@@ -188,11 +188,22 @@ export async function resolve(
   return resolveGraph(roots, createLookup(ctx.db, p, repos).lookup);
 }
 
+/** A dependent plus its repository's visibility, so callers can filter by read access. */
+export interface DependentRow extends Dependent {
+  visibility: "public" | "private";
+}
+
 /** Every version, in any repository, whose builds declare a dependency on `c`. */
 export async function listDependents(db: Queryable, c: Coordinate): Promise<Dependent[]> {
+  return (await findDependents(db, c)).map(({ repository, coordinate }) => ({ repository, coordinate }));
+}
+
+/** Like {@link listDependents}, also carrying each dependent repository's visibility. */
+export async function findDependents(db: Queryable, c: Coordinate): Promise<DependentRow[]> {
   const rows = await db
     .selectDistinct({
       repository: repository.name,
+      visibility: repository.visibility,
       group: artifact.group,
       name: artifact.name,
       version: version.version,
@@ -208,27 +219,32 @@ export async function listDependents(db: Queryable, c: Coordinate): Promise<Depe
     .orderBy(asc(repository.name), asc(artifact.group), asc(artifact.name), asc(version.version));
   return rows.map((r) => ({
     repository: r.repository,
+    visibility: r.visibility,
     coordinate: { group: r.group, name: r.name, version: r.version },
   }));
 }
 
 /**
  * Allows removing or replacing a version only when nothing depends on it, or when an admin forces
- * it. Throws `has_dependents` (listing them) without `force`, `forbidden` when a non-admin forces.
+ * it. Throws `has_dependents` without `force`, and `forbidden` when a non-admin forces. The error
+ * lists only the dependents the caller can read; the others are counted in `hiddenDependents`.
  * Returns whether the action is forced past existing dependents.
  */
 export function assertNoDependents(
   p: Principal,
   c: Coordinate,
-  dependents: Dependent[],
+  dependents: DependentRow[],
   force: boolean | undefined,
 ): boolean {
   if (dependents.length === 0) return false;
   if (!force) {
+    const visible = dependents
+      .filter((d) => canAccess(p, { name: d.repository, visibility: d.visibility }, d.coordinate.group, "read"))
+      .map(({ repository: repo, coordinate }) => ({ repository: repo, coordinate }));
     throw new RegistryError(
       "has_dependents",
       `${formatCoordinate(c)} is depended on by ${dependents.length} version(s)`,
-      { dependents },
+      { dependents: visible, hiddenDependents: dependents.length - visible.length },
     );
   }
   if (!canForce(p)) throw new RegistryError("forbidden", "Only admins can force past dependents");
