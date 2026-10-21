@@ -15,13 +15,14 @@ export const dynamic = "force-dynamic";
 export async function GET(_req: Request, { params }: { params: Promise<{ slug?: string[] }> }) {
   const { slug = [] } = await params;
   const doc = getDoc(slug);
-  const image = await renderDocsOgCard({
-    eyebrow: doc ? `Docs · ${doc.section}` : "Docs",
-    title: doc?.title ?? "Protoloom docs",
-    subtitle: doc?.description ?? "Publish, version and fetch .proto files.",
-    host: new URL(env.BETTER_AUTH_URL).host,
-    path: doc?.path ?? "/docs",
-  });
-  image.headers.set("cache-control", "public, max-age=3600");
-  return image;
+  return renderDocsOgCard(
+    {
+      eyebrow: doc ? `Docs · ${doc.section}` : "Docs",
+      title: doc?.title ?? "Protoloom docs",
+      subtitle: doc?.description ?? "Publish, version and fetch .proto files.",
+      host: new URL(env.BETTER_AUTH_URL).host,
+      path: doc?.path ?? "/docs",
+    },
+    { headers: { "cache-control": "public, max-age=3600" } },
+  );
 }
