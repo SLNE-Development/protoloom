@@ -141,7 +141,7 @@ importers:
         version: link:../db
       drizzle-orm:
         specifier: 0.45.4
-        version: 0.45.4(@types/pg@8.23.1)(pg@8.23.1)
+        version: 0.45.4(@types/pg@8.23.1)(kysely@0.29.7)(pg@8.23.1)
       tar:
         specifier: 7.5.22
         version: 7.5.22

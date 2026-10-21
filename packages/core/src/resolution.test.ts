@@ -139,6 +139,46 @@ describe("resolveGraph", () => {
     expect(r.nodes.map((n) => formatCoordinate(n.coordinate))).toEqual(["g:a:2"]);
     expect(r.conflicts).toEqual([{ group: "g", name: "a", requested: ["1", "2"], selected: "2" }]);
   });
+
+  describe("exclude", () => {
+    const ids = (r: { nodes: ResolvedNode[] }) => r.nodes.map((n) => formatCoordinate(n.coordinate));
+
+    it("skips an excluded root without looking it up", async () => {
+      const calls: string[] = [];
+      const lookup = memoryLookup({ "g:a:1": ["g:c:1"], "g:b:1": [], "g:c:1": [] }, calls);
+      const r = await resolveGraph([c("a", "1"), c("b", "1")], lookup, { exclude: new Set(["g:a"]) });
+      expect(ids(r)).toEqual(["g:b:1"]);
+      expect(calls).not.toContain("g:a:1");
+      expect(calls).not.toContain("g:c:1");
+    });
+
+    it("drops an excluded transitive node together with its subtree and conflicts", async () => {
+      const calls: string[] = [];
+      const lookup = memoryLookup(
+        {
+          "g:a:1": ["g:b:1", "g:d:1"],
+          "g:b:1": ["g:c:1", "g:d:2"],
+          "g:c:1": [],
+          "g:d:1": [],
+          "g:d:2": [],
+        },
+        calls,
+      );
+      const r = await resolveGraph([c("a", "1")], lookup, { exclude: new Set(["g:b"]) });
+      expect(ids(r)).toEqual(["g:a:1", "g:d:1"]);
+      expect(r.conflicts).toEqual([]);
+      expect(calls).not.toContain("g:b:1");
+      expect(calls).not.toContain("g:c:1");
+      expect(calls).not.toContain("g:d:2");
+    });
+
+    it("never reports an excluded key as not found", async () => {
+      const lookup = memoryLookup({ "g:a:1": ["g:local:9"] });
+      await expect(resolveGraph([c("a", "1")], lookup)).rejects.toBeInstanceOf(RegistryError);
+      const r = await resolveGraph([c("a", "1"), c("local", "9")], lookup, { exclude: new Set(["g:local"]) });
+      expect(ids(r)).toEqual(["g:a:1"]);
+    });
+  });
 });
 
 describe("findPathCollisions", () => {
