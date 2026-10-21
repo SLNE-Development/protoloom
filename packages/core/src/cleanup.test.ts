@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+/** The parts of a pg pool client that `runAllCleanups` uses. */
+type PoolClient = { query: (...args: never[]) => Promise<unknown>; release: (err?: Error | boolean) => void };
 import { and, asc, eq, sql } from "drizzle-orm";
 import { artifact, auditEvent, build, cleanupPolicy, dependency, repository, version } from "@protoloom/db";
 import { startTestDb } from "@protoloom/db/testing";
@@ -374,6 +376,42 @@ describe("cleanup", () => {
         holder.release();
       }
       expect(await runAllCleanups(testDb.db, blobs, NOW)).toBe(2);
+    });
+
+    it("destroys the lock connection when unlocking fails, so the session lock cannot leak", async () => {
+      await seed("snapshots", coord("acme", "money", "1.0.0-SNAPSHOT"), { builds: 2 });
+      await addPolicy("snapshots", { kind: "keep_last_snapshot_builds", value: 1 });
+
+      const pool = testDb.db.$client;
+      const realConnect = pool.connect.bind(pool) as () => Promise<PoolClient>;
+      const unlockError = new Error("unlock failed");
+      let released: unknown = "not released";
+      const spy = vi.spyOn(pool, "connect").mockImplementationOnce((async () => {
+        const client = await realConnect();
+        const realQuery = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+        const realRelease = client.release.bind(client);
+        const wrapped = Object.create(client) as PoolClient;
+        wrapped.query = ((text: string, values?: unknown[]) =>
+          text.includes("pg_advisory_unlock") ? Promise.reject(unlockError) : realQuery(text, values)) as PoolClient["query"];
+        wrapped.release = (err?: Error | boolean) => {
+          released = err;
+          realRelease(err);
+        };
+        return wrapped;
+      }) as typeof pool.connect);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        expect(await runAllCleanups(testDb.db, blobs, NOW)).toBe(1);
+        expect(warn).toHaveBeenCalledOnce();
+      } finally {
+        spy.mockRestore();
+        warn.mockRestore();
+      }
+      expect(released).toBe(unlockError);
+      // The destroyed connection took its session lock with it: the next run gets the lock.
+      await seed("other", coord("acme", "order", "1.0.0-SNAPSHOT"), { builds: 2 });
+      await addPolicy("other", { kind: "keep_last_snapshot_builds", value: 1 });
+      expect(await runAllCleanups(testDb.db, blobs, NOW)).toBe(1);
     });
   });
 });
