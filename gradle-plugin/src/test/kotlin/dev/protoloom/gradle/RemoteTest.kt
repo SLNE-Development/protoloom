@@ -1,7 +1,5 @@
 package dev.protoloom.gradle
 
-import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -10,25 +8,13 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
-import org.apache.commons.compress.archivers.tar.TarArchiveEntry
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
-import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.io.File
-import java.net.InetSocketAddress
-import java.security.MessageDigest
-import java.util.UUID
-import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.zip.GZIPInputStream
-import java.util.zip.GZIPOutputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -256,6 +242,98 @@ class RemoteTest {
         assertEquals(0, stub.resolveBodies.size)
     }
 
+    @Test
+    fun `an archiveUrl on another origin is rebased onto protoloom url and never receives the token`() {
+        RecordingServer().use { foreign ->
+            stub.archiveOrigin = foreign.url
+            writeBuild(
+                """
+                protoloom {
+                    repositories("releases")
+                }
+                dependencies {
+                    protoloom("dev.example:a:1.0.0")
+                }
+                """,
+            )
+
+            gradle("fetchProtos").build()
+
+            assertEquals(emptyList(), foreign.requests.toList())
+            assertEquals(listOf("/api/v1/repos/releases/artifacts/dev.example/a/1.0.0/archive"), stub.archivePaths.toList())
+            assertEquals(listOf("Bearer secret-token", "Bearer secret-token"), stub.authorizations.toList())
+            assertEquals(stub.protoContent, projectDir.resolve("build/protoloom/protos/a/v1/a.proto").readText())
+        }
+    }
+
+    @Test
+    fun `fetchProtos removes stale files from the proto root`() {
+        writeBuild(
+            """
+            protoloom {
+                repositories("releases")
+            }
+            dependencies {
+                protoloom("dev.example:a:1.0.0")
+            }
+            """,
+        )
+        val stale = projectDir.resolve("build/protoloom/protos/old/x.proto")
+        stale.parentFile.mkdirs()
+        stale.writeText("syntax = \"proto3\";\n")
+
+        gradle("fetchProtos").build()
+
+        assertFalse(stale.exists())
+        assertTrue(projectDir.resolve("build/protoloom/protos/a/v1/a.proto").isFile)
+    }
+
+    @Test
+    fun `publishProtos without proto files fails naming the source directory`() {
+        projectDir.resolve("protos").mkdirs()
+        projectDir.resolve("protos/README.md").writeText("no protos here")
+        writeBuild(
+            """
+            protoloom {
+                publishing {
+                    repository = "releases"
+                    group = "dev.example"
+                    name = "b"
+                    version = "1.0.0"
+                    source = layout.projectDirectory.dir("protos")
+                }
+            }
+            """,
+        )
+
+        val result = gradle("publishProtos").buildAndFail()
+
+        val sourceDir = projectDir.resolve("protos")
+        val named = listOf(sourceDir.absolutePath, sourceDir.canonicalPath).any { result.output.contains("No .proto files found in $it") }
+        assertTrue(named, result.output)
+        assertEquals(0, stub.publishes.size)
+    }
+
+    @Test
+    fun `a protoloom dependency without a group fails clearly`() {
+        writeBuild(
+            """
+            protoloom {
+                repositories("releases")
+            }
+            dependencies {
+                protoloom(mapOf("name" to "a", "version" to "1"))
+            }
+            """,
+        )
+
+        val result = gradle("fetchProtos").buildAndFail()
+
+        assertTrue(result.output.contains("protoloom dependency a:1 needs a group"), result.output)
+        assertFalse(result.output.contains("null:a:1"), result.output)
+        assertEquals(0, stub.resolveBodies.size)
+    }
+
     private fun writeBuild(body: String) {
         projectDir.resolve("settings.gradle.kts").writeText("""rootProject.name = "consumer"""" + "\n")
         projectDir.resolve("build.gradle.kts").writeText(
@@ -280,113 +358,4 @@ class RemoteTest {
         .withEnvironment(env)
         .withArguments(*tasks, "--configuration-cache", "--stacktrace")
         .forwardOutput()
-
-    private fun tarEntries(gzipped: ByteArray): List<TarArchiveEntry> =
-        TarArchiveInputStream(GZIPInputStream(ByteArrayInputStream(gzipped))).use { tar ->
-            generateSequence { tar.nextEntry }.toList()
-        }
-
-    private class Part(val bytes: ByteArray) {
-        val text: String get() = bytes.toString(Charsets.UTF_8)
-    }
-
-    /** Splits a multipart/form-data body into its parts, keyed by field name. */
-    private fun parseMultipart(contentType: String, body: ByteArray): Map<String, Part> {
-        val boundary = contentType.substringAfter("boundary=").trim('"')
-        val raw = body.toString(Charsets.ISO_8859_1)
-        return raw.split("--$boundary")
-            .drop(1)
-            .filterNot { it.startsWith("--") }
-            .associate { section ->
-                val headers = section.substringBefore("\r\n\r\n")
-                val content = section.substringAfter("\r\n\r\n").removeSuffix("\r\n")
-                val name = Regex("name=\"([^\"]+)\"").find(headers)!!.groupValues[1]
-                name to Part(content.toByteArray(Charsets.ISO_8859_1))
-            }
-    }
-
-    private class CapturedRequest(
-        val method: String,
-        val path: String,
-        val authorization: String?,
-        val contentType: String,
-        val body: ByteArray,
-    )
-
-    /** A minimal stand-in for the Protoloom REST API that records what the plugin sends. */
-    private class RegistryStub : AutoCloseable {
-        private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        val url: String get() = "http://127.0.0.1:${server.address.port}"
-
-        // Unique per test so the shared TestKit cache never already holds this archive.
-        val protoContent = "syntax = \"proto3\";\npackage a.v1;\n// ${UUID.randomUUID()}\n"
-        private val archive = tarGz(mapOf("a/v1/a.proto" to protoContent))
-        private val sha256 = MessageDigest.getInstance("SHA-256").digest(archive).joinToString("") { "%02x".format(it) }
-
-        val resolveBodies = CopyOnWriteArrayList<String>()
-        val authorizations = CopyOnWriteArrayList<String?>()
-        val archiveDownloads = AtomicInteger()
-        val publishes = CopyOnWriteArrayList<CapturedRequest>()
-
-        @Volatile var corruptArchive = false
-        @Volatile var publishStatus = 201
-        @Volatile var publishResponse = """{"coordinate":"dev.example:b:1.0.0","buildNumber":1,"sha256":"00","redeployed":false}"""
-
-        init {
-            server.createContext("/api/v1/resolve") { exchange ->
-                authorizations += exchange.requestHeaders.getFirst("Authorization")
-                resolveBodies += exchange.requestBody.readBytes().toString(Charsets.UTF_8)
-                val body = """
-                    {"artifacts":[{"repository":"releases","coordinate":"dev.example:a:1.0.0","group":"dev.example",
-                    "name":"a","version":"1.0.0","buildNumber":1,"sha256":"$sha256",
-                    "archiveUrl":"$url/api/v1/repos/releases/artifacts/dev.example/a/1.0.0/archive"}],"conflicts":[]}
-                """.trimIndent()
-                exchange.respond(200, "application/json", body.toByteArray())
-            }
-            server.createContext("/api/v1/repos/") { exchange ->
-                when (exchange.requestMethod) {
-                    "GET" -> {
-                        authorizations += exchange.requestHeaders.getFirst("Authorization")
-                        archiveDownloads.incrementAndGet()
-                        val bytes = if (corruptArchive) tarGz(mapOf("a/v1/a.proto" to "tampered")) else archive
-                        exchange.responseHeaders.add("x-protoloom-sha256", sha256)
-                        exchange.respond(200, "application/gzip", bytes)
-                    }
-                    "PUT" -> {
-                        publishes += CapturedRequest(
-                            method = exchange.requestMethod,
-                            path = exchange.requestURI.path,
-                            authorization = exchange.requestHeaders.getFirst("Authorization"),
-                            contentType = exchange.requestHeaders.getFirst("Content-Type"),
-                            body = exchange.requestBody.readBytes(),
-                        )
-                        exchange.respond(publishStatus, "application/json", publishResponse.toByteArray())
-                    }
-                    else -> exchange.respond(405, "text/plain", ByteArray(0))
-                }
-            }
-            server.start()
-        }
-
-        override fun close() = server.stop(0)
-
-        private fun HttpExchange.respond(status: Int, contentType: String, body: ByteArray) {
-            responseHeaders.add("Content-Type", contentType)
-            sendResponseHeaders(status, if (body.isEmpty()) -1 else body.size.toLong())
-            responseBody.use { it.write(body) }
-        }
-
-        private fun tarGz(files: Map<String, String>): ByteArray {
-            val out = ByteArrayOutputStream()
-            TarArchiveOutputStream(GZIPOutputStream(out)).use { tar ->
-                files.forEach { (path, content) ->
-                    val bytes = content.toByteArray()
-                    tar.putArchiveEntry(TarArchiveEntry(path).apply { size = bytes.size.toLong() })
-                    tar.write(bytes)
-                    tar.closeArchiveEntry()
-                }
-            }
-            return out.toByteArray()
-        }
-    }
 }
