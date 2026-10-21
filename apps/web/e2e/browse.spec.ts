@@ -16,7 +16,8 @@ test.describe("artifact browser", () => {
   test("the dashboard shows counts and recent publishes", async ({ page }) => {
     await loginAs(page, USERS.admin.id);
     await page.goto("/dashboard");
-    await expect(page.getByTestId("stat-artifacts")).toContainText("2");
+    await expect(page.getByTestId("stat-artifacts")).toContainText("3");
+    await expect(page.getByTestId("stat-repositories")).toContainText("2");
     const recent = page.getByTestId("recent-publishes");
     await expect(recent.getByRole("link", { name: "dev.example:orders:1.0.0" })).toBeVisible();
     await expect(recent.getByText("1.1.0-SNAPSHOT").first()).toBeVisible();
@@ -78,6 +79,24 @@ test.describe("artifact browser", () => {
     await expect(page.getByRole("tabpanel").getByRole("row")).toHaveCount(3);
   });
 
+  test("viewers can't delete versions", async ({ page }) => {
+    await loginAs(page, USERS.viewer.id);
+    await page.goto(VERSION_PAGE);
+    await expect(page.getByRole("heading", { name: /demo/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Delete version" })).toHaveCount(0);
+  });
+
+  test("public artifacts get a share card, private ones stay out of search engines", async ({ page }) => {
+    await loginAs(page, USERS.admin.id);
+    await page.goto(VERSION_PAGE);
+    await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", /\/og\/artifact\/releases\/dev\.example\/demo\/1\.0\.0$/);
+    await expect(page.locator('meta[name="robots"]')).toHaveCount(0);
+
+    await page.goto("/browse/snapshots/dev.example/demo/1.1.0-SNAPSHOT");
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
+    await expect(page.locator('meta[property="og:image"]')).toHaveCount(0);
+  });
+
   test("Ctrl+K finds artifacts and switches the theme", async ({ page }) => {
     await loginAs(page, USERS.admin.id);
     await page.goto(VERSION_PAGE);
@@ -87,12 +106,14 @@ test.describe("artifact browser", () => {
     const dialog = page.getByRole("dialog");
     await dialog.getByPlaceholder(/Search/).fill("demo");
     const option = dialog.getByRole("option", { name: /dev\.example:demo/ }).first();
-    await expect(option).toBeVisible();
+    await expect(option).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/browse\/(releases|snapshots)\/dev\.example\/demo$/);
 
     await page.keyboard.press("Control+K");
-    await dialog.getByRole("option", { name: "Theme: Dark" }).click();
+    await dialog.getByPlaceholder(/Search/).fill("theme dark");
+    await expect(dialog.getByRole("option", { name: "Theme: Dark" })).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Enter");
     await expect(page.locator("html")).toHaveClass(/\bdark\b/);
   });
 

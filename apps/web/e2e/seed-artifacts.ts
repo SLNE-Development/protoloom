@@ -20,7 +20,18 @@ export async function seedArtifacts(db: Db): Promise<void> {
   ]);
 
   const registry = createRegistry({ db, blobs: createLocalStore(serverEnv().STORAGE_LOCAL_PATH!) });
-  const admin: Principal = { kind: "user", userId: USERS.admin.id, role: "admin" };
+  // Publishing needs a key with write access (users can't publish from the UI); this one is never stored.
+  const publisher: Principal = {
+    kind: "apikey",
+    keyId: "e2e-seed-key",
+    userId: USERS.admin.id,
+    role: "admin",
+    permissions: [ARTIFACTS.releases, ARTIFACTS.snapshots].map((repo) => ({
+      repository: repo,
+      groupPrefix: null,
+      access: "write" as const,
+    })),
+  };
   const money = proto(
     "dev/example/money/v1/money.proto",
     "// An amount of money in minor units.\nmessage Money {\n  string currency = 1;\n  int64 cents = 2;\n}",
@@ -33,7 +44,7 @@ export async function seedArtifacts(db: Db): Promise<void> {
   );
 
   const publish = async (repo: string, name: string, version: string, files: ProtoFile[], dependencies: string[] = []) =>
-    registry.publish(admin, {
+    registry.publish(publisher, {
       repository: repo,
       manifest: { group: "dev.example", name, version, dependencies },
       archive: await packArchive(files),

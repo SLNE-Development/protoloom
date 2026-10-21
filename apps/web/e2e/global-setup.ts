@@ -10,7 +10,8 @@ const DAY = 24 * 60 * 60 * 1000;
 /**
  * Seeds the e2e database that `serve.ts` started: the fixture users, a Better Auth session for
  * each (real OAuth can't run in tests; `loginAs` sends the matching cookie), a GitHub account for
- * `githubViewer` and the fixture invites. Settings stay at their defaults (anonymous view off).
+ * `githubViewer`, the fixture invites and the browse fixtures (`seed-artifacts.ts`). Settings stay
+ * at their defaults (anonymous view off).
  */
 export default async function globalSetup(): Promise<void> {
   const { databaseUrl } = JSON.parse(readFileSync(STATE_FILE, "utf8")) as { databaseUrl: string };
