@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { cache, type ReactNode } from "react";
 import { DownloadIcon } from "lucide-react";
-import { isSnapshot } from "@protoloom/core";
+import { isSnapshot } from "@protoloom/core/coordinates";
 import { Button } from "@protoloom/ui/components/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@protoloom/ui/components/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@protoloom/ui/components/tabs";

@@ -13,6 +13,10 @@
     "./archive": {
       "types": "./dist/archive.d.ts",
       "default": "./dist/archive.js"
+    },
+    "./coordinates": {
+      "types": "./dist/coordinates.d.ts",
+      "default": "./dist/coordinates.js"
     }
   },
   "scripts": {

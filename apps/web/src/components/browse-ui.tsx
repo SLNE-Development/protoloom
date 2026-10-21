@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ComponentProps, ReactNode } from "react";
-import { isSnapshot } from "@protoloom/core";
+// The subpath keeps node-only parts of core (storage, database) out of client bundles.
+import { isSnapshot } from "@protoloom/core/coordinates";
 import { Badge } from "@protoloom/ui/components/badge";
 import {
   Breadcrumb,
