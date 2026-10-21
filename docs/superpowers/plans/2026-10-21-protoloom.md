@@ -402,7 +402,7 @@ The user offered BullMQ and Valkey; the controller ruled to use them for cleanup
 
 **Files:**
 - Create: `packages/jobs` (`@protoloom/jobs`: queue name `protoloom-cleanup`, typed job payloads `{ kind: "cleanup:all" } | { kind: "cleanup:repo", repository: string }`, `createQueue(connection)`, `enqueueCleanup(queue, repository): Promise<string>`, `getJobState(queue, jobId)`), and `apps/worker` (`src/index.ts` connects to `VALKEY_URL` and the database, registers a BullMQ `Worker` that calls `runAllCleanups` / `applyCleanup` from `@protoloom/core`, and upserts a repeatable job scheduler `cleanup-daily` with the cron pattern `0 3 * * *`; it shuts down gracefully on SIGTERM). Env is validated with `@t3-oss/env-core`.
-- Modify: `docker-compose.yml` (add `valkey/valkey` with a pinned exact tag, port 6379 bound to 127.0.0.1, and a healthcheck).
+- Modify: `docker-compose.yml`: add `valkey/valkey` (pinned exact tag, port 6379 bound to 127.0.0.1, healthcheck) and, as the user asked, the **SeaweedFS admin panel**. That's a `seaweedfs-admin` service running `weed admin` from the same pinned `chrislusf/seaweedfs` image, pointed at the existing master (`-masters=seaweedfs:9333`), with its UI port (23646 by default; check `weed admin -h` for the pinned version) bound to 127.0.0.1, and admin credentials from `SEAWEEDFS_ADMIN_USER` / `SEAWEEDFS_ADMIN_PASSWORD`, defaulting to `admin` / `admin` in dev. The seaweedfs healthcheck also waits for the filer, so the bucket init can't race (the Task 7 minor).
 - Test: `packages/jobs/src/jobs.test.ts` and `apps/worker/src/worker.test.ts`. Valkey runs through testcontainers (`valkey/valkey` image) for the integration test.
 
 **Interfaces:**
@@ -648,12 +648,12 @@ The user offered BullMQ and Valkey; the controller ruled to use them for cleanup
 **Files:**
 - Create: `docker/Dockerfile` (multi-stage: `node:22-bookworm-slim` with pnpm via corepack, `turbo prune web --docker`, install, build; the runtime copies the Next standalone output, `.next/static`, `public`, the `@bufbuild/buf` binary package, the `packages/db/drizzle` migrations and a compiled `migrate` script; runs as a non-root user; `EXPOSE 3000`; `HEALTHCHECK` on `/api/health`), `docker/entrypoint.sh`, `apps/web/src/app/api/health/route.ts` (returns `{ ok: true }` after a `select 1`), `docker-compose.prod.yml` (app + worker (same image, command `node apps/worker/dist/index.js`) + postgres + valkey, with commented S3 env vars), `docker-compose.coolify.yml` (decided by the user; see below), with commented S3 env vars), `scripts/e2e-smoke.sh`, `README.md` (run, configure, Gradle/CLI usage)
 
-- **Coolify compose** (`docker-compose.coolify.yml`): services `protoloom` (web), `worker` (same image, worker command), `postgres` (`postgres:17-alpine` with a named volume) and `valkey` (pinned tag, named volume), each with a healthcheck. Use Coolify's magic environment variables, checked against the current Coolify docs:
+- **Coolify compose** (`docker-compose.coolify.yml`): services `protoloom` (web), `worker` (same image, worker command), `postgres` (`postgres:17-alpine` with a named volume), `valkey` (pinned tag, named volume), `seaweedfs` (S3 storage with a named volume and bucket init; `STORAGE_DRIVER` defaults to `s3` pointing at it) and `seaweedfs-admin` (the `weed admin` panel, exposed through Coolify with its own `SERVICE_FQDN_SEAWEEDFSADMIN_23646`, credentials `SERVICE_USER_SEAWEEDFSADMIN` / `SERVICE_PASSWORD_SEAWEEDFSADMIN`, never without a password), each with a healthcheck. Use Coolify's magic environment variables, checked against the current Coolify docs:
   - `SERVICE_FQDN_PROTOLOOM_3000` (or the current `SERVICE_URL_*` form) for routing only.
   - Generated credentials: `SERVICE_USER_POSTGRES`, `SERVICE_PASSWORD_POSTGRES`, and `SERVICE_BASE64_64_BETTERAUTH` for `BETTER_AUTH_SECRET`.
   - `BETTER_AUTH_URL: ${BETTER_AUTH_URL:?Set the public https URL, e.g. https://protos.example.com}`, required, set by the user, and deliberately **not** derived from the service FQDN, because Cloudflare Tunnels make that http.
   - `DATABASE_URL` and `VALKEY_URL` built from the service names and generated credentials.
-  - `STORAGE_DRIVER` defaulting to `local`, with a named volume mounted at `STORAGE_LOCAL_PATH`, plus optional `S3_*`.
+  - `STORAGE_DRIVER` defaulting to `s3` against the bundled seaweedfs (`S3_ENDPOINT=http://seaweedfs:8333`, or the pinned image's S3 port), and switchable to `local` with a named volume.
   - `INITIAL_ADMIN`, and `GITHUB_*` / `DISCORD_*` as user-set variables.
   - A comment block at the top explaining which variables the user must set in Coolify.
 
