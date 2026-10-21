@@ -12,3 +12,4 @@ build/
 coverage/
 .idea/
 .DS_Store
+.claude/worktrees/
