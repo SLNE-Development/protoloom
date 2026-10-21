@@ -80,7 +80,10 @@ private data class ValidationDetails(val issues: List<ValidationIssue> = emptyLi
  */
 internal class ProtoloomClient(baseUrl: String, private val token: String?) {
     private val baseUrl = baseUrl.trimEnd('/')
+    // HTTP/1.1 only: over plain http the JDK client otherwise asks for an h2c upgrade, and the
+    // Next.js server closes such connections without a response.
     private val http = HttpClient.newBuilder()
+        .version(HttpClient.Version.HTTP_1_1)
         .connectTimeout(Duration.ofSeconds(30))
         .followRedirects(HttpClient.Redirect.NORMAL)
         .build()
