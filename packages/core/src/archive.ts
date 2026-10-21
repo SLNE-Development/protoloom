@@ -15,10 +15,11 @@ export const LIMITS = {
   archiveBytes: 10 * 1024 * 1024,
   files: 1000,
   fileBytes: 1024 * 1024,
+  totalBytes: 32 * 1024 * 1024,
 } as const;
 
-/** Upper bound for everything the decompressor may emit (file bodies plus tar framing). */
-const MAX_DECOMPRESSED_BYTES = LIMITS.files * (LIMITS.fileBytes + 2048) + 4096;
+/** Backstop for everything the decompressor may emit (file bodies plus tar framing and metadata). */
+const MAX_DECOMPRESSED_BYTES = LIMITS.totalBytes * 2;
 
 /** Lowercase hex SHA-256 digest of the given bytes. */
 export function sha256(data: Buffer): string {
@@ -37,7 +38,7 @@ function tooLarge(message: string): RegistryError {
  * Validates an archive entry path and returns its normalized form: relative,
  * forward-slash separated, no `.`/empty/`..` segments, ending in `.proto`.
  */
-function normalizePath(raw: string): string {
+function normalizePath(raw: string, directory = false): string {
   if (raw.includes("\0") || raw.includes("\\")) {
     throw invalid(`Invalid path in archive: ${JSON.stringify(raw)}`);
   }
@@ -51,6 +52,7 @@ function normalizePath(raw: string): string {
     segments.push(segment);
   }
   const path = segments.join("/");
+  if (directory) return path;
   if (!path.endsWith(".proto")) {
     throw invalid(`Only .proto files are allowed: ${raw}`);
   }
@@ -84,6 +86,7 @@ export async function extractArchive(data: Buffer): Promise<ProtoFile[]> {
 
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const found = new Map<string, string>();
+  let totalContent = 0;
 
   await new Promise<void>((resolve, reject) => {
     const gunzip = createGunzip();
@@ -108,7 +111,12 @@ export async function extractArchive(data: Buffer): Promise<ProtoFile[]> {
         return;
       }
       try {
+        // node-tar rewrites backslashes on Windows, so check the raw header name too.
+        if (entry.header.path?.includes("\\")) {
+          throw invalid(`Backslashes are not allowed in paths: ${entry.path}`);
+        }
         if (entry.type === "Directory") {
+          normalizePath(entry.path, true);
           entry.resume();
           return;
         }
@@ -129,8 +137,13 @@ export async function extractArchive(data: Buffer): Promise<ProtoFile[]> {
         let size = 0;
         entry.on("data", (chunk: Buffer) => {
           size += chunk.length;
+          totalContent += chunk.length;
           if (size > LIMITS.fileBytes) {
             fail(tooLarge(`${path} exceeds ${LIMITS.fileBytes} bytes`));
+            return;
+          }
+          if (totalContent > LIMITS.totalBytes) {
+            fail(tooLarge(`Archive content exceeds ${LIMITS.totalBytes} bytes`));
             return;
           }
           chunks.push(chunk);
@@ -147,6 +160,10 @@ export async function extractArchive(data: Buffer): Promise<ProtoFile[]> {
         entry.resume();
         fail(err);
       }
+    });
+    // Pax and GNU long-name records, before node-tar normalizes their paths.
+    parser.on("meta", (raw: string) => {
+      if (raw.includes("\\")) fail(invalid("Backslashes are not allowed in paths"));
     });
     parser.on("warn", (_code: string, message: string | Error) => {
       fail(invalid(typeof message === "string" ? message : message.message));
@@ -187,28 +204,40 @@ function encodeEntry(file: ProtoFile): Buffer[] {
     gname: "",
     mtime: new Date(0),
   });
+  const block = Buffer.alloc(512);
+  // node-tar only sets needPax while encoding.
+  header.encode(block, 0);
   const blocks: Buffer[] = [];
   if (header.needPax) {
     const pax = new Pax(
       { path: file.path, mtime: new Date(0), uid: 0, gid: 0, uname: "", gname: "" },
-      true,
+      false,
     );
     blocks.push(pax.encode());
   }
-  const block = Buffer.alloc(512);
-  header.encode(block, 0);
   blocks.push(block, body, Buffer.alloc((512 - (body.length % 512)) % 512));
   return blocks;
 }
 
 /**
  * Packs files into a deterministic tar.gz: entries sorted by path, mtime 0,
- * fixed ownership and mode, so identical inputs yield identical bytes.
+ * fixed ownership and mode, with the same path validation as extraction.
+ * Identical inputs yield identical bytes on every platform (the gzip OS byte is
+ * pinned); compressed bytes are only guaranteed stable for the same zlib version.
  */
 export async function packArchive(files: ProtoFile[]): Promise<Buffer> {
-  const sorted = [...files].sort((a, b) => compare(a.path, b.path));
-  const blocks = sorted.flatMap(encodeEntry);
+  const seen = new Set<string>();
+  const normalized = files.map((file) => {
+    const path = normalizePath(file.path);
+    if (seen.has(path)) throw invalid(`Duplicate path: ${path}`);
+    seen.add(path);
+    return { path, content: file.content };
+  });
+  normalized.sort((a, b) => compare(a.path, b.path));
+  const blocks = normalized.flatMap(encodeEntry);
   blocks.push(Buffer.alloc(1024));
-  // Node's gzip writes a zero mtime in the header, keeping the output reproducible.
-  return gzipSync(Buffer.concat(blocks), { level: 9 });
+  const out = gzipSync(Buffer.concat(blocks), { level: 9 });
+  // Node writes the host OS id (10 on Windows, 3 on Linux) into byte 9; pin it to "unknown".
+  out[9] = 0xff;
+  return out;
 }
