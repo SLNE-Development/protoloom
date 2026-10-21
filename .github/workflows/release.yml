@@ -1,0 +1,118 @@
+name: Release
+
+# Pushing a tag vX.Y.Z publishes:
+#   - the Docker image ghcr.io/slne-development/protoloom:X.Y.Z and :latest
+#   - the CLI to npm as `protoloom@X.Y.Z`              (secret NPM_TOKEN)
+#   - the Gradle plugin dev.protoloom to https://reposilite.slne.dev/releases/
+#                                                      (secrets SLNE_RELEASES_REPO_USERNAME, SLNE_RELEASES_REPO_PASSWORD)
+# The tag must match the versions in packages/cli/package.json and gradle-plugin/build.gradle.kts.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  versions:
+    name: Check versions against the tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: tag
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Compare
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          cli="$(node -p "require('./packages/cli/package.json').version")"
+          plugin="$(sed -n 's/^version = "\(.*\)"$/\1/p' gradle-plugin/build.gradle.kts)"
+          echo "tag=$VERSION cli=$cli gradle-plugin=$plugin"
+          [ "$cli" = "$VERSION" ] || { echo "packages/cli/package.json has version $cli, tag is $VERSION" >&2; exit 1; }
+          [ "$plugin" = "$VERSION" ] || { echo "gradle-plugin/build.gradle.kts has version $plugin, tag is $VERSION" >&2; exit 1; }
+
+  image:
+    name: Docker image
+    needs: versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/slne-development/protoloom:${{ needs.versions.outputs.version }}
+            ghcr.io/slne-development/protoloom:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/slne-development/protoloom
+            org.opencontainers.image.version=${{ needs.versions.outputs.version }}
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  cli:
+    name: CLI to npm
+    needs: versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    env:
+      TURBO_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build test --filter=./packages/cli
+      # @protoloom/core and zod are bundled into dist by tsup; the published manifest keeps no
+      # (workspace) dependencies and no scripts.
+      - name: Strip development fields
+        working-directory: packages/cli
+        run: |
+          npm pkg delete devDependencies scripts
+          npm pack --dry-run
+      - name: Publish
+        working-directory: packages/cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
+
+  gradle-plugin:
+    name: Gradle plugin to reposilite.slne.dev
+    needs: versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gradle-plugin
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v5
+      - run: ./gradlew test --no-daemon --console=plain
+      - name: Publish
+        env:
+          SLNE_RELEASES_REPO_USERNAME: ${{ secrets.SLNE_RELEASES_REPO_USERNAME }}
+          SLNE_RELEASES_REPO_PASSWORD: ${{ secrets.SLNE_RELEASES_REPO_PASSWORD }}
+        run: ./gradlew publish --no-daemon --console=plain
