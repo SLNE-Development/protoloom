@@ -10,6 +10,7 @@ import { startTestDb } from "@protoloom/db/testing";
 import { createAuth, type Auth, type AuthEnv } from "@/server/auth";
 import type { ServerContext } from "@/server/context";
 import { handle } from "@/server/http";
+import { POST as authRoute } from "../auth/[...all]/route";
 import { POST as resolveRoute } from "./resolve/route";
 import { GET as listRoute } from "./repos/[repo]/artifacts/[group]/[name]/route";
 import {
@@ -467,6 +468,41 @@ describe("unknown repository", () => {
     expect((await manifestRoute(new Request(artifactUrl(hidden)), ctxOf(hidden))).status).toBe(404);
     const visible = await manifestRoute(new Request(artifactUrl(hidden), { headers: headers(keys.reader) }), ctxOf(hidden));
     expect(visible.status).toBe(200);
+  });
+});
+
+describe("Better Auth HTTP surface", () => {
+  const authPost = (path: string, body: object = {}) =>
+    authRoute(
+      new Request(`${BASE}/api/auth${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: BASE },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  it("does not expose admin-plugin or api-key endpoints over HTTP", async () => {
+    expect((await authPost("/admin/set-role", { userId: "x", role: "admin" })).status).toBe(404);
+    expect((await authPost("/admin/create-user", { email: "a@b.c", name: "a" })).status).toBe(404);
+    expect((await authPost("/admin/ban-user", { userId: "x" })).status).toBe(404);
+    expect((await authPost("/api-key/create", { name: "sneaky" })).status).toBe(404);
+    expect((await authPost("/api-key/delete", { keyId: "x" })).status).toBe(404);
+    expect((await authPost("/update-user", { name: "renamed" })).status).toBe(404);
+  });
+
+  it("still serves the endpoints the UI uses", async () => {
+    const signIn = await authPost("/sign-in/social", { provider: "github", callbackURL: "/dashboard" });
+    expect(signIn.status).toBe(200);
+    expect(((await signIn.json()) as { url: string }).url).toContain("github.com");
+    const session = await authRoute(new Request(`${BASE}/api/auth/get-session`));
+    expect(session.status).toBe(200);
+  });
+
+  it("keeps server-side API-key creation and REST key auth working", async () => {
+    const owner = await createUser("maintainer");
+    const created = await auth.api.createApiKey({ body: { userId: owner.id, name: "server-side" } });
+    await db.insert(apiKeyPermission).values({ apiKeyId: created.id, repository: "releases", groupPrefix: null, access: "write" });
+    expect((await publish(money, { token: created.key })).status).toBe(201);
   });
 });
 

@@ -62,12 +62,52 @@ function socialProviders(source: SocialEnv) {
 }
 
 /**
+ * Better Auth endpoints reachable over HTTP (`/api/auth/*`): exactly what the browser UI calls.
+ * Everything else, notably every admin-plugin (`/admin/*`) and api-key (`/api-key/*`) route,
+ * is served only to the app's own server code through `auth.api.*`, behind its tRPC / REST
+ * permission checks, invariants (last admin, key permissions) and audit log.
+ */
+const PUBLIC_AUTH_PATHS = new Set([
+  "/sign-in/social",
+  "/link-social",
+  "/unlink-account",
+  "/list-accounts",
+  "/get-session",
+  "/sign-out",
+  "/error",
+  "/ok",
+]);
+
+/** Whether `path` (relative to `/api/auth`) is an endpoint the UI may call over HTTP. */
+export function isPublicAuthPath(path: string): boolean {
+  if (PUBLIC_AUTH_PATHS.has(path)) return true;
+  // OAuth provider callbacks: /callback/github, /callback/discord.
+  return /^\/callback\/[a-z0-9-]+$/.test(path);
+}
+
+/** Paths of every HTTP endpoint the given plugins add (server-only endpoints have none). */
+function endpointPaths(...plugins: { endpoints?: Record<string, { path?: string }> }[]): string[] {
+  return plugins.flatMap((plugin) =>
+    Object.values(plugin.endpoints ?? {})
+      .map((endpoint) => endpoint.path)
+      .filter((path): path is string => Boolean(path)),
+  );
+}
+
+/**
  * Better Auth options for Protoloom: OAuth only (GitHub, Discord), no email/password, roles
  * `admin | maintainer | viewer` through the admin plugin, API keys without rate limiting (Gradle
  * builds must not be throttled), user creation behind the invite / first-admin gate, and account
- * linking only explicitly through `linkSocial` while signed in.
+ * linking only explicitly through `linkSocial` while signed in. The admin and api-key plugin
+ * routes are disabled over HTTP (`disabledPaths`); the server calls them through `auth.api`.
  */
 export function buildAuthOptions(db: Db, source: AuthEnv = env) {
+  const adminPlugin = admin({
+    roles: { admin: adminAc, maintainer: userAc, viewer: userAc },
+    defaultRole: "viewer",
+    adminRoles: ["admin"],
+  });
+  const apiKeyPlugin = apiKey({ rateLimit: { enabled: false }, enableMetadata: true });
   // Better Auth creates a user and its account in one transaction; the gate claims invites in it.
   const tracked = trackTransactions(db);
   const gate = createUserGate({
@@ -104,15 +144,8 @@ export function buildAuthOptions(db: Db, source: AuthEnv = env) {
         allowUnlinkingAll: false,
       },
     },
-    plugins: [
-      admin({
-        roles: { admin: adminAc, maintainer: userAc, viewer: userAc },
-        defaultRole: "viewer",
-        adminRoles: ["admin"],
-      }),
-      apiKey({ rateLimit: { enabled: false }, enableMetadata: true }),
-      nextCookies(),
-    ],
+    disabledPaths: endpointPaths(adminPlugin, apiKeyPlugin),
+    plugins: [adminPlugin, apiKeyPlugin, nextCookies()],
   } satisfies BetterAuthOptions;
 }
 

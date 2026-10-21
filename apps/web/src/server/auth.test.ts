@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { betterAuth } from "better-auth";
 import { createDb } from "@protoloom/db";
-import { buildAuthOptions, getEnabledSocialProviders, type AuthEnv } from "./auth";
+import { buildAuthOptions, getEnabledSocialProviders, isPublicAuthPath, type AuthEnv } from "./auth";
 
 const base: AuthEnv = {
   BETTER_AUTH_SECRET: "x".repeat(32),
@@ -89,5 +89,42 @@ describe("buildAuthOptions", () => {
     const options = buildAuthOptions(db, { ...base, ...github });
     expect(options.user.validateUserInfo).toBeTypeOf("function");
     expect(options.databaseHooks.user.create.before).toBeTypeOf("function");
+  });
+});
+
+describe("HTTP surface", () => {
+  it("disables every admin-plugin and api-key route in Better Auth itself", async () => {
+    const options = buildAuthOptions(db, { ...base, ...github });
+    expect(options.disabledPaths).toEqual(
+      expect.arrayContaining(["/admin/set-role", "/admin/create-user", "/api-key/create"]),
+    );
+    expect(options.disabledPaths.every((path) => path.startsWith("/admin/") || path.startsWith("/api-key/"))).toBe(true);
+
+    const auth = betterAuth(options);
+    const res = await auth.handler(
+      new Request("http://localhost:3000/api/auth/admin/set-role", {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+        body: JSON.stringify({ userId: "x", role: "admin" }),
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("allows over HTTP only the endpoints the UI calls", () => {
+    const allowed = [
+      "/sign-in/social",
+      "/callback/github",
+      "/callback/discord",
+      "/link-social",
+      "/unlink-account",
+      "/list-accounts",
+      "/get-session",
+      "/sign-out",
+      "/error",
+    ];
+    for (const path of allowed) expect(isPublicAuthPath(path), path).toBe(true);
+    const refused = ["/admin/set-role", "/api-key/create", "/update-user", "/delete-user", "/sign-up/email", "/callback/github/x", "", "/"];
+    for (const path of refused) expect(isPublicAuthPath(path), path).toBe(false);
   });
 });
