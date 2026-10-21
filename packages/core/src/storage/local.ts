@@ -10,8 +10,9 @@ export function createLocalStore(root: string): BlobStore {
   /** Maps a key to an absolute path inside `root`, rejecting anything that could escape it. */
   function pathFor(key: string): string {
     if (key === "" || key.includes("\0")) throw new Error("Invalid storage key: must be non-empty");
-    if (key.includes("..")) {
-      throw new Error(`Invalid storage key "${key}": must not contain ".."`);
+    // Only a whole ".." segment can climb out; names like "foo..bar" are fine.
+    if (key.split(/[/\\]/).includes("..")) {
+      throw new Error(`Invalid storage key "${key}": must not contain ".." segments`);
     }
     if (isAbsolute(key) || key.startsWith("/") || key.startsWith("\\")) {
       throw new Error(`Invalid storage key "${key}": must be relative`);

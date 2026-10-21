@@ -134,6 +134,16 @@ describe("registry", () => {
     ]);
   });
 
+  it("publishes and downloads a name containing '..' on local storage", async () => {
+    await registry.publish(maintainer, {
+      repository: "releases",
+      manifest: manifest("acme", "foo..bar", "1.0.0"),
+      archive: await packArchive(moneyFiles),
+    });
+    const downloaded = await registry.download(maintainer, "releases", coord("acme", "foo..bar", "1.0.0"));
+    expect(downloaded.filename).toBe("foo..bar-1.0.0.tar.gz");
+  });
+
   it("records the publishing key and user on the build", async () => {
     await publishMoney();
     const [row] = await testDb.db.select().from(build);

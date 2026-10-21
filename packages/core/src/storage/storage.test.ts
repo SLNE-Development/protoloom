@@ -72,6 +72,22 @@ describe("local store specifics", () => {
       await expect(store.put("../x", Buffer.from("a"))).rejects.toThrow(/\.\./);
       await expect(store.get("../x")).rejects.toThrow(/\.\./);
       await expect(store.delete("a/../../x")).rejects.toThrow(/\.\./);
+      await expect(store.get("a\\..\\..\\x")).rejects.toThrow(/\.\./);
+      await expect(store.get("a/..")).rejects.toThrow(/\.\./);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts '..' inside a path segment, as in the artifact name foo..bar", async () => {
+    const root = await mkdtemp(join(tmpdir(), "protoloom-blob-"));
+    try {
+      const store = createLocalStore(root);
+      const key = "releases/acme/foo..bar/1.0.0-rc..1/archive.tar.gz";
+      await store.put(key, Buffer.from("a"));
+      expect(await store.get(key)).toEqual(Buffer.from("a"));
+      await store.delete(key);
+      expect(await store.get(key)).toBeNull();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
