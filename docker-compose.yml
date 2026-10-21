@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: protoloom
+      POSTGRES_PASSWORD: protoloom
+      POSTGRES_DB: protoloom
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U protoloom -d protoloom"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  # S3-compatible object storage for development (MinIO no longer publishes images).
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.48
+    command: server -s3 -s3.port=9000 -dir=/data
+    ports:
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - seaweedfs-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9333/cluster/status"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  seaweedfs-init:
+    image: chrislusf/seaweedfs:4.48
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c", "echo 's3.bucket.create -name protoloom' | weed shell -master=seaweedfs:9333"]
+    restart: "no"
+
+volumes:
+  postgres-data:
+  seaweedfs-data:
