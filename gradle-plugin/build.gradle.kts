@@ -38,15 +38,11 @@ gradlePlugin {
 
 publishing {
     repositories {
-        val publishUrl = providers.environmentVariable("PUBLISH_URL")
-        if (publishUrl.isPresent) {
-            maven {
-                name = "protoloom"
-                url = uri(publishUrl.get())
-                credentials {
-                    username = providers.environmentVariable("PUBLISH_USERNAME").orNull
-                    password = providers.environmentVariable("PUBLISH_PASSWORD").orNull
-                }
+        maven("https://reposilite.slne.dev/releases/") {
+            name = "slne-repository-releases"
+            credentials {
+                username = System.getenv("SLNE_RELEASES_REPO_USERNAME")
+                password = System.getenv("SLNE_RELEASES_REPO_PASSWORD")
             }
         }
     }
