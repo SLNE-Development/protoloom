@@ -148,7 +148,8 @@ export async function getManifest(
     sizeBytes: latest.sizeBytes,
     dependencies,
     files: files.map((f) => f.path),
-    publishedBy: publisher[0]?.name ?? latest.publishedByUserId,
+    // A deleted publisher shows as null, never as a raw user id.
+    publishedBy: publisher[0]?.name ?? null,
     downloadCount: latest.downloadCount,
     createdAt: latest.createdAt,
     builds,

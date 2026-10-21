@@ -122,7 +122,8 @@ describe("registry", () => {
     expect(info.files).toEqual(["acme/order/v1/order.proto"]);
     expect(info.dependencies).toEqual([coord("acme", "money", "1.0.0")]);
     expect(info.buildNumber).toBe(1);
-    expect(info.publishedBy).toBe("user-maintainer");
+    // The fixture principal has no user row, as after the publisher was deleted: no raw id leaks.
+    expect(info.publishedBy).toBeNull();
     expect(info.builds).toHaveLength(1);
 
     const file = await registry.getFile(maintainer, "releases", coord("acme", "order", "1.0.0"), "acme/order/v1/order.proto");
