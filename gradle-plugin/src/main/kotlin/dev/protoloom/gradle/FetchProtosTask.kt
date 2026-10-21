@@ -28,8 +28,10 @@ import javax.inject.Inject
  * Builds one merged proto root from the `protoloom` dependencies: the `.proto` files of local
  * modules are copied as they are, and the remote dependencies (this module's own plus those of all
  * local modules) are resolved on the server in one `/resolve` call and extracted next to them.
- * A resolved artifact with the `group:name` of a local module's publishing coordinate is replaced
- * by that module and never downloaded. Archives are cached by checksum, so releases download once
+ * A local module with a publishing block stands in for its `group:name`: roots with that
+ * `group:name` are not sent, `/resolve` is told to exclude it (so the server neither returns it nor
+ * resolves its dependencies), and an artifact with it that still comes back is dropped before
+ * downloading. Archives are cached by checksum, so releases download once
  * while snapshots are re-checked on every run through `/resolve`.
  */
 @DisableCachingByDefault(because = "Always re-resolves against the registry; archives are cached by checksum instead")
@@ -94,12 +96,14 @@ abstract class FetchProtosTask : DefaultTask() {
             val manifest = readLocalManifest(file)
             LocalModule(manifestProjects[file.absolutePath] ?: file.path, manifest.coordinate) to manifest
         }
-        val roots = (dependencies.get() + manifests.flatMap { it.second.external }).distinct()
+        val localModules = manifests.map { it.first }
+        val plan = resolvePlan((dependencies.get() + manifests.flatMap { it.second.external }).distinct(), localModules)
+        plan.substitutions.forEach { (project, coordinate) -> logSubstitution(project, coordinate) }
         val origins = localSourceProjects.get()
         val local = localSources.files.sorted().filter { it.isDirectory }.map { dir ->
             Origin(origins[dir.absolutePath]?.let { "project $it" } ?: dir.path, protoFiles(dir))
         }
-        val remote = if (roots.isEmpty()) emptyList() else fetchRemote(roots, manifests.map { it.first })
+        val remote = if (plan.roots.isEmpty()) emptyList() else fetchRemote(plan, localModules)
 
         val sources = local + remote
         checkForCollisions(sources)
@@ -111,19 +115,24 @@ abstract class FetchProtosTask : DefaultTask() {
         outputDir.get().asFile.mkdirs()
     }
 
-    private fun fetchRemote(roots: List<String>, localModules: List<LocalModule>): List<Origin> {
+    private fun fetchRemote(plan: ResolvePlan, localModules: List<LocalModule>): List<Origin> {
         val repos = repositories.get()
         if (repos.isEmpty()) {
             throw GradleException("protoloom.repositories is empty. Add the repositories to resolve from, for example repositories(\"releases\").")
         }
         val client = protoloomClient(url.orNull, token.orNull)
-        val resolution = client.resolve(repos, roots)
+        val resolution = client.resolve(repos, plan.roots, plan.exclude)
         resolution.conflicts.forEach { logger.lifecycle("Protoloom resolved a version conflict: $it") }
+        // Backstop for a server that ignores `exclude`.
         val substituted = substituteLocalModules(resolution.artifacts, localModules)
-        substituted.substitutions.forEach { logger.info("Using project {} instead of {}", it.project, it.artifact.coordinate) }
+        substituted.substitutions.forEach { logSubstitution(it.project, it.artifact.coordinate) }
         return substituted.remote.map { artifact ->
             Origin(artifact.coordinate, archiveOperations.tarTree(archiveOperations.gzip(cachedArchive(client, artifact))))
         }
+    }
+
+    private fun logSubstitution(project: String, coordinate: String) {
+        logger.info("Using project {} instead of {}", project, coordinate)
     }
 
     /** The `.proto` files of a local module's source directory, the same set `packProtos` would publish. */
@@ -177,17 +186,50 @@ internal class Substitution(val project: String, val artifact: ResolvedArtifact)
 internal class SubstitutionResult(val remote: List<ResolvedArtifact>, val substitutions: List<Substitution>)
 
 /**
- * Replaces every resolved artifact whose `group:name` is the publishing coordinate of a local
- * module, regardless of version, the way Gradle substitutes included builds. Local modules without
- * a coordinate replace nothing.
+ * What to send to `/resolve`: the [roots] no local module provides, the `group:name` keys to
+ * [exclude], and the roots a local module provides as (project, coordinate) [substitutions].
+ */
+internal class ResolvePlan(val roots: List<String>, val exclude: List<String>, val substitutions: List<Pair<String, String>>)
+
+/**
+ * `group:name` -> project path for every local module with a publishing coordinate. Fails when two
+ * local modules publish the same `group:name`, since it would be ambiguous which one stands in.
+ */
+internal fun localCoordinates(localModules: List<LocalModule>): Map<String, String> {
+    val projects = mutableMapOf<String, String>()
+    localModules.forEach { module ->
+        val key = module.coordinate?.substringBeforeLast(':') ?: return@forEach
+        val previous = projects.put(key, module.project)
+        if (previous != null && previous != module.project) {
+            val (first, second) = listOf(previous, module.project).sorted()
+            throw GradleException(
+                "Projects $first and $second both publish $key; give each local module its own protoloom.publishing group and name.",
+            )
+        }
+    }
+    return projects
+}
+
+/** Splits [roots] into those to resolve and those a local module provides, and lists the keys to exclude. */
+internal fun resolvePlan(roots: List<String>, localModules: List<LocalModule>): ResolvePlan {
+    val local = localCoordinates(localModules)
+    val (provided, remaining) = roots.partition { it.substringBeforeLast(':') in local }
+    return ResolvePlan(
+        roots = remaining,
+        exclude = local.keys.sorted(),
+        substitutions = provided.map { local.getValue(it.substringBeforeLast(':')) to it },
+    )
+}
+
+/**
+ * Drops every resolved artifact whose `group:name` is a local module's (any version) and records
+ * which project replaces it. Local modules without a coordinate replace nothing.
  */
 internal fun substituteLocalModules(artifacts: List<ResolvedArtifact>, localModules: List<LocalModule>): SubstitutionResult {
-    val projectsByModule = localModules
-        .mapNotNull { module -> module.coordinate?.let { it.substringBeforeLast(':') to module.project } }
-        .toMap()
+    val local = localCoordinates(localModules)
     val substitutions = mutableListOf<Substitution>()
     val remote = artifacts.filter { artifact ->
-        val project = projectsByModule["${artifact.group}:${artifact.name}"]
+        val project = local["${artifact.group}:${artifact.name}"]
         if (project != null) substitutions += Substitution(project, artifact)
         project == null
     }

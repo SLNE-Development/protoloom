@@ -2,6 +2,10 @@ package dev.protoloom.gradle
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
@@ -27,7 +31,9 @@ internal class CapturedRequest(
 
 /**
  * A minimal stand-in for the Protoloom REST API that records what the plugin sends. `/resolve`
- * always answers with [coordinate], whose archive holds [files], followed by [extraArtifacts].
+ * answers with [coordinate], whose archive holds [files], and [extraArtifacts], minus the
+ * `group:name` keys in the request's `exclude` and whatever is reachable only through them via
+ * [artifactDependencies] (unless [ignoreExclude] is set, to mimic an older server).
  */
 internal class RegistryStub : AutoCloseable {
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -41,6 +47,11 @@ internal class RegistryStub : AutoCloseable {
 
     /** Further artifacts `/resolve` returns, coordinate → archive contents. */
     @Volatile var extraArtifacts: Map<String, Map<String, String>> = emptyMap()
+
+    /** Dependency edges between the served artifacts, coordinate -> coordinates it depends on. */
+    @Volatile var artifactDependencies: Map<String, List<String>> = emptyMap()
+
+    @Volatile var ignoreExclude = false
 
     /** Origin written into `archiveUrl`; defaults to this stub's own [url]. */
     @Volatile var archiveOrigin: String? = null
@@ -58,9 +69,15 @@ internal class RegistryStub : AutoCloseable {
     init {
         server.createContext("/api/v1/resolve") { exchange ->
             authorizations += exchange.requestHeaders.getFirst("Authorization")
-            resolveBodies += exchange.requestBody.readBytes().toString(Charsets.UTF_8)
+            val request = exchange.requestBody.readBytes().toString(Charsets.UTF_8)
+            resolveBodies += request
+            val exclude = if (ignoreExclude) {
+                emptySet()
+            } else {
+                Json.parseToJsonElement(request).jsonObject["exclude"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty().toSet()
+            }
             val origin = archiveOrigin ?: url
-            val artifacts = artifacts().entries.joinToString(",") { (coordinate, files) ->
+            val artifacts = resolved(exclude).joinToString(",") { (coordinate, files) ->
                 val (group, name, version) = coordinate.split(":")
                 """
                 {"repository":"releases","coordinate":"$coordinate","group":"$group",
@@ -105,6 +122,20 @@ internal class RegistryStub : AutoCloseable {
     }
 
     private fun artifacts(): Map<String, Map<String, String>> = mapOf(coordinate to files) + extraArtifacts
+
+    /** Artifacts reachable from those nothing depends on, never entering an excluded `group:name`. */
+    private fun resolved(exclude: Set<String>): List<Pair<String, Map<String, String>>> {
+        val all = artifacts()
+        val dependedOn = artifactDependencies.values.flatten().toSet()
+        val reached = linkedSetOf<String>()
+        val pending = ArrayDeque(all.keys.filter { it !in dependedOn })
+        while (pending.isNotEmpty()) {
+            val next = pending.removeFirst()
+            if (next.substringBeforeLast(':') in exclude || !reached.add(next)) continue
+            pending.addAll(artifactDependencies[next].orEmpty())
+        }
+        return reached.filter { it in all }.map { it to all.getValue(it) }
+    }
 
     override fun close() = server.stop(0)
 }

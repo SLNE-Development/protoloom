@@ -23,9 +23,17 @@ import java.security.MessageDigest
 import java.time.Duration
 import java.util.UUID
 
-/** Body of `POST /api/v1/resolve`. */
+/**
+ * Body of `POST /api/v1/resolve`. [exclude] lists `group:name` keys the build provides itself: the
+ * server does not look them up, does not resolve their dependencies, and never returns them.
+ * An empty list is left out of the JSON.
+ */
 @Serializable
-internal data class ResolveRequest(val repositories: List<String>, val dependencies: List<String>)
+internal data class ResolveRequest(
+    val repositories: List<String>,
+    val dependencies: List<String>,
+    val exclude: List<String> = emptyList(),
+)
 
 /** One artifact of a resolution, with the absolute URL of its archive. */
 @Serializable
@@ -69,9 +77,12 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
         .followRedirects(HttpClient.Redirect.NORMAL)
         .build()
 
-    /** Resolves [dependencies] (`g:n:v`) and their transitive dependencies across [repositories]. */
-    fun resolve(repositories: List<String>, dependencies: List<String>): ResolveResponse {
-        val body = json.encodeToString(ResolveRequest.serializer(), ResolveRequest(repositories, dependencies))
+    /**
+     * Resolves [dependencies] (`g:n:v`) and their transitive dependencies across [repositories],
+     * leaving out the `group:name` keys in [exclude] and the dependencies reached only through them.
+     */
+    fun resolve(repositories: List<String>, dependencies: List<String>, exclude: List<String> = emptyList()): ResolveResponse {
+        val body = json.encodeToString(ResolveRequest.serializer(), ResolveRequest(repositories, dependencies, exclude))
         val request = request(URI.create("$baseUrl/api/v1/resolve"))
             .header("Content-Type", "application/json")
             .POST(HttpRequest.BodyPublishers.ofString(body))

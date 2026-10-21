@@ -49,6 +49,37 @@ class CoordinatesTest {
         assertEquals(emptyList(), result.substitutions)
     }
 
+    @Test
+    fun `a root equal to a local module's coordinate is not resolved and its group and name are excluded`() {
+        val modules = listOf(LocalModule(":contracts", "dev.example:contracts:1.0.0"), LocalModule(":api", null))
+
+        val plan = resolvePlan(listOf("dev.example:x:1.0.0", "dev.example:contracts:1.0.0"), modules)
+
+        assertEquals(listOf("dev.example:x:1.0.0"), plan.roots)
+        assertEquals(listOf("dev.example:contracts"), plan.exclude)
+        assertEquals(listOf(":contracts" to "dev.example:contracts:1.0.0"), plan.substitutions)
+    }
+
+    @Test
+    fun `a root with a local module's group and name but another version is provided by the module too`() {
+        val plan = resolvePlan(listOf("dev.example:contracts:0.9.0"), listOf(LocalModule(":contracts", "dev.example:contracts:1.0.0")))
+
+        assertEquals(emptyList(), plan.roots)
+        assertEquals(listOf(":contracts" to "dev.example:contracts:0.9.0"), plan.substitutions)
+    }
+
+    @Test
+    fun `two local modules with the same group and name fail naming both projects`() {
+        val modules = listOf(LocalModule(":a", "dev.example:contracts:1.0.0"), LocalModule(":b", "dev.example:contracts:2.0.0"))
+
+        val duplicate = assertThrows<GradleException> { resolvePlan(emptyList(), modules) }
+
+        assertEquals(
+            "Projects :a and :b both publish dev.example:contracts; give each local module its own protoloom.publishing group and name.",
+            duplicate.message,
+        )
+    }
+
     private fun artifact(group: String, name: String, version: String) = ResolvedArtifact(
         repository = "releases",
         coordinate = "$group:$name:$version",
