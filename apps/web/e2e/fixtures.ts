@@ -1,7 +1,10 @@
 import { fileURLToPath } from "node:url";
 
-/** Port of the Next.js server the e2e tests run against (not 3000, so a dev server can keep running). */
-export const PORT = 3100;
+/**
+ * Port of the Next.js server the e2e tests run against: 3100 (not 3000, so a dev server can keep
+ * running), or `E2E_PORT` to run several checkouts' e2e suites side by side.
+ */
+export const PORT = Number(process.env.E2E_PORT || 3100);
 
 export const BASE_URL = `http://localhost:${PORT}`;
 

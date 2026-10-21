@@ -1,13 +1,11 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import { redirect } from "next/navigation";
 import { Avatar, AvatarFallback, AvatarImage } from "@protoloom/ui/components/avatar";
 import { Badge } from "@protoloom/ui/components/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@protoloom/ui/components/card";
-import { loginPath } from "@/lib/access";
 import { getEnabledSocialProviders } from "@/server/auth";
 import { getServerContext } from "@/server/context";
-import { getAppSession } from "@/server/session";
+import { requireRole } from "@/server/session";
 import { ConnectedAccounts } from "./connected-accounts";
 
 export const metadata: Metadata = { title: "Account · Protoloom" };
@@ -22,8 +20,7 @@ export default async function AccountPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const { user } = await getAppSession();
-  if (!user) redirect(loginPath("/account"));
+  const { user } = await requireRole("viewer", "/account");
   const [accounts, params] = await Promise.all([
     getServerContext().auth.api.listUserAccounts({ headers: await headers() }),
     searchParams,

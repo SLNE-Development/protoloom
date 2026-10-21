@@ -52,18 +52,20 @@ function SearchButton() {
     setMac(/Mac|iPhone|iPad/.test(navigator.userAgent));
   }, []);
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
+      size="sm"
       onClick={() => setOpen(true)}
-      className="flex h-8 w-full items-center gap-2 rounded-md border border-sidebar-border bg-sidebar-accent/40 px-2 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none"
+      className="w-full justify-start border-sidebar-border bg-sidebar-accent/40 px-2 font-normal text-muted-foreground shadow-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground dark:border-sidebar-border dark:bg-sidebar-accent/40 dark:hover:bg-sidebar-accent"
     >
-      <SearchIcon className="size-4" />
+      <SearchIcon />
       <span className="flex-1 text-left">Search…</span>
       <KbdGroup>
         <Kbd className="bg-sidebar-accent text-sidebar-foreground">{mac ? "⌘" : "Ctrl"}</Kbd>
         <Kbd className="bg-sidebar-accent text-sidebar-foreground">K</Kbd>
       </KbdGroup>
-    </button>
+    </Button>
   );
 }
 
