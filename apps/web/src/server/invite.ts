@@ -34,6 +34,17 @@ function sign(payload: string, secret: string): string {
 }
 
 /**
+ * The signed invite cookie value for `token`, `<token>.<expiresAtMs>.<hmac>`, valid for
+ * {@link INVITE_COOKIE_MAX_AGE_SECONDS}. For cookie stores that take name, value and attributes
+ * separately (Next.js `cookies().set`); set it with the attributes {@link serializeInviteCookie} uses.
+ */
+export function inviteCookieValue(token: string, opts: { secret: string; now?: Date }): string {
+  const expiresAt = (opts.now ?? new Date()).getTime() + INVITE_COOKIE_MAX_AGE_SECONDS * 1000;
+  const payload = `${token}.${expiresAt}`;
+  return `${payload}.${sign(payload, opts.secret)}`;
+}
+
+/**
  * `Set-Cookie` header value that binds `token` to the browser for the coming OAuth sign-in:
  * `<token>.<expiresAtMs>.<hmac>`, httpOnly, `SameSite=Lax` (the provider's redirect back is a
  * top-level GET), and `Secure` when the app runs on https.
@@ -42,11 +53,8 @@ export function serializeInviteCookie(
   token: string,
   opts: { secret: string; secure: boolean; now?: Date },
 ): string {
-  const expiresAt = (opts.now ?? new Date()).getTime() + INVITE_COOKIE_MAX_AGE_SECONDS * 1000;
-  const payload = `${token}.${expiresAt}`;
-  const value = `${payload}.${sign(payload, opts.secret)}`;
   return [
-    `${INVITE_COOKIE}=${value}`,
+    `${INVITE_COOKIE}=${inviteCookieValue(token, opts)}`,
     "Path=/",
     `Max-Age=${INVITE_COOKIE_MAX_AGE_SECONDS}`,
     "HttpOnly",
