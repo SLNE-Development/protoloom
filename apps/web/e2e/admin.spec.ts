@@ -62,7 +62,7 @@ test.describe("invites", () => {
     await dialog.getByLabel("Note").fill("Invite from the admin spec");
     await dialog.getByRole("button", { name: "Create invite" }).click();
 
-    const link = dialog.getByLabel("Invite link");
+    const link = dialog.getByRole("textbox", { name: "Invite link" });
     await expect(link).toHaveValue(new RegExp(`^${BASE_URL}/invite/[A-Za-z0-9_-]+$`));
     await expect(dialog.getByText("won't be shown again")).toBeVisible();
     const url = await link.inputValue();
@@ -97,7 +97,7 @@ test.describe("invites", () => {
     const dialog = page.getByRole("dialog");
     await dialog.getByLabel("Note").fill("Invite to revoke");
     await dialog.getByRole("button", { name: "Create invite" }).click();
-    const url = await dialog.getByLabel("Invite link").inputValue();
+    const url = await dialog.getByRole("textbox", { name: "Invite link" }).inputValue();
     await dialog.getByRole("button", { name: "Done" }).click();
 
     const row = page.getByRole("row", { name: /Invite to revoke/ });
@@ -149,6 +149,7 @@ test.describe("users", () => {
 
     await row.getByRole("button", { name: "Remove" }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Remove user" }).click();
+    await expect(page.getByText("User removed")).toBeVisible();
     await expect(page.getByRole("row", { name: new RegExp(TEMP_USER.email) })).toHaveCount(0);
   });
 });
