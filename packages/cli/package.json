@@ -1,0 +1,25 @@
+{
+  "name": "protoloom",
+  "version": "0.0.0",
+  "description": "CLI for fetching .proto dependencies from a Protoloom registry",
+  "type": "module",
+  "bin": { "protoloom": "dist/index.js" },
+  "files": ["dist"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@protoloom/config": "workspace:*",
+    "@protoloom/core": "workspace:*",
+    "@types/node": "26.6.5",
+    "eslint": "10.13.0",
+    "tsup": "9.0.0",
+    "typescript": "6.0.3",
+    "vitest": "5.0.5",
+    "zod": "4.6.7"
+  }
+}
