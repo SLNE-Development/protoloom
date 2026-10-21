@@ -13,3 +13,5 @@ coverage/
 .idea/
 .DS_Store
 .claude/worktrees/
+# Chromium (Playwright) crashpad logs
+debug.log
