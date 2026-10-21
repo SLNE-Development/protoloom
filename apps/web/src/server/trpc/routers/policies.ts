@@ -1,11 +1,11 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { planCleanup } from "@protoloom/core";
+import { isValidGroup, planCleanup, recordAudit } from "@protoloom/core";
 import { cleanupPolicy } from "@protoloom/db";
 import { enqueueCleanup, getJobState, type CleanupJobStatus } from "@protoloom/jobs";
 import { adminProcedure, router, type TrpcContext } from "../init";
-import { audited, coordinateText, groupPrefix, notFound, repositoryName, requireRepository } from "../helpers";
+import { audited, coordinateText, notFound, repositoryName, requireRepository } from "../helpers";
 
 /** A cleanup rule of a repository. */
 export interface CleanupPolicy {
@@ -37,15 +37,20 @@ const policyColumns = {
   createdAt: cleanupPolicy.createdAt,
 };
 
+/**
+ * Without `id` it creates a policy: `kind` and `value` are required, and the rest default to
+ * `includeReleases: false`, `groupPrefix: null`, `enabled: true`. With `id` it is a partial
+ * update: omitted fields keep their stored values.
+ */
 const policyInput = z.object({
   repository: repositoryName,
   /** Present to update an existing policy of the repository; omitted to create one. */
   id: z.uuid().optional(),
-  kind: z.enum(["keep_last_snapshot_builds", "delete_stale_snapshots", "delete_not_downloaded"]),
-  value: z.number().int().min(1).max(36_500),
-  includeReleases: z.boolean().default(false),
-  groupPrefix,
-  enabled: z.boolean().default(true),
+  kind: z.enum(["keep_last_snapshot_builds", "delete_stale_snapshots", "delete_not_downloaded"]).optional(),
+  value: z.number().int().min(1).max(36_500).optional(),
+  includeReleases: z.boolean().optional(),
+  groupPrefix: z.string().refine(isValidGroup, "Invalid group prefix").nullable().optional(),
+  enabled: z.boolean().optional(),
 });
 
 function requireQueue(ctx: TrpcContext) {
@@ -69,7 +74,9 @@ export const policiesRouter = router({
 
   /** Creates a policy, or updates the one with `id`; `NOT_FOUND` when `id` is not a policy of the repository. */
   upsert: adminProcedure.input(policyInput).mutation(async ({ ctx, input }): Promise<CleanupPolicy> => {
-    const { repository: repoName, id, ...fields } = input;
+    const { repository: repoName, id, ...given } = input;
+    // Only the fields the caller sent; on update the others keep their stored values.
+    const fields = Object.fromEntries(Object.entries(given).filter(([, value]) => value !== undefined)) as typeof given;
     return audited(
       ctx.db,
       (policy: CleanupPolicy) => ({
@@ -81,13 +88,22 @@ export const policiesRouter = router({
       async (tx) => {
         const repo = await requireRepository(tx, repoName);
         if (!id) {
-          return (await tx.insert(cleanupPolicy).values({ ...fields, repositoryId: repo.id }).returning(policyColumns))[0]!;
+          const { kind, value } = fields;
+          if (kind === undefined || value === undefined) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "A new cleanup policy needs a kind and a value" });
+          }
+          return (
+            await tx
+              .insert(cleanupPolicy)
+              .values({ ...fields, kind, value, repositoryId: repo.id })
+              .returning(policyColumns)
+          )[0]!;
         }
-        const [updated] = await tx
-          .update(cleanupPolicy)
-          .set(fields)
-          .where(and(eq(cleanupPolicy.id, id), eq(cleanupPolicy.repositoryId, repo.id)))
-          .returning(policyColumns);
+        const matches = and(eq(cleanupPolicy.id, id), eq(cleanupPolicy.repositoryId, repo.id));
+        const [updated] =
+          Object.keys(fields).length === 0
+            ? await tx.select(policyColumns).from(cleanupPolicy).where(matches)
+            : await tx.update(cleanupPolicy).set(fields).where(matches).returning(policyColumns);
         if (!updated) throw notFound(`Cleanup policy ${id} was not found in ${repoName}`);
         return updated;
       },
@@ -117,6 +133,9 @@ export const policiesRouter = router({
   runNow: adminProcedure.input(z.object({ repository: repositoryName })).mutation(async ({ ctx, input }) => {
     await requireRepository(ctx.db, input.repository);
     const jobId = await enqueueCleanup(requireQueue(ctx), input.repository);
+    await ctx.db.transaction((tx) =>
+      recordAudit(tx, { actor: ctx.principal, action: "policy.runNow", target: input.repository, details: { jobId } }),
+    );
     return { jobId };
   }),
 

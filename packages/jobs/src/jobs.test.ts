@@ -5,6 +5,7 @@ import {
   createQueue,
   enqueueCleanup,
   getJobState,
+  manualCleanupJobId,
   redisConnection,
   scheduleDailyCleanup,
   type CleanupQueue,
@@ -42,6 +43,20 @@ describe("jobs", () => {
     expect(job?.data).toEqual({ kind: "cleanup:repo", repository: "releases" });
     expect(job?.opts.attempts).toBe(3);
     expect(job?.opts.backoff).toMatchObject({ type: "exponential" });
+  });
+
+  it("maps repeated manual runs within one minute to a single job", async () => {
+    const now = new Date("2026-10-21T12:00:10Z");
+    const first = await enqueueCleanup(queue, "releases", { now });
+    const retry = await enqueueCleanup(queue, "releases", { now: new Date("2026-10-21T12:00:50Z") });
+    expect(retry).toBe(first);
+    expect(first).toBe(manualCleanupJobId("releases", now));
+    expect(first).not.toContain(":");
+    expect(await queue.getJobCounts("waiting")).toEqual({ waiting: 1 });
+
+    const other = await enqueueCleanup(queue, "snapshots", { now });
+    const later = await enqueueCleanup(queue, "releases", { now: new Date("2026-10-21T12:01:00Z") });
+    expect(new Set([first, other, later]).size).toBe(3);
   });
 
   it("reports unknown for a job id that does not exist", async () => {

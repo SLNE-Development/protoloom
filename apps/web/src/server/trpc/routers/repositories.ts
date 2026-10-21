@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { asc, count, countDistinct, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { artifact, cleanupPolicy, repository, version, type Db } from "@protoloom/db";
+import { apiKeyPermission, artifact, cleanupPolicy, repository, version, type Db } from "@protoloom/db";
 import { adminProcedure, router } from "../init";
 import { audited, repositoryName, requireRepository, type RepositoryRow } from "../helpers";
 
@@ -123,6 +123,8 @@ export const repositoriesRouter = router({
         });
       }
       await tx.delete(repository).where(eq(repository.id, repo.id));
+      // Key scopes name repositories by name; a later repository with the same name must not inherit them.
+      await tx.delete(apiKeyPermission).where(eq(apiKeyPermission.repository, repo.name));
     });
     return { name: input.name };
   }),
