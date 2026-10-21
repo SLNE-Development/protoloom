@@ -1,0 +1,1 @@
+ALTER TABLE "invite" ADD CONSTRAINT "invite_role_check" CHECK ("invite"."role" in ('admin', 'maintainer', 'viewer'));

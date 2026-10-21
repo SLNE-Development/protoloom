@@ -1,6 +1,5 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ProtoFile } from "./archive.js";
@@ -13,7 +12,11 @@ export interface ValidationIssue {
   message: string;
 }
 
-const require = createRequire(import.meta.url);
+// Obtained at runtime rather than imported: bundlers (Next.js/Turbopack) rewrite
+// `createRequire(import.meta.url).resolve("...")` into internal module ids, which breaks
+// locating the buf binary on disk.
+const { createRequire } = process.getBuiltinModule("node:module");
+const runtimeRequire = createRequire(import.meta.url);
 
 const PLATFORM_PACKAGES: Record<string, string> = {
   "win32 arm64": "@bufbuild/buf-win32-arm64",
@@ -36,7 +39,7 @@ function resolveBufBinary(): string {
   const key = `${process.platform} ${process.arch}`;
   const pkg = PLATFORM_PACKAGES[key];
   if (!pkg) throw new Error(`buf is not available for platform ${key}`);
-  const bufRequire = createRequire(require.resolve("@bufbuild/buf/package.json"));
+  const bufRequire = createRequire(runtimeRequire.resolve("@bufbuild/buf/package.json"));
   const pkgDir = dirname(bufRequire.resolve(`${pkg}/package.json`));
   cachedBufBinary = join(pkgDir, "bin", process.platform === "win32" ? "buf.exe" : "buf");
   return cachedBufBinary;
@@ -57,8 +60,11 @@ interface BufResult {
 
 function runBuf(cwd: string, args: string[]): Promise<BufResult> {
   return new Promise((resolve, reject) => {
+    // The binary path is only known at runtime; tell bundlers (Next.js/Turbopack) not to trace it,
+    // otherwise they pull the whole project into the deployment. Apps ship the buf platform
+    // package explicitly (see apps/web next.config.ts `outputFileTracingIncludes`).
     execFile(
-      resolveBufBinary(),
+      /* turbopackIgnore: true */ resolveBufBinary(),
       args,
       { cwd, maxBuffer: 16 * 1024 * 1024, windowsHide: true },
       (error, stdout, stderr) => {
