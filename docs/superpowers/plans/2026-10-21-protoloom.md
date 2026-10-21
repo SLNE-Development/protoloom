@@ -18,6 +18,7 @@
 - Env vars (clients): `PROTOLOOM_URL`, `PROTOLOOM_TOKEN`.
 - Gradle output root: `build/protoloom/protos/`. CLI config file: `protoloom.json`, default `outDir` `./protos`.
 - Roles: `admin`, `maintainer`, `viewer`.
+- **Public URL (decided by the user):** `BETTER_AUTH_URL` is the public **https** base URL (for example `https://protos.example.com`). It's used for Better Auth (base URL, trusted origin, OAuth callbacks, secure cookies) and for every absolute URL the app produces (`archiveUrl`, invite links, usage snippets). It is **never** derived from the request host or from a deployment platform's service URL. Behind Coolify with Cloudflare Tunnels, the platform's service URL is plain http and only used for routing.
 - **Login is OAuth only (decided by the user):** GitHub and Discord. No email/password at all. At least one provider must be configured, or the app refuses to start.
 - **User provisioning (decided by the user): invite links.** An admin creates an invite (role, expiry in days, optional note), which yields a one-time link `/invite/<token>` (the token is stored hashed). Opening it and signing in with GitHub or Discord creates the account with that role and consumes the invite. All user creation goes through one server-side gate (Better Auth `databaseHooks.user.create.before`, or the installed version's equivalent) that refuses unless there's a valid, unexpired, unused invite bound to this sign-in attempt, or the first-admin rule applies. Signing in with an unknown provider account and no invite shows "You need an invite to join this Protoloom."
 - **First admin (decided by the user):** `INITIAL_ADMIN=github:<login>` or `discord:<user id>`. While no admin exists, a sign-in with exactly that provider account may create the user, who gets the role `admin`. For GitHub, match the login case-insensitively from the provider profile; for Discord, match the numeric user id. Once an admin exists, the rule is inert.
@@ -645,8 +646,18 @@ The user offered BullMQ and Valkey; the controller ruled to use them for cleanup
 ### Task 20: Docker image and end-to-end smoke test
 
 **Files:**
-- Create: `docker/Dockerfile` (multi-stage: `node:22-bookworm-slim` with pnpm via corepack, `turbo prune web --docker`, install, build; the runtime copies the Next standalone output, `.next/static`, `public`, the `@bufbuild/buf` binary package, the `packages/db/drizzle` migrations and a compiled `migrate` script; runs as a non-root user; `EXPOSE 3000`; `HEALTHCHECK` on `/api/health`), `docker/entrypoint.sh`, `apps/web/src/app/api/health/route.ts` (returns `{ ok: true }` after a `select 1`), `docker-compose.prod.yml` (app + worker (same image, command `node apps/worker/dist/index.js`) + postgres + valkey, with commented S3 env vars), `scripts/e2e-smoke.sh`, `README.md` (run, configure, Gradle/CLI usage)
+- Create: `docker/Dockerfile` (multi-stage: `node:22-bookworm-slim` with pnpm via corepack, `turbo prune web --docker`, install, build; the runtime copies the Next standalone output, `.next/static`, `public`, the `@bufbuild/buf` binary package, the `packages/db/drizzle` migrations and a compiled `migrate` script; runs as a non-root user; `EXPOSE 3000`; `HEALTHCHECK` on `/api/health`), `docker/entrypoint.sh`, `apps/web/src/app/api/health/route.ts` (returns `{ ok: true }` after a `select 1`), `docker-compose.prod.yml` (app + worker (same image, command `node apps/worker/dist/index.js`) + postgres + valkey, with commented S3 env vars), `docker-compose.coolify.yml` (decided by the user; see below), with commented S3 env vars), `scripts/e2e-smoke.sh`, `README.md` (run, configure, Gradle/CLI usage)
 
+- **Coolify compose** (`docker-compose.coolify.yml`): services `protoloom` (web), `worker` (same image, worker command), `postgres` (`postgres:17-alpine` with a named volume) and `valkey` (pinned tag, named volume), each with a healthcheck. Use Coolify's magic environment variables, checked against the current Coolify docs:
+  - `SERVICE_FQDN_PROTOLOOM_3000` (or the current `SERVICE_URL_*` form) for routing only.
+  - Generated credentials: `SERVICE_USER_POSTGRES`, `SERVICE_PASSWORD_POSTGRES`, and `SERVICE_BASE64_64_BETTERAUTH` for `BETTER_AUTH_SECRET`.
+  - `BETTER_AUTH_URL: ${BETTER_AUTH_URL:?Set the public https URL, e.g. https://protos.example.com}`, required, set by the user, and deliberately **not** derived from the service FQDN, because Cloudflare Tunnels make that http.
+  - `DATABASE_URL` and `VALKEY_URL` built from the service names and generated credentials.
+  - `STORAGE_DRIVER` defaulting to `local`, with a named volume mounted at `STORAGE_LOCAL_PATH`, plus optional `S3_*`.
+  - `INITIAL_ADMIN`, and `GITHUB_*` / `DISCORD_*` as user-set variables.
+  - A comment block at the top explaining which variables the user must set in Coolify.
+
+  The web service trusts `X-Forwarded-Proto` / `X-Forwarded-Host` from the proxy, but URL generation still uses `BETTER_AUTH_URL` only. The README gets a "Deploy on Coolify" section.
 - [ ] **Step 1: Write the smoke script.** It runs:
   1. `docker compose -f docker-compose.prod.yml up -d --build` and waits for health.
   2. Creates a key through the API: uses a seed script (`apps/web/scripts/seed-smoke.ts`, run inside the container) that creates an admin user, a `releases` repository and an API key with write access, and prints the key.
