@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Product name **Protoloom**; npm scope `@protoloom/*`; CLI package and binary `protoloom`; Gradle plugin id `dev.protoloom`, group `dev.protoloom`.
-- Env vars (server): `DATABASE_URL`, `STORAGE_DRIVER` (`local` | `s3`), `STORAGE_LOCAL_PATH`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `INITIAL_ADMIN` (format `github:<login>` or `discord:<user id>`), and optionally `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`. All of them are validated with **t3-env** (`@t3-oss/env-nextjs`) in `apps/web/src/env.ts`. The app imports `env` from there and never reads `process.env` directly. Empty strings count as unset (`emptyStringAsUndefined: true`). Each OAuth provider needs both its id and its secret, or neither.
+- Env vars (server): `DATABASE_URL`, `VALKEY_URL` (for example `redis://localhost:6379`; used by BullMQ), `STORAGE_DRIVER` (`local` | `s3`), `STORAGE_LOCAL_PATH`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `INITIAL_ADMIN` (format `github:<login>` or `discord:<user id>`), and optionally `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`. All of them are validated with **t3-env** (`@t3-oss/env-nextjs`) in `apps/web/src/env.ts`. The app imports `env` from there and never reads `process.env` directly. Empty strings count as unset (`emptyStringAsUndefined: true`). Each OAuth provider needs both its id and its secret, or neither.
 - **Social sign-in (decided by the user):** GitHub and Discord through Better Auth `socialProviders`. A provider is enabled only when both of its env vars are set. **No automatic account linking:** signing in with a provider never attaches it to an existing user by matching email, and never creates a new user (sign-up stays disabled). A provider signs a user in only if that user already connected it explicitly while signed in, on the Account page (`/account`), which also allows disconnecting it. OAuth callback URLs: `${BETTER_AUTH_URL}/api/auth/callback/github` and `${BETTER_AUTH_URL}/api/auth/callback/discord`.
 - Env vars (clients): `PROTOLOOM_URL`, `PROTOLOOM_TOKEN`.
 - Gradle output root: `build/protoloom/protos/`. CLI config file: `protoloom.json`, default `outDir` `./protos`.
@@ -70,7 +70,6 @@ apps/web/
   src/server/principal.ts   request → Principal
   src/server/context.ts     db, blobs, registry singletons
   src/server/bootstrap.ts   first admin
-  src/server/scheduler.ts   daily cleanup with advisory lock
   src/instrumentation.ts
   src/app/api/v1/...        REST route handlers
   src/app/api/auth/[...all]/route.ts
@@ -396,6 +395,24 @@ The user chose scheme A · Ink and asked for next-themes. The direction wasn't n
 - [ ] **Step 3:** Implement.
 - [ ] **Step 4:** Run the tests. Expected: PASS. Commit with `feat(core): add cleanup policies and server settings`.
 
+### Task 11b: Background worker (BullMQ + Valkey)
+
+The user offered BullMQ and Valkey; the controller ruled to use them for cleanup policies only. Caching is out of scope for now.
+
+**Files:**
+- Create: `packages/jobs` (`@protoloom/jobs`: queue name `protoloom-cleanup`, typed job payloads `{ kind: "cleanup:all" } | { kind: "cleanup:repo", repository: string }`, `createQueue(connection)`, `enqueueCleanup(queue, repository): Promise<string>`, `getJobState(queue, jobId)`), and `apps/worker` (`src/index.ts` connects to `VALKEY_URL` and the database, registers a BullMQ `Worker` that calls `runAllCleanups` / `applyCleanup` from `@protoloom/core`, and upserts a repeatable job scheduler `cleanup-daily` with the cron pattern `0 3 * * *`; it shuts down gracefully on SIGTERM). Env is validated with `@t3-oss/env-core`.
+- Modify: `docker-compose.yml` (add `valkey/valkey` with a pinned exact tag, port 6379 bound to 127.0.0.1, and a healthcheck).
+- Test: `packages/jobs/src/jobs.test.ts` and `apps/worker/src/worker.test.ts`. Valkey runs through testcontainers (`valkey/valkey` image) for the integration test.
+
+**Interfaces:**
+- Consumes: `runAllCleanups`, `applyCleanup` (Task 11), `createDb`, `createBlobStoreFromEnv`.
+- Produces: `enqueueCleanup`, `getJobState` (used by Task 14's `policies.runNow` / `policies.job`); the worker process (used by Task 20's image and compose files).
+
+- [ ] **Step 1: Write failing tests.** `enqueueCleanup(queue, "releases")` returns a job id, and `getJobState` reports `waiting`. With a worker running against testcontainers Valkey and Postgres, a `cleanup:repo` job for a repository with a keep-last-2 policy and 4 snapshot builds completes, and afterwards 2 builds remain. Starting the worker twice registers a single `cleanup-daily` scheduler (idempotent). A job for an unknown repository fails without retry storms (`attempts: 3`, exponential backoff).
+- [ ] **Step 2:** Run the tests. Expected: FAIL.
+- [ ] **Step 3:** Implement. `runAllCleanups` keeps its advisory lock as a second guard.
+- [ ] **Step 4:** Run the tests. Expected: PASS. Commit with `feat(worker): run cleanup policies as bullmq jobs`.
+
 ### Task 12: Web app foundation: auth, principal, bootstrap, scheduler
 
 **Files:**
@@ -411,8 +428,7 @@ The user chose scheme A · Ink and asked for next-themes. The direction wasn't n
     - `getEnabledSocialProviders(): ("github" | "discord")[]`, used by the login page and the Account page.
   - `getPrincipal(req: Request): Promise<Principal>`. A `Bearer` header goes through `auth.api.verifyApiKey`. An invalid, expired or revoked key throws `RegistryError("unauthorized")`, and so does a banned owner. Otherwise the owner's current role is loaded together with the `apiKeyPermission` rows. Without a bearer, the session cookie gives a user principal, and with neither the result is anonymous.
   - `createUserGate`: the user-creation gate described in Global Constraints (invite or `INITIAL_ADMIN`). Invites live in a new table `invite { id, tokenHash unique, role, note, createdBy, expiresAt, usedAt null, usedByUserId null, createdAt }` (new drizzle migration in packages/db). The invite token travels through the OAuth round trip in a short-lived signed httpOnly cookie set by `/invite/<token>` before redirecting to the provider.
-  - `startScheduler()`: `croner` at `0 3 * * *` calls `runAllCleanups`.
-  - `instrumentation.ts` `register()`: only when `NEXT_RUNTIME === "nodejs"`, it runs `migrate`, then `startScheduler`.
+  - `instrumentation.ts` `register()`: only when `NEXT_RUNTIME === "nodejs"`, it runs `migrate`. Background jobs run in `apps/worker` (Task 11b), not in the web process.
 
 - [ ] **Step 1: Write failing tests** for env and auth config, without a db: `createEnv` throws when only `GITHUB_CLIENT_ID` is set without its secret. `getEnabledSocialProviders()` returns `[]` with no OAuth env, `["github"]` with only GitHub, and both with both. The built auth options have implicit sign-up disabled for each enabled provider and no trusted providers for automatic linking. Then, against `startTestDb` with the auth instance built from the test db:
   - No header returns anonymous.
@@ -474,7 +490,7 @@ The user chose scheme A · Ink and asked for next-themes. The direction wasn't n
   - Routers:
     - `browse`: `repositories()`, `search({ query, limit≤20 })` (case-insensitive match on group, name or `group:name` across all repositories the caller can browse; returns `{ repository, group, name, latestVersion }[]`, used by the command dialog), `artifacts({repository, search?})`, `versions({repository, group, name})`, `version({repository, coordinate})` (returns `VersionInfo` plus `dependents`), `file({repository, coordinate, path})`
     - `repositories` (admin): `list`, `get`, `create`, `update`, `delete`. Delete is allowed only when the repository has no artifacts, otherwise `PRECONDITION_FAILED`.
-    - `policies` (admin): `list({repository})`, `upsert`, `delete`, `preview({repository})` (returns `planCleanup`), `runNow({repository})` (returns `applyCleanup`)
+    - `policies` (admin): `list({repository})`, `upsert`, `delete`, `preview({repository})` (returns `planCleanup`), `runNow({repository})` (enqueues a BullMQ `cleanup:repo` job through `enqueueCleanup(repository)` from `@protoloom/jobs` and returns `{ jobId }`; the UI polls `policies.job({ jobId })` for state and result)
     - `keys` (authed): `list` (own keys; admins can pass `all: true`), `create({ name, expiresInDays?: number, permissions: KeyPermission[] })` (returns `{ id, key }`; this is the only time the secret is returned), `revoke({ id })` (own keys, or any key for admins). `create` rejects `write` entries for a viewer with `FORBIDDEN`, and rejects unknown repository names.
     - `invites` (admin): `list` (open, used and expired), `create({ role, expiresInDays: 1..30, note? })` (returns `{ id, url }`; this is the only time the URL is returned), `revoke({ id })`. Audited.
     - `users` (admin): `list`, `setRole`, `ban`, `unban`, `remove`. Every one is audited. The last remaining admin can't be demoted, banned or removed.
@@ -629,7 +645,7 @@ The user chose scheme A · Ink and asked for next-themes. The direction wasn't n
 ### Task 20: Docker image and end-to-end smoke test
 
 **Files:**
-- Create: `docker/Dockerfile` (multi-stage: `node:22-bookworm-slim` with pnpm via corepack, `turbo prune web --docker`, install, build; the runtime copies the Next standalone output, `.next/static`, `public`, the `@bufbuild/buf` binary package, the `packages/db/drizzle` migrations and a compiled `migrate` script; runs as a non-root user; `EXPOSE 3000`; `HEALTHCHECK` on `/api/health`), `docker/entrypoint.sh`, `apps/web/src/app/api/health/route.ts` (returns `{ ok: true }` after a `select 1`), `docker-compose.prod.yml` (app + postgres, with commented S3 env vars), `scripts/e2e-smoke.sh`, `README.md` (run, configure, Gradle/CLI usage)
+- Create: `docker/Dockerfile` (multi-stage: `node:22-bookworm-slim` with pnpm via corepack, `turbo prune web --docker`, install, build; the runtime copies the Next standalone output, `.next/static`, `public`, the `@bufbuild/buf` binary package, the `packages/db/drizzle` migrations and a compiled `migrate` script; runs as a non-root user; `EXPOSE 3000`; `HEALTHCHECK` on `/api/health`), `docker/entrypoint.sh`, `apps/web/src/app/api/health/route.ts` (returns `{ ok: true }` after a `select 1`), `docker-compose.prod.yml` (app + worker (same image, command `node apps/worker/dist/index.js`) + postgres + valkey, with commented S3 env vars), `scripts/e2e-smoke.sh`, `README.md` (run, configure, Gradle/CLI usage)
 
 - [ ] **Step 1: Write the smoke script.** It runs:
   1. `docker compose -f docker-compose.prod.yml up -d --build` and waits for health.
