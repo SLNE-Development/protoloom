@@ -140,6 +140,16 @@ describe("resolveGraph", () => {
     expect(r.conflicts).toEqual([{ group: "g", name: "a", requested: ["1", "2"], selected: "2" }]);
   });
 
+  it("selects the same version for equal-comparing versions in either request order", async () => {
+    const lookup = memoryLookup({ "g:a:1.0": [], "g:a:1.0.0": [] });
+    const forward = await resolveGraph([c("a", "1.0"), c("a", "1.0.0")], lookup);
+    const backward = await resolveGraph([c("a", "1.0.0"), c("a", "1.0")], lookup);
+    expect(forward.nodes.map((n) => formatCoordinate(n.coordinate))).toEqual(["g:a:1.0.0"]);
+    expect(backward.nodes.map((n) => formatCoordinate(n.coordinate))).toEqual(["g:a:1.0.0"]);
+    expect(backward.conflicts).toEqual(forward.conflicts);
+    expect(forward.conflicts).toEqual([{ group: "g", name: "a", requested: ["1.0", "1.0.0"], selected: "1.0.0" }]);
+  });
+
   describe("exclude", () => {
     const ids = (r: { nodes: ResolvedNode[] }) => r.nodes.map((n) => formatCoordinate(n.coordinate));
 

@@ -43,10 +43,16 @@ function addRequest(requests: Map<string, Set<string>>, c: Coordinate): void {
   versions.add(c.version);
 }
 
+/**
+ * Orders versions by {@link compareVersions}, breaking ties between equal-comparing strings
+ * (`1.0` and `1.0.0`) by plain string order, so the result never depends on request order.
+ */
+const byVersion = (a: string, b: string): number => compareVersions(a, b) || byString(a, b);
+
 function highest(requests: Map<string, Set<string>>): Map<string, string> {
   const out = new Map<string, string>();
   for (const [key, versions] of requests) {
-    out.set(key, [...versions].sort(compareVersions).at(-1) as string);
+    out.set(key, [...versions].sort(byVersion).at(-1) as string);
   }
   return out;
 }
@@ -135,7 +141,7 @@ export async function resolveGraph(
         conflicts.push({
           group,
           name,
-          requested: [...versions].sort(compareVersions),
+          requested: [...versions].sort(byVersion),
           selected: selected.get(key) as string,
         });
       }
