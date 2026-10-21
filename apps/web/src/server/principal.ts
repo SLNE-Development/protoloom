@@ -10,7 +10,7 @@ function unauthorized(message = "Invalid API key"): RegistryError {
 }
 
 /** The owner's current role, or `null` when the user is missing or banned right now. */
-async function loadActiveRole(db: Db, userId: string): Promise<Role | null> {
+export async function loadActiveRole(db: Db, userId: string): Promise<Role | null> {
   const [owner] = await db
     .select({ role: user.role, banned: user.banned, banExpires: user.banExpires })
     .from(user)
