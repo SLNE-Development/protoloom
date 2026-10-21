@@ -18,6 +18,8 @@ export default mergeConfig(
   defineConfig({
     // Mirrors the `@/*` path of tsconfig.json so route modules resolve the same way under Vitest.
     resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
+    // tsconfig keeps JSX as is for Next.js; tests compile it with the automatic runtime.
+    oxc: { jsx: { runtime: "automatic" } },
     test: { env: testEnv, testTimeout: 30_000, hookTimeout: 120_000 },
   }),
 );
