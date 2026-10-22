@@ -1,11 +1,11 @@
 import { and, asc, eq, inArray, max } from "drizzle-orm";
-import { artifact, build, cleanupPolicy, repository, version, type Db } from "@weaver/db";
+import { cleanupPolicy, protoArtifact, protoBuild, protoVersion, repository, type Db } from "@weaver/db";
 import { recordAudit } from "./audit.js";
 import { formatCoordinate, type Coordinate } from "./coordinates.js";
 import { RegistryError } from "./errors.js";
 import { groupMatches } from "./permissions.js";
 import { deleteBuildRow, deleteVersionRows, findVersionTarget, lockVersion } from "./registry/delete.js";
-import { deleteBlobLogged, findRepository, type RepositoryRow } from "./registry/lookup.js";
+import { deleteBlobLogged, findRepository, type BlobRef, type RepositoryRow } from "./registry/lookup.js";
 import { findDependents, type Dependent } from "./registry/read.js";
 import type { StoreSet } from "./storage/index.js";
 
@@ -49,20 +49,20 @@ function compareCandidates(a: CleanupCandidate, b: CleanupCandidate): number {
 async function loadVersions(db: Db, repositoryId: string): Promise<VersionRow[]> {
   const rows = await db
     .select({
-      versionId: version.id,
-      group: artifact.group,
-      name: artifact.name,
-      version: version.version,
-      isSnapshot: version.isSnapshot,
-      createdAt: version.createdAt,
-      updatedAt: version.updatedAt,
-      lastDownloadedAt: max(build.lastDownloadedAt),
+      versionId: protoVersion.id,
+      group: protoArtifact.group,
+      name: protoArtifact.name,
+      version: protoVersion.version,
+      isSnapshot: protoVersion.isSnapshot,
+      createdAt: protoVersion.createdAt,
+      updatedAt: protoVersion.updatedAt,
+      lastDownloadedAt: max(protoBuild.lastDownloadedAt),
     })
-    .from(version)
-    .innerJoin(artifact, eq(artifact.id, version.artifactId))
-    .leftJoin(build, eq(build.versionId, version.id))
-    .where(eq(artifact.repositoryId, repositoryId))
-    .groupBy(version.id, artifact.group, artifact.name);
+    .from(protoVersion)
+    .innerJoin(protoArtifact, eq(protoArtifact.id, protoVersion.artifactId))
+    .leftJoin(protoBuild, eq(protoBuild.versionId, protoVersion.id))
+    .where(eq(protoArtifact.repositoryId, repositoryId))
+    .groupBy(protoVersion.id, protoArtifact.group, protoArtifact.name);
   return rows.map((r) => ({
     versionId: r.versionId,
     coordinate: { group: r.group, name: r.name, version: r.version },
@@ -78,10 +78,10 @@ async function loadBuildNumbers(db: Db, versionIds: string[]): Promise<Map<strin
   const out = new Map<string, number[]>();
   if (versionIds.length === 0) return out;
   const rows = await db
-    .select({ versionId: build.versionId, buildNumber: build.buildNumber })
-    .from(build)
-    .where(inArray(build.versionId, versionIds))
-    .orderBy(asc(build.versionId), asc(build.buildNumber));
+    .select({ versionId: protoBuild.versionId, buildNumber: protoBuild.buildNumber })
+    .from(protoBuild)
+    .where(inArray(protoBuild.versionId, versionIds))
+    .orderBy(asc(protoBuild.versionId), asc(protoBuild.buildNumber));
   for (const r of rows) {
     const list = out.get(r.versionId) ?? [];
     list.unshift(r.buildNumber);
@@ -211,15 +211,15 @@ export async function planCleanup(db: Db, repositoryName: string, now: Date): Pr
 /**
  * Deletes one planned candidate under its version lock, re-checking that the version was not
  * published again since planning and, for whole versions, that nothing depends on it now.
- * Returns the storage keys to remove after commit, or null when the candidate was skipped.
+ * Returns the blobs to remove after commit, or null when the candidate was skipped.
  */
-async function applyOne(db: Db, repo: RepositoryRow, candidate: PlannedCandidate): Promise<string[] | null> {
+async function applyOne(db: Db, repo: RepositoryRow, candidate: PlannedCandidate): Promise<BlobRef[] | null> {
   return db.transaction(async (tx) => {
     await lockVersion(tx, repo.name, candidate.coordinate);
     const target = await findVersionTarget(tx, repo.id, candidate.coordinate);
     if (!target || target.updatedAt.getTime() !== candidate.updatedAt.getTime()) return null;
 
-    let keys: string[];
+    let keys: BlobRef[];
     if (candidate.buildNumber === null) {
       if ((await findDependents(tx, candidate.coordinate)).length > 0) return null;
       keys = await deleteVersionRows(tx, target);
@@ -265,7 +265,7 @@ export async function applyCleanup(
         continue;
       }
       applied.push(candidate);
-      await Promise.all(keys.map((key) => deleteBlobLogged(stores.primary, key)));
+      await Promise.all(keys.map((blob) => deleteBlobLogged(stores, blob)));
     }
     if (retry.length === pending.length) break;
     pending = retry;

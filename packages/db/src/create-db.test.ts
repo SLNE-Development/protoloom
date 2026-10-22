@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getTableName } from "drizzle-orm";
+import * as schema from "./index.js";
 import { createDb } from "./index.js";
 
 describe("createDb", () => {
@@ -16,5 +18,37 @@ describe("createDb", () => {
     expect(() => db.$client.emit("error", failure)).not.toThrow();
     expect(consoleError).toHaveBeenCalledWith("weaver: idle postgres client error", failure);
     await db.$client.end();
+  });
+});
+
+describe("schema exports", () => {
+  it("exposes the multi-format enums with their exact values", () => {
+    expect(schema.repoFormatEnum.enumValues).toEqual(["maven", "npm", "docker", "proto"]);
+    expect(schema.repoKindEnum.enumValues).toEqual(["hosted", "mirror", "group"]);
+    expect(schema.visibilityEnum.enumValues).toEqual(["public", "private"]);
+    expect(schema.accessEnum.enumValues).toEqual(["read", "write"]);
+    expect(schema.upstreamAuthEnum.enumValues).toEqual(["none", "basic", "bearer"]);
+    expect(schema.assetOriginEnum.enumValues).toEqual(["hosted", "cache"]);
+    expect(schema.usageActionEnum.enumValues).toEqual(["download", "upload", "delete"]);
+    expect(schema.cacheResultEnum.enumValues).toEqual(["hit", "miss", "bypass", "stale"]);
+  });
+
+  it("names the proto tables with a proto_ prefix", () => {
+    const names = [
+      schema.protoArtifact,
+      schema.protoVersion,
+      schema.protoBuild,
+      schema.protoBuildFile,
+      schema.protoDependency,
+      schema.protoDeletedRelease,
+    ].map((t) => getTableName(t));
+    expect(names).toEqual([
+      "proto_artifact",
+      "proto_version",
+      "proto_build",
+      "proto_build_file",
+      "proto_dependency",
+      "proto_deleted_release",
+    ]);
   });
 });

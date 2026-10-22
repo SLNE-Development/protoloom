@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { count, eq } from "drizzle-orm";
-import { artifact, createDb, repository, setting, version } from "@weaver/db";
+import { createDb, protoArtifact as artifact, protoVersion as version, repository, setting } from "@weaver/db";
 import { STATE_FILE, USERS } from "./fixtures";
 import { loginAs } from "./helpers";
 

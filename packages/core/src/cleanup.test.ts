@@ -7,14 +7,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 type PoolClient = { query: (...args: never[]) => Promise<unknown>; release: (err?: Error | boolean) => void };
 import { and, asc, eq, sql } from "drizzle-orm";
 import {
-  artifact,
   auditEvent,
-  build,
   cleanupPolicy,
-  deletedRelease,
-  dependency,
+  protoArtifact as artifact,
+  protoBuild as build,
+  protoDeletedRelease as deletedRelease,
+  protoDependency as dependency,
+  protoVersion as version,
   repository,
-  version,
 } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
 import { applyCleanup, planCleanup, runAllCleanups, type CleanupCandidate } from "./cleanup.js";
@@ -43,7 +43,7 @@ describe("cleanup", () => {
   const repoIds = new Map<string, string>();
 
   async function insertRepo(name: string): Promise<void> {
-    const [row] = await testDb.db.insert(repository).values({ name }).returning({ id: repository.id });
+    const [row] = await testDb.db.insert(repository).values({ name, format: "proto", kind: "hosted" }).returning({ id: repository.id });
     repoIds.set(name, row!.id);
   }
 
@@ -79,6 +79,7 @@ describe("cleanup", () => {
         .values({
           versionId: ver!.id,
           buildNumber: n,
+          store: stores.primary.id,
           storageKey,
           sha256: "0".repeat(64),
           sizeBytes: 7,

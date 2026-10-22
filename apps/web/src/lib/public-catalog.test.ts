@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { artifact, version, type Db } from "@weaver/db";
+import { protoArtifact as artifact, protoVersion as version, type Db } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
 import { getPublicStats, listDocsPaths, listPublicBrowsePages } from "./public-catalog";
 import { insertRepository, insertVersion } from "@/test/catalog";

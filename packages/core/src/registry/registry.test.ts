@@ -3,15 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
-import { auditEvent, build, deletedRelease, repository } from "@weaver/db";
+import { auditEvent, protoBuild as build, protoDeletedRelease as deletedRelease, repository } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
 import { packArchive, type ProtoFile } from "../archive.js";
 import type { Coordinate } from "../coordinates.js";
 import type { RegistryError } from "../errors.js";
 import type { KeyPermission, Principal, Role } from "../permissions.js";
-import { createStoreSetFromEnv, getBuffer, type StoreSet } from "../storage/index.js";
+import { createStoreSetFromEnv, getBuffer, type ObjectStore, type StoreSet } from "../storage/index.js";
 import { validateProtos } from "../validation.js";
 import { createRegistry, type Manifest, type Registry } from "./index.js";
+import type { ProtoSettings } from "./lookup.js";
 
 const anonymous: Principal = { kind: "anonymous" };
 
@@ -62,8 +63,17 @@ describe("registry", () => {
     ),
   ];
 
-  async function insertRepo(name: string, values: Partial<typeof repository.$inferInsert> = {}) {
-    await testDb.db.insert(repository).values({ name, ...values });
+  /** Inserts a hosted proto repository with the given proto settings in its config. */
+  async function insertRepo(name: string, settings: Partial<ProtoSettings> = {}) {
+    await testDb.db.insert(repository).values({ name, format: "proto", kind: "hosted", config: settings });
+  }
+
+  /** Merges proto settings into a repository's config. */
+  async function updateSettings(name: string, settings: Partial<ProtoSettings>) {
+    await testDb.db
+      .update(repository)
+      .set({ config: sql`${repository.config} || ${JSON.stringify(settings)}::jsonb` })
+      .where(eq(repository.name, name));
   }
 
   async function publishMoney(
@@ -112,6 +122,28 @@ describe("registry", () => {
     await insertRepo("snapshots", { allowReleases: false });
   });
 
+  it("records the primary store on the build and serves the archive from that store", async () => {
+    await publishMoney();
+    const [row] = await testDb.db.select({ store: build.store }).from(build);
+    expect(row?.store).toBe("local");
+
+    // The primary moved to another store; the archive is still read from the one it was written to.
+    const wrong = () => Promise.reject(new Error("read from the wrong store"));
+    const elsewhere: ObjectStore = { id: "s3", put: wrong, get: wrong, head: wrong, delete: wrong, deleteMany: wrong };
+    const moved: StoreSet = { primary: elsewhere, get: (id) => stores.get(id), configured: () => ["local", "s3"] };
+    const archive = await createRegistry({ db: testDb.db, stores: moved }).download(
+      maintainer,
+      "releases",
+      coord("acme", "money", "1.0.0"),
+    );
+    expect(archive.data.length).toBeGreaterThan(0);
+  });
+
+  it("ignores repositories of other formats", async () => {
+    await testDb.db.insert(repository).values({ name: "maven-releases", format: "maven", kind: "hosted" });
+    await expectError(publishMoney(key("maintainer", [write("maven-releases")]), "maven-releases"), "not_found");
+  });
+
   it("publishes a release as build 1 and exposes files and dependencies", async () => {
     const money = await publishMoney();
     expect(money).toMatchObject({ coordinate: coord("acme", "money", "1.0.0"), buildNumber: 1, redeployed: false });
@@ -156,7 +188,7 @@ describe("registry", () => {
     await publishMoney();
     await expectError(publishMoney(), "immutable");
 
-    await testDb.db.update(repository).set({ allowRedeploy: true }).where(eq(repository.name, "releases"));
+    await updateSettings("releases", { allowRedeploy: true });
     const [before] = await testDb.db.select().from(build);
     const replaced = [proto("acme/money/v1/money.proto", "message Money { int64 cents = 1; string currency = 2; }")];
     const result = await publishMoney(maintainer, "releases", "1.0.0", replaced);
@@ -171,7 +203,7 @@ describe("registry", () => {
   });
 
   it("blocks redeploying a release that has dependents unless an admin forces it", async () => {
-    await testDb.db.update(repository).set({ allowRedeploy: true }).where(eq(repository.name, "releases"));
+    await updateSettings("releases", { allowRedeploy: true });
     await publishMoney();
     await publishOrder();
 
@@ -540,7 +572,7 @@ describe("registry", () => {
     it("allows different content when the repository allows redeploy", async () => {
       await publishMoney();
       await registry.deleteVersion(maintainer, "releases", money);
-      await testDb.db.update(repository).set({ allowRedeploy: true }).where(eq(repository.name, "releases"));
+      await updateSettings("releases", { allowRedeploy: true });
       await expect(publishMoney(maintainer, "releases", "1.0.0", changed)).resolves.toMatchObject({ buildNumber: 1 });
       expect(await tombstones()).toHaveLength(0);
     });
@@ -604,7 +636,7 @@ describe("registry", () => {
   });
 
   it("writes an audit row for every mutation", async () => {
-    await testDb.db.update(repository).set({ allowRedeploy: true }).where(eq(repository.name, "releases"));
+    await updateSettings("releases", { allowRedeploy: true });
     await publishMoney();
     await publishMoney();
     await registry.deleteVersion(maintainer, "releases", coord("acme", "money", "1.0.0"));

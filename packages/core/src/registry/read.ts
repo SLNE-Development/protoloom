@@ -1,5 +1,5 @@
 import { and, asc, eq, max, sql } from "drizzle-orm";
-import { artifact, build, buildFile, dependency, repository, user, version } from "@weaver/db";
+import { protoArtifact, protoBuild, protoBuildFile, protoDependency, protoVersion, repository, user } from "@weaver/db";
 import { compareVersions, formatCoordinate, type Coordinate } from "../coordinates.js";
 import { RegistryError } from "../errors.js";
 import { canAccess, canForce, type Principal } from "../permissions.js";
@@ -100,16 +100,16 @@ export async function listVersions(
   const repo = await readableRepository(ctx.db, p, repositoryName, group);
   const rows = await ctx.db
     .select({
-      version: version.version,
-      isSnapshot: version.isSnapshot,
-      updatedAt: version.updatedAt,
-      latestBuild: max(build.buildNumber),
+      version: protoVersion.version,
+      isSnapshot: protoVersion.isSnapshot,
+      updatedAt: protoVersion.updatedAt,
+      latestBuild: max(protoBuild.buildNumber),
     })
-    .from(version)
-    .innerJoin(artifact, eq(artifact.id, version.artifactId))
-    .innerJoin(build, eq(build.versionId, version.id))
-    .where(and(eq(artifact.repositoryId, repo.id), eq(artifact.group, group), eq(artifact.name, name)))
-    .groupBy(version.id);
+    .from(protoVersion)
+    .innerJoin(protoArtifact, eq(protoArtifact.id, protoVersion.artifactId))
+    .innerJoin(protoBuild, eq(protoBuild.versionId, protoVersion.id))
+    .where(and(eq(protoArtifact.repositoryId, repo.id), eq(protoArtifact.group, group), eq(protoArtifact.name, name)))
+    .groupBy(protoVersion.id);
   if (rows.length === 0) throw notFound(`Artifact ${group}:${name}`);
   return rows
     .map((r) => ({ ...r, latestBuild: r.latestBuild ?? 0 }))
@@ -127,16 +127,16 @@ export async function getManifest(
   const { repo, build: latest } = await readableBuild(ctx.db, p, repositoryName, c, select);
   const [files, dependencies, builds, publisher] = await Promise.all([
     ctx.db
-      .select({ path: buildFile.path })
-      .from(buildFile)
-      .where(eq(buildFile.buildId, latest.id))
-      .orderBy(asc(buildFile.path)),
+      .select({ path: protoBuildFile.path })
+      .from(protoBuildFile)
+      .where(eq(protoBuildFile.buildId, latest.id))
+      .orderBy(asc(protoBuildFile.path)),
     loadDependencies(ctx.db, latest.id),
     ctx.db
-      .select({ buildNumber: build.buildNumber, createdAt: build.createdAt, sha256: build.sha256 })
-      .from(build)
-      .where(eq(build.versionId, latest.versionId))
-      .orderBy(asc(build.buildNumber)),
+      .select({ buildNumber: protoBuild.buildNumber, createdAt: protoBuild.createdAt, sha256: protoBuild.sha256 })
+      .from(protoBuild)
+      .where(eq(protoBuild.versionId, latest.versionId))
+      .orderBy(asc(protoBuild.buildNumber)),
     latest.publishedByUserId
       ? ctx.db.select({ name: user.name }).from(user).where(eq(user.id, latest.publishedByUserId))
       : Promise.resolve([]),
@@ -169,12 +169,14 @@ export async function download(
   select: BuildSelector = {},
 ): Promise<{ data: Buffer; sha256: string; filename: string }> {
   const { build: served } = await readableBuild(ctx.db, p, repositoryName, c, select);
-  const data = await getBuffer(ctx.stores.primary, served.storageKey);
+  const store = ctx.stores.get(served.store);
+  if (!store) throw new Error(`Archive blob ${served.storageKey} is in store ${served.store}, which is not configured`);
+  const data = await getBuffer(store, served.storageKey);
   if (!data) throw new Error(`Archive blob ${served.storageKey} is missing from storage`);
   await ctx.db
-    .update(build)
-    .set({ downloadCount: sql`${build.downloadCount} + 1`, lastDownloadedAt: new Date() })
-    .where(eq(build.id, served.id));
+    .update(protoBuild)
+    .set({ downloadCount: sql`${protoBuild.downloadCount} + 1`, lastDownloadedAt: new Date() })
+    .where(eq(protoBuild.id, served.id));
   return { data, sha256: served.sha256, filename: `${c.name}-${c.version}.tar.gz` };
 }
 
@@ -188,9 +190,9 @@ export async function getFile(
 ): Promise<string> {
   const { build: latest } = await readableBuild(ctx.db, p, repositoryName, c);
   const [row] = await ctx.db
-    .select({ content: buildFile.content })
-    .from(buildFile)
-    .where(and(eq(buildFile.buildId, latest.id), eq(buildFile.path, path)));
+    .select({ content: protoBuildFile.content })
+    .from(protoBuildFile)
+    .where(and(eq(protoBuildFile.buildId, latest.id), eq(protoBuildFile.path, path)));
   if (!row) throw notFound(`File ${path}`);
   return row.content;
 }
@@ -223,19 +225,19 @@ export async function findDependents(db: Queryable, c: Coordinate): Promise<Depe
     .selectDistinct({
       repository: repository.name,
       visibility: repository.visibility,
-      group: artifact.group,
-      name: artifact.name,
-      version: version.version,
+      group: protoArtifact.group,
+      name: protoArtifact.name,
+      version: protoVersion.version,
     })
-    .from(dependency)
-    .innerJoin(build, eq(build.id, dependency.buildId))
-    .innerJoin(version, eq(version.id, build.versionId))
-    .innerJoin(artifact, eq(artifact.id, version.artifactId))
-    .innerJoin(repository, eq(repository.id, artifact.repositoryId))
+    .from(protoDependency)
+    .innerJoin(protoBuild, eq(protoBuild.id, protoDependency.buildId))
+    .innerJoin(protoVersion, eq(protoVersion.id, protoBuild.versionId))
+    .innerJoin(protoArtifact, eq(protoArtifact.id, protoVersion.artifactId))
+    .innerJoin(repository, eq(repository.id, protoArtifact.repositoryId))
     .where(
-      and(eq(dependency.depGroup, c.group), eq(dependency.depName, c.name), eq(dependency.depVersion, c.version)),
+      and(eq(protoDependency.depGroup, c.group), eq(protoDependency.depName, c.name), eq(protoDependency.depVersion, c.version)),
     )
-    .orderBy(asc(repository.name), asc(artifact.group), asc(artifact.name), asc(version.version));
+    .orderBy(asc(repository.name), asc(protoArtifact.group), asc(protoArtifact.name), asc(protoVersion.version));
   return rows.map((r) => ({
     repository: r.repository,
     visibility: r.visibility,

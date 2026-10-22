@@ -36,6 +36,13 @@
       "when": 1792620048802,
       "tag": "0004_api_key_permission_key_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792673815145,
+      "tag": "0005_multi_format_reset",
+      "breakpoints": true
     }
   ]
 }

@@ -1,16 +1,16 @@
 import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
-import { artifact, build, buildFile, dependency, repository, version, type Db, type Tx } from "@weaver/db";
+import { protoArtifact, protoBuild, protoBuildFile, protoDependency, protoVersion, repository, type Db, type Tx } from "@weaver/db";
 import type { ProtoFile } from "../archive.js";
 import { formatCoordinate, type Coordinate } from "../coordinates.js";
 import { canAccess, type Principal } from "../permissions.js";
 import type { Lookup, ResolvedNode } from "../resolution.js";
-import type { ObjectStore, StoreSet } from "../storage/index.js";
+import type { StoreId, StoreSet } from "../storage/index.js";
 import type { validateProtos } from "../validation.js";
 
 /** Dependencies shared by the registry operations. */
 export interface RegistryContext {
   db: Db;
-  /** Proto archives are written to and read from `stores.primary`. */
+  /** Proto archives are written to `stores.primary` and read from the store their build names. */
   stores: StoreSet;
   validate: typeof validateProtos;
 }
@@ -18,39 +18,87 @@ export interface RegistryContext {
 /** A database handle or an open transaction. */
 export type Queryable = Db | Tx;
 
+/** A row of the `repository` table. */
 export type RepositoryRow = typeof repository.$inferSelect;
-export type BuildRow = typeof build.$inferSelect;
+/** A row of the `proto_build` table. */
+export type BuildRow = typeof protoBuild.$inferSelect;
+
+/** Where a stored blob lives: the store it was written to and its key there. */
+export interface BlobRef {
+  store: StoreId;
+  storageKey: string;
+}
+
+/** The proto-specific settings of a repository. */
+export interface ProtoSettings {
+  allowRedeploy: boolean;
+  allowReleases: boolean;
+  allowSnapshots: boolean;
+  /**
+   * Order in which repositories other than the publish target are searched for dependencies at
+   * publish time. Lower wins; ties are broken by repository name.
+   */
+  resolutionPriority: number;
+}
 
 /**
- * Deletes a blob whose rows are already gone (or never committed). A failure only leaves an
- * orphaned blob behind, so it is logged with the key instead of failing the operation.
+ * Reads the proto settings from `repo.config`, falling back to `false, true, true, 100` for
+ * missing or mistyped keys.
  */
-export async function deleteBlobLogged(store: ObjectStore, key: string): Promise<void> {
+export function protoSettings(repo: Pick<RepositoryRow, "config">): ProtoSettings {
+  const config = repo.config;
+  const flag = (key: string, fallback: boolean) => (typeof config[key] === "boolean" ? (config[key] as boolean) : fallback);
+  const priority = config.resolutionPriority;
+  return {
+    allowRedeploy: flag("allowRedeploy", false),
+    allowReleases: flag("allowReleases", true),
+    allowSnapshots: flag("allowSnapshots", true),
+    resolutionPriority: typeof priority === "number" && Number.isInteger(priority) ? priority : 100,
+  };
+}
+
+/**
+ * Deletes a blob whose rows are already gone (or never committed). A failure, or a store that is
+ * no longer configured, only leaves an orphaned blob behind, so it is logged with the key instead
+ * of failing the operation.
+ */
+export async function deleteBlobLogged(stores: StoreSet, blob: BlobRef): Promise<void> {
+  const store = stores.get(blob.store);
+  if (!store) {
+    console.warn(`weaver: cannot delete orphaned blob ${blob.storageKey}: store ${blob.store} is not configured`);
+    return;
+  }
   try {
-    await store.delete(key);
+    await store.delete(blob.storageKey);
   } catch (error) {
-    console.warn(`weaver: failed to delete orphaned blob ${key}`, error);
+    console.warn(`weaver: failed to delete orphaned blob ${blob.storageKey}`, error);
   }
 }
 
-/** Loads a repository by name; null when it does not exist. */
+/** Loads a proto repository by name; null when no proto repository has that name. */
 export async function findRepository(db: Queryable, name: string): Promise<RepositoryRow | null> {
-  const [row] = await db.select().from(repository).where(eq(repository.name, name));
+  const [row] = await db
+    .select()
+    .from(repository)
+    .where(and(eq(repository.name, name), eq(repository.format, "proto")));
   return row ?? null;
 }
 
-/** Loads the named repositories in the given order, skipping unknown names and duplicates. */
+/** Loads the named proto repositories in the given order, skipping unknown names and duplicates. */
 export async function findRepositories(db: Queryable, names: string[]): Promise<RepositoryRow[]> {
   const unique = [...new Set(names)];
   if (unique.length === 0) return [];
-  const rows = await db.select().from(repository).where(inArray(repository.name, unique));
+  const rows = await db
+    .select()
+    .from(repository)
+    .where(and(inArray(repository.name, unique), eq(repository.format, "proto")));
   const byName = new Map(rows.map((r) => [r.name, r]));
   return unique.flatMap((n) => byName.get(n) ?? []);
 }
 
 /**
  * Repositories consulted when resolving the dependencies of a publish: the target repository
- * first, then every other repository by ascending `resolutionPriority`, then name. A lower
+ * first, then every other proto repository by ascending `resolutionPriority`, then name. A lower
  * `resolutionPriority` wins: a dependency found in a priority-5 repository is used over the same
  * coordinate in a priority-10 repository.
  */
@@ -58,8 +106,11 @@ export async function publishRepositoryOrder(db: Queryable, target: RepositoryRo
   const others = await db
     .select()
     .from(repository)
-    .where(ne(repository.id, target.id))
-    .orderBy(asc(repository.resolutionPriority), asc(repository.name));
+    .where(and(ne(repository.id, target.id), eq(repository.format, "proto")))
+    .orderBy(asc(repository.name));
+  // A stable sort keeps the database's name order within equal priorities.
+  const priority = (r: RepositoryRow) => protoSettings(r).resolutionPriority;
+  others.sort((a, b) => priority(a) - priority(b));
   return [target, ...others];
 }
 
@@ -74,20 +125,20 @@ export async function findLatestBuild(
   buildNumber?: number,
 ): Promise<BuildRow | null> {
   const [row] = await db
-    .select({ build })
-    .from(build)
-    .innerJoin(version, eq(version.id, build.versionId))
-    .innerJoin(artifact, eq(artifact.id, version.artifactId))
+    .select({ build: protoBuild })
+    .from(protoBuild)
+    .innerJoin(protoVersion, eq(protoVersion.id, protoBuild.versionId))
+    .innerJoin(protoArtifact, eq(protoArtifact.id, protoVersion.artifactId))
     .where(
       and(
-        eq(artifact.repositoryId, repositoryId),
-        eq(artifact.group, c.group),
-        eq(artifact.name, c.name),
-        eq(version.version, c.version),
-        buildNumber === undefined ? undefined : eq(build.buildNumber, buildNumber),
+        eq(protoArtifact.repositoryId, repositoryId),
+        eq(protoArtifact.group, c.group),
+        eq(protoArtifact.name, c.name),
+        eq(protoVersion.version, c.version),
+        buildNumber === undefined ? undefined : eq(protoBuild.buildNumber, buildNumber),
       ),
     )
-    .orderBy(desc(build.buildNumber))
+    .orderBy(desc(protoBuild.buildNumber))
     .limit(1);
   return row?.build ?? null;
 }
@@ -95,10 +146,10 @@ export async function findLatestBuild(
 /** The declared direct dependencies of a build, sorted by `group:name`. */
 export async function loadDependencies(db: Queryable, buildId: string): Promise<Coordinate[]> {
   const rows = await db
-    .select({ group: dependency.depGroup, name: dependency.depName, version: dependency.depVersion })
-    .from(dependency)
-    .where(eq(dependency.buildId, buildId))
-    .orderBy(asc(dependency.depGroup), asc(dependency.depName));
+    .select({ group: protoDependency.depGroup, name: protoDependency.depName, version: protoDependency.depVersion })
+    .from(protoDependency)
+    .where(eq(protoDependency.buildId, buildId))
+    .orderBy(asc(protoDependency.depGroup), asc(protoDependency.depName));
   return rows;
 }
 
@@ -108,9 +159,9 @@ export async function loadFiles(db: Queryable, buildIds: string[]): Promise<Map<
   if (buildIds.length === 0) return out;
   const rows = await db
     .select()
-    .from(buildFile)
-    .where(inArray(buildFile.buildId, buildIds))
-    .orderBy(asc(buildFile.path));
+    .from(protoBuildFile)
+    .where(inArray(protoBuildFile.buildId, buildIds))
+    .orderBy(asc(protoBuildFile.path));
   for (const row of rows) out.get(row.buildId)?.push({ path: row.path, content: row.content });
   return out;
 }

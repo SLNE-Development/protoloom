@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { makeSignature } from "better-auth/crypto";
 import { RegistryError } from "@weaver/core";
-import { apiKeyPermission, apikey, user, type Db } from "@weaver/db";
+import { apikey, user, type Db } from "@weaver/db";
+import { insertKeyPermissions, insertRepository } from "@/test/catalog";
 import { startTestDb } from "@weaver/db/testing";
 import { createAuth, type Auth, type AuthEnv } from "./auth";
 import { getPrincipal } from "./principal";
@@ -26,6 +27,8 @@ beforeAll(async () => {
   testDb = await startTestDb();
   db = testDb.db;
   auth = createAuth(db, env);
+  await insertRepository(db, "main", "private");
+  await insertRepository(db, "public", "public");
 });
 
 afterAll(async () => {
@@ -43,9 +46,9 @@ async function createUser(role: string) {
 
 async function createKey(userId: string) {
   const created = await auth.api.createApiKey({ body: { userId, name: "ci" } });
-  await db.insert(apiKeyPermission).values([
-    { apiKeyId: created.id, repository: "main", groupPrefix: "dev.surf", access: "write" },
-    { apiKeyId: created.id, repository: "public", groupPrefix: null, access: "read" },
+  await insertKeyPermissions(db, created.id, [
+    { repository: "main", groupPrefix: "dev.surf", access: "write" },
+    { repository: "public", groupPrefix: null, access: "read" },
   ]);
   return created;
 }

@@ -5,7 +5,13 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ValkeyContainer, type StartedValkeyContainer } from "@testcontainers/valkey";
 import { asc, sql } from "drizzle-orm";
-import { artifact, build, cleanupPolicy, repository, version } from "@weaver/db";
+import {
+  cleanupPolicy,
+  protoArtifact as artifact,
+  protoBuild as build,
+  protoVersion as version,
+  repository,
+} from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
 import { createStoreSetFromEnv, putBuffer, type StoreSet } from "@weaver/core";
 import {
@@ -69,7 +75,7 @@ describe("worker", () => {
   });
 
   it("runs a repository cleanup job and leaves the newest builds", async () => {
-    const [repo] = await testDb.db.insert(repository).values({ name: "snapshots" }).returning();
+    const [repo] = await testDb.db.insert(repository).values({ name: "snapshots", format: "proto", kind: "hosted" }).returning();
     await testDb.db.insert(cleanupPolicy).values({ repositoryId: repo!.id, kind: "keep_last_snapshot_builds", value: 2 });
     const [art] = await testDb.db
       .insert(artifact)
@@ -84,7 +90,7 @@ describe("worker", () => {
       await putBuffer(stores.primary, storageKey, Buffer.from(`build ${n}`));
       await testDb.db
         .insert(build)
-        .values({ versionId: ver!.id, buildNumber: n, storageKey, sha256: "0".repeat(64), sizeBytes: 7 });
+        .values({ versionId: ver!.id, buildNumber: n, store: stores.primary.id, storageKey, sha256: "0".repeat(64), sizeBytes: 7 });
     }
 
     await start();

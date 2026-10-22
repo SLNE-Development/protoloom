@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { RegistryError, type KeyPermission, type Principal, type Role } from "@weaver/core";
-import { apiKeyPermission, user, type Db } from "@weaver/db";
+import { repoPermission, repository, user, type Db } from "@weaver/db";
 import type { Auth } from "./auth";
 import { getServerContext } from "./context";
 import { effectiveRole } from "./roles";
@@ -51,12 +51,13 @@ export async function getPrincipal(
     if (!role) throw unauthorized();
     const rows = await db
       .select({
-        repository: apiKeyPermission.repository,
-        groupPrefix: apiKeyPermission.groupPrefix,
-        access: apiKeyPermission.access,
+        repository: repository.name,
+        groupPrefix: repoPermission.groupPrefix,
+        access: repoPermission.access,
       })
-      .from(apiKeyPermission)
-      .where(eq(apiKeyPermission.apiKeyId, keyId));
+      .from(repoPermission)
+      .innerJoin(repository, eq(repository.id, repoPermission.repositoryId))
+      .where(eq(repoPermission.apiKeyId, keyId));
     const permissions: KeyPermission[] = rows;
     return { kind: "apikey", keyId, userId, role, permissions };
   }

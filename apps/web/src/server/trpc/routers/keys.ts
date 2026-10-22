@@ -1,8 +1,8 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { maxKeyAccess, recordAudit, type KeyPermission } from "@weaver/core";
-import { apikey, apiKeyPermission, repository, user } from "@weaver/db";
+import { apikey, repoPermission, repository, user } from "@weaver/db";
 import { authedProcedure, router } from "../init";
 import { groupPrefix, notFound, repositoryName } from "../helpers";
 
@@ -59,18 +59,20 @@ export const keysRouter = router({
           ? []
           : await ctx.db
               .select({
-                apiKeyId: apiKeyPermission.apiKeyId,
-                repository: apiKeyPermission.repository,
-                groupPrefix: apiKeyPermission.groupPrefix,
-                access: apiKeyPermission.access,
+                apiKeyId: repoPermission.apiKeyId,
+                repository: repository.name,
+                groupPrefix: repoPermission.groupPrefix,
+                access: repoPermission.access,
               })
-              .from(apiKeyPermission)
+              .from(repoPermission)
+              .innerJoin(repository, eq(repository.id, repoPermission.repositoryId))
               .where(
                 inArray(
-                  apiKeyPermission.apiKeyId,
+                  repoPermission.apiKeyId,
                   keys.map((k) => k.id),
                 ),
-              );
+              )
+              .orderBy(asc(repoPermission.id));
       return keys.map((key) => ({
         ...key,
         enabled: key.enabled ?? true,
@@ -98,10 +100,15 @@ export const keysRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Viewers can only create read-only keys" });
       }
       const names = [...new Set(input.permissions.map((p) => p.repository))];
-      const known = new Set(
-        (await ctx.db.select({ name: repository.name }).from(repository).where(inArray(repository.name, names))).map((r) => r.name),
+      const idByName = new Map(
+        (
+          await ctx.db
+            .select({ id: repository.id, name: repository.name })
+            .from(repository)
+            .where(inArray(repository.name, names))
+        ).map((r) => [r.name, r.id]),
       );
-      const unknown = names.filter((name) => !known.has(name));
+      const unknown = names.filter((name) => !idByName.has(name));
       if (unknown.length > 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Unknown repositories: ${unknown.join(", ")}` });
       }
@@ -116,7 +123,14 @@ export const keysRouter = router({
       });
       try {
         await ctx.db.transaction(async (tx) => {
-          await tx.insert(apiKeyPermission).values(input.permissions.map((p) => ({ ...p, apiKeyId: created.id })));
+          await tx.insert(repoPermission).values(
+            input.permissions.map(({ repository: name, groupPrefix: prefix, access }) => ({
+              apiKeyId: created.id,
+              repositoryId: idByName.get(name)!,
+              groupPrefix: prefix,
+              access,
+            })),
+          );
           await recordAudit(tx, {
             actor: principal,
             action: "key.create",

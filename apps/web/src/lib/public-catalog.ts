@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { and, asc, countDistinct, eq, exists, sql } from "drizzle-orm";
-import { artifact, build, repository, version, type Db } from "@weaver/db";
+import { protoArtifact, protoBuild, protoVersion, repository, type Db } from "@weaver/db";
 
 /**
  * Where the docs Markdown lives (`content/docs/**\/*.md`, path = URL), relative to the app root.
@@ -46,11 +46,11 @@ export async function getPublicStats(db: Db): Promise<PublicStats> {
   const [[repos], [artifacts]] = await Promise.all([
     db.select({ count: countDistinct(repository.id) }).from(repository).where(isPublic),
     db
-      .select({ count: countDistinct(artifact.id) })
-      .from(artifact)
-      .innerJoin(repository, and(eq(repository.id, artifact.repositoryId), isPublic))
-      .innerJoin(version, eq(version.artifactId, artifact.id))
-      .innerJoin(build, eq(build.versionId, version.id)),
+      .select({ count: countDistinct(protoArtifact.id) })
+      .from(protoArtifact)
+      .innerJoin(repository, and(eq(repository.id, protoArtifact.repositoryId), isPublic))
+      .innerJoin(protoVersion, eq(protoVersion.artifactId, protoArtifact.id))
+      .innerJoin(protoBuild, eq(protoBuild.versionId, protoVersion.id)),
   ]);
   return { repositories: repos?.count ?? 0, artifacts: artifacts?.count ?? 0 };
 }
@@ -82,16 +82,16 @@ export async function listPublicBrowsePages(db: Db): Promise<BrowsePage[]> {
     db
       .select({
         repository: repository.name,
-        group: artifact.group,
-        name: artifact.name,
-        version: version.version,
-        updatedAt: version.updatedAt,
+        group: protoArtifact.group,
+        name: protoArtifact.name,
+        version: protoVersion.version,
+        updatedAt: protoVersion.updatedAt,
       })
-      .from(version)
-      .innerJoin(artifact, eq(artifact.id, version.artifactId))
-      .innerJoin(repository, and(eq(repository.id, artifact.repositoryId), eq(repository.visibility, "public")))
+      .from(protoVersion)
+      .innerJoin(protoArtifact, eq(protoArtifact.id, protoVersion.artifactId))
+      .innerJoin(repository, and(eq(repository.id, protoArtifact.repositoryId), eq(repository.visibility, "public")))
       // Only versions with a published build have a page.
-      .where(exists(db.select({ one: sql`1` }).from(build).where(eq(build.versionId, version.id))))
+      .where(exists(db.select({ one: sql`1` }).from(protoBuild).where(eq(protoBuild.versionId, protoVersion.id))))
       .limit(MAX_BROWSE_PAGES),
   ]);
 

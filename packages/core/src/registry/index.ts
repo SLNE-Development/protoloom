@@ -22,6 +22,7 @@ import {
 
 export { manifestSchema, type Manifest, type PublishInput, type PublishResult } from "./publish.js";
 export type { BuildSelector, Dependent, VersionInfo, VersionSummary } from "./read.js";
+export { protoSettings, type ProtoSettings } from "./lookup.js";
 
 /** The registry service: publishing, reading, resolving and deleting artifact versions. */
 export interface Registry {
@@ -44,7 +45,7 @@ export interface Registry {
   deleteVersion(p: Principal, repository: string, c: Coordinate, opts?: { force?: boolean }): Promise<void>;
 }
 
-/** Creates the registry over a database and the object stores (archives go to `stores.primary`); `validate` defaults to buf-backed {@link validateProtos}. */
+/** Creates the registry over a database and the object stores (new archives go to `stores.primary`); `validate` defaults to buf-backed {@link validateProtos}. */
 export function createRegistry(deps: { db: Db; stores: StoreSet; validate?: typeof validateProtos }): Registry {
   const ctx: RegistryContext = { db: deps.db, stores: deps.stores, validate: deps.validate ?? validateProtos };
   return {

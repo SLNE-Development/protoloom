@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { createRegistry, createStoreSetFromEnv, deriveSecretKey, packArchive, RegistryError, type ProtoFile } from "@weaver/core";
-import { apiKeyPermission, repository, user, type Db } from "@weaver/db";
+import { repository, user, type Db } from "@weaver/db";
+import { insertKeyPermissions } from "@/test/catalog";
 import { startTestDb } from "@weaver/db/testing";
 import { createAuth, type Auth, type AuthEnv } from "@/server/auth";
 import type { ServerContext } from "@/server/context";
@@ -74,12 +75,15 @@ async function createUser(role: string) {
   return row!;
 }
 
-async function createKey(role: string, permissions: { repository: string; access: "read" | "write" }[]) {
+type Scope = { repository: string; access: "read" | "write" };
+
+/** Scopes of the shared keys; re-granted after every repository reset, which cascades to them. */
+const grants: { apiKeyId: string; permissions: Scope[] }[] = [];
+
+async function createKey(role: string, permissions: Scope[]) {
   const owner = await createUser(role);
   const created = await auth.api.createApiKey({ body: { userId: owner.id, name: `${role}-key` } });
-  await db
-    .insert(apiKeyPermission)
-    .values(permissions.map((p) => ({ apiKeyId: created.id, repository: p.repository, groupPrefix: null, access: p.access })));
+  grants.push({ apiKeyId: created.id, permissions });
   return created.key;
 }
 
@@ -146,9 +150,10 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.execute(sql`TRUNCATE repository, audit_event CASCADE`);
   await db.insert(repository).values([
-    { name: "releases", visibility: "public", allowSnapshots: false },
-    { name: "private", visibility: "private" },
+    { name: "releases", format: "proto", kind: "hosted", visibility: "public", config: { allowSnapshots: false } },
+    { name: "private", format: "proto", kind: "hosted", visibility: "private" },
   ]);
+  for (const { apiKeyId, permissions } of grants) await insertKeyPermissions(db, apiKeyId, permissions);
 });
 
 describe("PUT publish", () => {
@@ -534,7 +539,7 @@ describe("Better Auth HTTP surface", () => {
   it("keeps server-side API-key creation and REST key auth working", async () => {
     const owner = await createUser("maintainer");
     const created = await auth.api.createApiKey({ body: { userId: owner.id, name: "server-side" } });
-    await db.insert(apiKeyPermission).values({ apiKeyId: created.id, repository: "releases", groupPrefix: null, access: "write" });
+    await insertKeyPermissions(db, created.id, [{ repository: "releases", access: "write" }]);
     expect((await publish(money, { token: created.key })).status).toBe(201);
   });
 });

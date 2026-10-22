@@ -67,8 +67,8 @@ test.beforeAll(async () => {
     db
       .insert(repository)
       .values([
-        { name: PUBLIC_REPO, visibility: "public", description: "Public protos" },
-        { name: PRIVATE_REPO, visibility: "private" },
+        { name: PUBLIC_REPO, format: "proto", kind: "hosted", visibility: "public", description: "Public protos" },
+        { name: PRIVATE_REPO, format: "proto", kind: "hosted", visibility: "private" },
       ])
       .onConflictDoNothing(),
   );

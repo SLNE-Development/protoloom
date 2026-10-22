@@ -1,7 +1,7 @@
 import { and, asc, count, countDistinct, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { compareVersions, isValidGroup, isValidName, parseCoordinate, type Principal } from "@weaver/core";
-import { artifact, repository, version, type Db } from "@weaver/db";
+import { protoArtifact, protoVersion, repository, type Db } from "@weaver/db";
 import { browseProcedure, router } from "../init";
 import {
   browsableRepositories,
@@ -52,15 +52,15 @@ async function countsByRepository(db: Db, p: Principal, repos: RepositoryRow[]) 
   const byId = new Map(repos.map((r) => [r.id, r]));
   const rows = await db
     .select({
-      repositoryId: artifact.repositoryId,
-      group: artifact.group,
-      artifactCount: countDistinct(artifact.id),
-      versionCount: count(version.id),
+      repositoryId: protoArtifact.repositoryId,
+      group: protoArtifact.group,
+      artifactCount: countDistinct(protoArtifact.id),
+      versionCount: count(protoVersion.id),
     })
-    .from(artifact)
-    .leftJoin(version, eq(version.artifactId, artifact.id))
-    .where(inArray(artifact.repositoryId, [...byId.keys()]))
-    .groupBy(artifact.repositoryId, artifact.group);
+    .from(protoArtifact)
+    .leftJoin(protoVersion, eq(protoVersion.artifactId, protoArtifact.id))
+    .where(inArray(protoArtifact.repositoryId, [...byId.keys()]))
+    .groupBy(protoArtifact.repositoryId, protoArtifact.group);
   for (const row of rows) {
     if (!canReadGroup(p, byId.get(row.repositoryId)!, row.group)) continue;
     const sum = out.get(row.repositoryId) ?? { artifactCount: 0, versionCount: 0 };
@@ -76,9 +76,9 @@ async function versionsByArtifact(db: Db, artifactIds: string[]) {
   const out = new Map<string, { version: string; updatedAt: Date }[]>();
   if (artifactIds.length === 0) return out;
   const rows = await db
-    .select({ artifactId: version.artifactId, version: version.version, updatedAt: version.updatedAt })
-    .from(version)
-    .where(inArray(version.artifactId, artifactIds));
+    .select({ artifactId: protoVersion.artifactId, version: protoVersion.version, updatedAt: protoVersion.updatedAt })
+    .from(protoVersion)
+    .where(inArray(protoVersion.artifactId, artifactIds));
   for (const row of rows) {
     const list = out.get(row.artifactId) ?? [];
     list.push({ version: row.version, updatedAt: row.updatedAt });
@@ -99,20 +99,20 @@ export async function searchArtifacts(
   const pattern = `%${escapeLike(query)}%`;
   const byId = new Map(repos.map((r) => [r.id, r]));
   const rows = await db
-    .select({ id: artifact.id, repositoryId: artifact.repositoryId, group: artifact.group, name: artifact.name })
-    .from(artifact)
-    .innerJoin(repository, eq(repository.id, artifact.repositoryId))
+    .select({ id: protoArtifact.id, repositoryId: protoArtifact.repositoryId, group: protoArtifact.group, name: protoArtifact.name })
+    .from(protoArtifact)
+    .innerJoin(repository, eq(repository.id, protoArtifact.repositoryId))
     .where(
       and(
-        inArray(artifact.repositoryId, [...byId.keys()]),
+        inArray(protoArtifact.repositoryId, [...byId.keys()]),
         or(
-          ilike(artifact.group, pattern),
-          ilike(artifact.name, pattern),
-          ilike(sql`${artifact.group} || ':' || ${artifact.name}`, pattern),
+          ilike(protoArtifact.group, pattern),
+          ilike(protoArtifact.name, pattern),
+          ilike(sql`${protoArtifact.group} || ':' || ${protoArtifact.name}`, pattern),
         ),
       ),
     )
-    .orderBy(asc(artifact.group), asc(artifact.name), asc(repository.name))
+    .orderBy(asc(protoArtifact.group), asc(protoArtifact.name), asc(repository.name))
     .limit(SEARCH_SCAN);
   const readable = rows.filter((row) => canReadGroup(p, byId.get(row.repositoryId)!, row.group));
   const versions = await versionsByArtifact(db, readable.map((row) => row.id));
@@ -160,21 +160,21 @@ export const browseRouter = router({
       const repo = await requireBrowsableRepository(ctx.db, ctx.principal, input.repository);
       const pattern = input.search ? `%${escapeLike(input.search)}%` : null;
       const rows = await ctx.db
-        .select({ id: artifact.id, group: artifact.group, name: artifact.name })
-        .from(artifact)
+        .select({ id: protoArtifact.id, group: protoArtifact.group, name: protoArtifact.name })
+        .from(protoArtifact)
         .where(
           and(
-            eq(artifact.repositoryId, repo.id),
+            eq(protoArtifact.repositoryId, repo.id),
             pattern
               ? or(
-                  ilike(artifact.group, pattern),
-                  ilike(artifact.name, pattern),
-                  ilike(sql`${artifact.group} || ':' || ${artifact.name}`, pattern),
+                  ilike(protoArtifact.group, pattern),
+                  ilike(protoArtifact.name, pattern),
+                  ilike(sql`${protoArtifact.group} || ':' || ${protoArtifact.name}`, pattern),
                 )
               : undefined,
           ),
         )
-        .orderBy(asc(artifact.group), asc(artifact.name));
+        .orderBy(asc(protoArtifact.group), asc(protoArtifact.name));
       const readable = rows.filter((row) => canReadGroup(ctx.principal, repo, row.group));
       const versions = await versionsByArtifact(ctx.db, readable.map((row) => row.id));
       return readable.flatMap((row) => {

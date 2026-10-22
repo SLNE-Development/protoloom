@@ -1,7 +1,8 @@
 import { TRPCError } from "@trpc/server";
 import { asc, count, countDistinct, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { apiKeyPermission, artifact, cleanupPolicy, repository, version, type Db } from "@weaver/db";
+import { protoSettings, type ProtoSettings } from "@weaver/core";
+import { cleanupPolicy, protoArtifact, protoVersion, repository, type Db } from "@weaver/db";
 import { adminProcedure, router } from "../init";
 import { audited, repositoryName, requireRepository, type RepositoryRow } from "../helpers";
 
@@ -38,11 +39,11 @@ async function withCounts(db: Db, repos: RepositoryRow[]): Promise<RepositoryDet
       ? [[], []]
       : await Promise.all([
           db
-            .select({ repositoryId: artifact.repositoryId, artifacts: countDistinct(artifact.id), versions: count(version.id) })
-            .from(artifact)
-            .leftJoin(version, eq(version.artifactId, artifact.id))
-            .where(inArray(artifact.repositoryId, ids))
-            .groupBy(artifact.repositoryId),
+            .select({ repositoryId: protoArtifact.repositoryId, artifacts: countDistinct(protoArtifact.id), versions: count(protoVersion.id) })
+            .from(protoArtifact)
+            .leftJoin(protoVersion, eq(protoVersion.artifactId, protoArtifact.id))
+            .where(inArray(protoArtifact.repositoryId, ids))
+            .groupBy(protoArtifact.repositoryId),
           db
             .select({ repositoryId: cleanupPolicy.repositoryId, policies: count() })
             .from(cleanupPolicy)
@@ -51,12 +52,26 @@ async function withCounts(db: Db, repos: RepositoryRow[]): Promise<RepositoryDet
         ]);
   const contentById = new Map(contents.map((row) => [row.repositoryId, row]));
   const policiesById = new Map(policies.map((row) => [row.repositoryId, row.policies]));
-  return repos.map(({ id, ...repo }) => ({
-    ...repo,
+  return repos.map(({ id, name, description, visibility, createdAt, ...repo }) => ({
+    name,
+    description,
+    visibility,
+    ...protoSettings(repo),
+    createdAt,
     artifactCount: contentById.get(id)?.artifacts ?? 0,
     versionCount: contentById.get(id)?.versions ?? 0,
     policyCount: policiesById.get(id) ?? 0,
   }));
+}
+
+/** The proto settings present in `input`, for storing in `repository.config`. */
+function settingsPatch(input: Partial<ProtoSettings>): Partial<ProtoSettings> {
+  const patch: Partial<ProtoSettings> = {};
+  if (input.allowRedeploy !== undefined) patch.allowRedeploy = input.allowRedeploy;
+  if (input.allowReleases !== undefined) patch.allowReleases = input.allowReleases;
+  if (input.allowSnapshots !== undefined) patch.allowSnapshots = input.allowSnapshots;
+  if (input.resolutionPriority !== undefined) patch.resolutionPriority = input.resolutionPriority;
+  return patch;
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -77,13 +92,17 @@ export const repositoriesRouter = router({
     return details!;
   }),
 
-  /** Creates a repository; `CONFLICT` when the name is taken. */
+  /** Creates a hosted proto repository; `CONFLICT` when the name is taken. */
   create: adminProcedure.input(repositorySettings.extend({ name: repositoryName })).mutation(async ({ ctx, input }) => {
     try {
       const created = await audited(
         ctx.db,
         { actor: ctx.principal, action: "repository.create", target: input.name, details: input },
-        async (tx) => (await tx.insert(repository).values(input).returning())[0]!,
+        async (tx) => {
+          const { name, description, visibility } = input;
+          const values = { name, description, visibility, format: "proto" as const, kind: "hosted" as const };
+          return (await tx.insert(repository).values({ ...values, config: settingsPatch(input) }).returning())[0]!;
+        },
       );
       const [details] = await withCounts(ctx.db, [created]);
       return details!;
@@ -104,7 +123,9 @@ export const repositoriesRouter = router({
       async (tx) => {
         const repo = await requireRepository(tx, name);
         if (Object.keys(patch).length === 0) return repo;
-        return (await tx.update(repository).set(patch).where(eq(repository.id, repo.id)).returning())[0]!;
+        const { description, visibility } = patch;
+        const config = { ...repo.config, ...settingsPatch(patch) };
+        return (await tx.update(repository).set({ description, visibility, config }).where(eq(repository.id, repo.id)).returning())[0]!;
       },
     );
     const [details] = await withCounts(ctx.db, [updated]);
@@ -115,16 +136,15 @@ export const repositoriesRouter = router({
   delete: adminProcedure.input(z.object({ name: repositoryName })).mutation(async ({ ctx, input }) => {
     await audited(ctx.db, { actor: ctx.principal, action: "repository.delete", target: input.name }, async (tx) => {
       const repo = await requireRepository(tx, input.name, { forUpdate: true });
-      const [used] = await tx.select({ id: artifact.id }).from(artifact).where(eq(artifact.repositoryId, repo.id)).limit(1);
+      const [used] = await tx.select({ id: protoArtifact.id }).from(protoArtifact).where(eq(protoArtifact.repositoryId, repo.id)).limit(1);
       if (used) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
           message: `Repository ${input.name} still contains artifacts; delete them first`,
         });
       }
+      // Key scopes reference the repository row, so they go with it (a later namesake inherits none).
       await tx.delete(repository).where(eq(repository.id, repo.id));
-      // Key scopes name repositories by name; a later repository with the same name must not inherit them.
-      await tx.delete(apiKeyPermission).where(eq(apiKeyPermission.repository, repo.name));
     });
     return { name: input.name };
   }),

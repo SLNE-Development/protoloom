@@ -16,7 +16,18 @@ import {
   type Registry,
   type Role,
 } from "@weaver/core";
-import { apikey, apiKeyPermission, auditEvent, build, cleanupPolicy, invite, session, user, type Db } from "@weaver/db";
+import {
+  apikey,
+  auditEvent,
+  cleanupPolicy,
+  invite,
+  protoBuild as build,
+  repoPermission,
+  repository,
+  session,
+  user,
+  type Db,
+} from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
 import { createQueue, producerConnection, type CleanupQueue } from "@weaver/jobs";
 import { createAuth, type Auth, type AuthEnv } from "../auth";
@@ -394,7 +405,7 @@ describe("keys", () => {
     await call(maintainer()).keys.revoke({ id: own.id });
     await call(admin()).keys.revoke({ id: other.id });
     expect(await db.select().from(apikey)).toEqual([]);
-    expect(await db.select().from(apiKeyPermission)).toEqual([]);
+    expect(await db.select().from(repoPermission)).toEqual([]);
   });
 });
 
@@ -605,7 +616,11 @@ describe("review follow-ups", () => {
       ],
     });
     await call(admin()).repositories.delete({ name: "internal" });
-    expect((await db.select().from(apiKeyPermission)).map((p) => p.repository)).toEqual(["shared"]);
+    const scopes = await db
+      .select({ name: repository.name })
+      .from(repoPermission)
+      .innerJoin(repository, eq(repository.id, repoPermission.repositoryId));
+    expect(scopes.map((p) => p.name)).toEqual(["shared"]);
 
     await call(admin()).repositories.create({ name: "internal", visibility: "private" });
     const [key] = await call(maintainer()).keys.list();

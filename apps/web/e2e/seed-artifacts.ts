@@ -16,8 +16,8 @@ function proto(path: string, body: string, imports: string[] = []): ProtoFile {
  */
 export async function seedArtifacts(db: Db): Promise<void> {
   await db.insert(repository).values([
-    { name: ARTIFACTS.releases, description: "Released contracts", visibility: "public" },
-    { name: ARTIFACTS.snapshots, description: "Snapshot builds", visibility: "private" },
+    { name: ARTIFACTS.releases, format: "proto", kind: "hosted", description: "Released contracts", visibility: "public" },
+    { name: ARTIFACTS.snapshots, format: "proto", kind: "hosted", description: "Snapshot builds", visibility: "private" },
   ]);
 
   const stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: serverEnv().STORAGE_LOCAL_PATH });
