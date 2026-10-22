@@ -7,6 +7,8 @@ order: 6
 
 Weaver is an OCI registry at `{{host}}`. Stock `docker`, `podman`, `buildx`, containerd, `helm`, `oras` and `cosign` work with it without any flag or patched config. Every image name starts with the name of a docker repository: `{{host}}/<repo>/<image>:<tag>`.
 
+Docker clients address a registry by host name only and always call `/v2/` at the root of that host. Serve Weaver at the root of its domain (`https://{{host}}/`), not under a path such as `https://example.com/weaver/`, or docker, podman and containerd can't reach it.
+
 ## Log in
 
 Create an access token (see [API keys and permissions](/docs/admin/keys)) and log in with any username and the token as the password:
@@ -61,17 +63,17 @@ Mirrors are read-only: pushing to one fails with `UNSUPPORTED`. Caching is off b
 
 ## Root mirror and `registry-mirrors`
 
-One docker mirror can be the **root mirror** (repository settings → Docker → Root mirror). It serves image names that don't start with a repository name, so `docker pull {{host}}/nginx` works, and the Docker daemon can use Weaver as a pull-through mirror for Docker Hub. Add it to `/etc/docker/daemon.json` and restart the daemon:
+One docker mirror can be the **root mirror** (repository settings → Docker → Root mirror). It serves image names that don't start with a repository name, so `docker pull {{host}}/nginx` works, and the Docker daemon can use Weaver as a pull-through mirror for Docker Hub. Add it to `/etc/docker/daemon.json` and restart the daemon. The entry is the scheme and host only, with no path:
 
 ```json title="/etc/docker/daemon.json"
 {
-  "registry-mirrors": ["{{url}}"]
+  "registry-mirrors": ["https://{{host}}"]
 }
 ```
 
 Then a plain `docker pull nginx` goes through Weaver and falls back to Docker Hub when Weaver can't answer. The daemon sends no credentials to registry mirrors, so the root mirror has to be public. Turn on **Docker Hub** for it as well, so `nginx` maps to `library/nginx`. The name `library` is reserved and can't be used for a repository.
 
-For containerd, add a `hosts.toml` for `docker.io` with `[host."{{url}}"]` and `capabilities = ["pull", "resolve"]`.
+For containerd, add a `hosts.toml` for `docker.io` with `[host."https://{{host}}"]` and `capabilities = ["pull", "resolve"]`.
 
 ## Groups
 
@@ -98,16 +100,26 @@ The browse page labels these images as Helm charts.
 
 ## Signatures, SBOMs and referrers
 
-Weaver supports the OCI referrers API, so `cosign` and `oras` attach signatures, SBOMs and attestations to an image:
+Weaver supports the OCI referrers API, and also the older tag scheme that clients fall back to.
+
+`cosign` stores a signature by default as an extra tag, `sha256-<hex>.sig`, next to the image it signs. That works through the ordinary manifest routes, so the signature shows up as a tag on the browse page. Sign by digest, so the signature covers exactly the image you pushed:
 
 ```sh
-cosign sign {{host}}/apps/web@sha256:<hex>
+cosign generate-key-pair
+cosign sign --key cosign.key {{host}}/apps/web@sha256:<hex>
 cosign verify --key cosign.pub {{host}}/apps/web:1.0
+```
+
+Keyless signing (`cosign sign {{host}}/apps/web@sha256:<hex>` without `--key`, then `cosign verify --certificate-identity <you> --certificate-oidc-issuer <issuer>`) stores the signature the same way. Newer cosign releases can attach signatures as OCI referrers instead, with the experimental `--registry-referrers-mode oci-1-1` option.
+
+`oras` attaches SBOMs and other artifacts through the referrers API:
+
+```sh
 oras attach --artifact-type application/spdx+json {{host}}/apps/web:1.0 sbom.spdx.json
 oras discover {{host}}/apps/web:1.0
 ```
 
-Attached artifacts show up on the manifest's browse page with their type: cosign signature, SBOM (`application/spdx+json`, `application/vnd.cyclonedx+json`), Helm chart, or the raw artifact type.
+Artifacts attached as referrers show up on the manifest's browse page with their type: cosign signature, SBOM (`application/spdx+json`, `application/vnd.cyclonedx+json`), Helm chart, or the raw artifact type. Build attestations that `buildx` adds to a multi-platform index are listed as build attestations, not as a platform.
 
 ## Deleting and garbage collection
 
@@ -118,7 +130,13 @@ crane delete {{host}}/apps/web:old            # removes the tag only
 crane delete {{host}}/apps/web@sha256:<hex>   # removes the manifest and its tags
 ```
 
-Deleting frees no storage at once. The worker's `docker:gc` job runs daily at 03:30 and deletes layers that no manifest references any more, once they have been unreferenced for 24 hours. Uploads idle for 24 hours are dropped. Layers pushed in the last 24 hours are always kept, so a push in progress never loses its layers.
+Deleting frees no storage at once; the worker's `docker:gc` job does, daily at 03:30. Each run does three things:
+
+- **Uploads.** It drops uploads that have received nothing for 24 hours.
+- **Layer links.** It removes a layer from an image when no manifest of that image references it and the layer was last pushed, mounted or checked (`HEAD`, as in "Layer already exists") by a pusher more than 24 hours ago.
+- **Stored layers.** It deletes a layer's bytes once no image links it any more, no manifest anywhere references it, and it was last linked more than 24 hours ago.
+
+The 24 hours count from the last push or use of the layer, not from the delete. A layer you pushed long ago and whose last manifest you delete today can be freed by the next run. A layer pushed in the last 24 hours is always kept, so a push in progress never loses its layers. Only one collection runs at a time, and a push that races a run either keeps its layers or fails with `MANIFEST_BLOB_UNKNOWN`; push again and docker uploads the missing layers.
 
 ## Upload directory
 
