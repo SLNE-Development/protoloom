@@ -9,6 +9,8 @@ export interface FakeRegistry {
   url: string;
   /** Raw request URLs (path and query) received, in order. */
   hits: string[];
+  /** Every request received, in order, with its headers and the raw body bytes. */
+  requests: Array<{ method: string; url: string; headers: IncomingMessage["headers"]; body: Buffer }>;
   /** While down, every request answers 503. */
   setOffline(down: boolean): void;
   /** Stops the server. */
@@ -55,6 +57,7 @@ export async function startFakeRegistry(
     byName.set(p.name, { name: p.name, bare, versions: p.versions, tags: { latest: p.versions[p.versions.length - 1]!, ...p.tags }, tarballs });
   }
   const hits: string[] = [];
+  const requests: FakeRegistry["requests"] = [];
   let offline = false;
   let url = "";
 
@@ -87,8 +90,16 @@ export async function startFakeRegistry(
   const server = createServer((req, res) => {
     const raw = req.url ?? "/";
     hits.push(raw);
-    // Drain any request body before answering.
-    req.resume();
+    // Read the whole request body before answering.
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      requests.push({ method: req.method ?? "GET", url: raw, headers: req.headers, body: Buffer.concat(chunks) });
+      answer(req, res, raw);
+    });
+  });
+
+  function answer(req: IncomingMessage, res: ServerResponse, raw: string): void {
     if (offline) return sendJson(req, res, 503, { error: "service unavailable" });
     const { pathname, searchParams } = new URL(raw, "http://fake");
     if (pathname === "/-/v1/search") {
@@ -116,13 +127,14 @@ export async function startFakeRegistry(
       return;
     }
     return sendJson(req, res, 404, { error: "Not found" });
-  });
+  }
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
   return {
     url,
     hits,
+    requests,
     setOffline(down) {
       offline = down;
     },

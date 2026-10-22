@@ -20,7 +20,8 @@ const FORWARDED_REQUEST_HEADERS = ["accept", "content-type", "user-agent", "npm-
 /**
  * Forwards one request to the mirror's upstreams in order (first non-404 wins), 30 s header timeout, upstream auth applied.
  * Returns null when offline or every upstream answered 404. Only the allow-listed client headers (accept, content-type,
- * user-agent, npm-command, npm-session, npm-scope, npm-in-ci) are sent. Response headers are filtered with core's
+ * user-agent, npm-command, npm-session, npm-scope, npm-in-ci, plus content-encoding when a body is sent, which is
+ * forwarded byte for byte) are sent. Response headers are filtered with core's
  * `forwardableHeaders`: hop-by-hop headers are dropped, and content-encoding/content-length only when `fetch`
  * decoded the body, so a body it could not decode keeps its encoding header.
  *
@@ -39,11 +40,12 @@ export async function forwardUpstream(
   if ((repo.config as MirrorConfig).offline) return null;
   const method = init.method.toUpperCase();
   const query = init.search ? (init.search.startsWith("?") ? init.search : `?${init.search}`) : "";
+  const hasBody = method !== "GET" && method !== "HEAD" && init.body != null;
   const failures: string[] = [];
   for (const upstream of await deps.repos.upstreamsWithSecrets(repo.id)) {
     const url = `${upstreamUrl(upstream.url, path)}${query === "?" ? "" : query}`;
     const headers = new Headers();
-    for (const name of FORWARDED_REQUEST_HEADERS) {
+    for (const name of hasBody ? [...FORWARDED_REQUEST_HEADERS, "content-encoding"] : FORWARDED_REQUEST_HEADERS) {
       const value = init.headers.get(name);
       if (value !== null) headers.set(name, value);
     }
@@ -56,7 +58,7 @@ export async function forwardUpstream(
       response = await fetch(url, {
         method,
         headers,
-        body: method === "GET" || method === "HEAD" ? undefined : (init.body ?? undefined),
+        body: hasBody ? init.body! : undefined,
         signal: controller.signal,
         redirect: "follow",
       });
