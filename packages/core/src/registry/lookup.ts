@@ -1,8 +1,18 @@
 import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
-import { protoArtifact, protoBuild, protoBuildFile, protoDependency, protoVersion, repository, type Db, type Tx } from "@weaver/db";
+import {
+  groupMember,
+  protoArtifact,
+  protoBuild,
+  protoBuildFile,
+  protoDependency,
+  protoVersion,
+  repository,
+  type Db,
+  type Tx,
+} from "@weaver/db";
 import type { ProtoFile } from "../archive.js";
 import { formatCoordinate, type Coordinate } from "../coordinates.js";
-import { canAccess, canReadThroughGroup, type Principal } from "../permissions.js";
+import { canAccess, type Principal } from "../permissions.js";
 import type { ProtoHostedConfig } from "../repos/config.js";
 import { toRepo, type Repo, type RepoService } from "../repos/service.js";
 import type { Lookup, ResolvedNode } from "../resolution.js";
@@ -75,20 +85,42 @@ function mayReadSomeGroup(p: Principal, repo: Repo): boolean {
   return p.kind === "apikey" && p.permissions.some((entry) => entry.repositoryId === repo.id);
 }
 
-/** The repositories a publish resolves its dependencies in, and which of them the publisher reads through a group. */
+/** The repositories a publish resolves its dependencies in, and the groups the publisher may read them through. */
 export interface PublishSources {
   /** The target first, then the other readable hosted proto repositories (see {@link publishRepositoryOrder}). */
   repositories: Repo[];
-  /** Ids of the repositories readable through a group the publisher can read; read without further checks. */
-  groupGranted: Set<string>;
+  /**
+   * Per repository id, the groups containing it that the publisher may read for at least one proto
+   * group. A coordinate of the repository is readable when one of them grants it
+   * (`canAccess(p, group, c.group, "read")`), so a key's group prefix on a group entry narrows it.
+   */
+  viaGroups: ReadonlyMap<string, Repo[]>;
+}
+
+/** The proto groups containing each of `memberIds`, by member id, loaded in one query. */
+async function groupsContainingAll(db: Queryable, memberIds: string[]): Promise<Map<string, Repo[]>> {
+  const out = new Map<string, Repo[]>();
+  if (memberIds.length === 0) return out;
+  const rows = await db
+    .select({ memberId: groupMember.memberId, group: repository })
+    .from(groupMember)
+    .innerJoin(repository, eq(repository.id, groupMember.groupId))
+    .where(and(inArray(groupMember.memberId, memberIds), eq(repository.format, "proto")))
+    .orderBy(asc(repository.name));
+  for (const row of rows) {
+    const groups = out.get(row.memberId) ?? [];
+    groups.push(toRepo(row.group));
+    out.set(row.memberId, groups);
+  }
+  return out;
 }
 
 /**
  * The repositories and group grants behind {@link publishRepositoryOrder}. A hosted repository is
  * kept when the publisher may read it directly (for some group) or through a group containing it
- * that the publisher can read; groups add access, not order.
+ * that the publisher may read (for some group); groups add access, not order.
  */
-export async function publishSources(db: Queryable, repos: RepoService, p: Principal, target: Repo): Promise<PublishSources> {
+export async function publishSources(db: Queryable, p: Principal, target: Repo): Promise<PublishSources> {
   const rows = await db
     .select()
     .from(repository)
@@ -97,15 +129,17 @@ export async function publishSources(db: Queryable, repos: RepoService, p: Princ
   // A stable sort keeps the name order within equal priorities. Sorting the leniently read config
   // (instead of casting the JSON in SQL) also ranks a damaged stored value at the default.
   const others = rows.map(toRepo).sort((a, b) => hostedProtoConfig(a).resolutionPriority - hostedProtoConfig(b).resolutionPriority);
+  const candidates = [target, ...others];
 
-  const groupGranted = new Set<string>();
+  const containing = await groupsContainingAll(db, candidates.map((r) => r.id));
+  const viaGroups = new Map<string, Repo[]>();
   const repositories: Repo[] = [];
-  for (const repo of [target, ...others]) {
-    const groups = await repos.groupsContaining(repo.id);
-    if (groups.some((g) => canReadThroughGroup(p, g))) groupGranted.add(repo.id);
-    if (repo === target || groupGranted.has(repo.id) || mayReadSomeGroup(p, repo)) repositories.push(repo);
+  for (const repo of candidates) {
+    const readable = (containing.get(repo.id) ?? []).filter((g) => mayReadSomeGroup(p, g));
+    if (readable.length > 0) viaGroups.set(repo.id, readable);
+    if (repo === target || readable.length > 0 || mayReadSomeGroup(p, repo)) repositories.push(repo);
   }
-  return { repositories, groupGranted };
+  return { repositories, viaGroups };
 }
 
 /**
@@ -115,8 +149,8 @@ export async function publishSources(db: Queryable, repos: RepoService, p: Princ
  * dependency found in a priority-5 repository is used over the same coordinate in a priority-10
  * repository. Mirrors and groups are never consulted.
  */
-export async function publishRepositoryOrder(db: Queryable, repos: RepoService, p: Principal, target: Repo): Promise<Repo[]> {
-  return (await publishSources(db, repos, p, target)).repositories;
+export async function publishRepositoryOrder(db: Queryable, p: Principal, target: Repo): Promise<Repo[]> {
+  return (await publishSources(db, p, target)).repositories;
 }
 
 /**
@@ -189,21 +223,23 @@ export interface RegistryLookup {
 }
 
 /**
- * Builds a {@link Lookup} over `repositories` in order for a principal. Repositories in
- * `groupGranted` (read through a group) are read without further checks; the others are skipped
- * when the principal can't read them for the coordinate's group, so hidden artifacts look exactly
- * like missing ones. Snapshot versions resolve to their newest build.
+ * Builds a {@link Lookup} over `repositories` in order for a principal. A repository is read for a
+ * coordinate when the principal may read it for the coordinate's group directly or through one of
+ * its `viaGroups`; otherwise it is skipped, so hidden artifacts look exactly like missing ones.
+ * Snapshot versions resolve to their newest build.
  */
 export function createLookup(
   db: Queryable,
   p: Principal,
   repositories: Repo[],
-  groupGranted: ReadonlySet<string> = new Set(),
+  viaGroups: ReadonlyMap<string, Repo[]> = new Map(),
 ): RegistryLookup {
   const buildIds = new Map<string, string>();
+  const readable = (repo: Repo, group: string): boolean =>
+    canAccess(p, repo, group, "read") || (viaGroups.get(repo.id) ?? []).some((g) => canAccess(p, g, group, "read"));
   const lookup: Lookup = async (c) => {
     for (const repo of repositories) {
-      if (!groupGranted.has(repo.id) && !canAccess(p, repo, c.group, "read")) continue;
+      if (!readable(repo, c.group)) continue;
       const found = await findLatestBuild(db, repo.id, c);
       if (!found) continue;
       buildIds.set(formatCoordinate(c), found.id);
