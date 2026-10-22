@@ -299,6 +299,30 @@ test("an admin creates a key whose secret is shown exactly once", async ({ page 
   expect(await page.content()).not.toContain(value);
 });
 
+test("a long repository name stays inside its permission picker", async ({ page }) => {
+  // 63 characters, the longest name a repository may have.
+  const repo = uniqueName("a-very-long-repository-name-for-the-picker").padEnd(63, "x").slice(0, 63);
+  await loginAs(page, USERS.admin.id);
+  await createRepository(page, repo);
+  await page.goto("/keys");
+  await page.getByRole("button", { name: "Create key" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Create API key" });
+  const row = dialog.getByTestId("permission-row").first();
+  await choose(page, row, "Repository", repo);
+
+  const trigger = row.getByRole("combobox", { name: "Repository" });
+  const prefix = row.getByLabel("Group prefix");
+  const [triggerBox, prefixBox] = [(await trigger.boundingBox())!, (await prefix.boundingBox())!];
+  expect(triggerBox.x + triggerBox.width).toBeLessThanOrEqual(prefixBox.x);
+  // The name is cut off inside the trigger instead of painting past its edge.
+  const overflow = await trigger.evaluate((el) => {
+    const right = el.getBoundingClientRect().right;
+    return [...el.querySelectorAll("*")].some((child) => child.getBoundingClientRect().right > right + 0.5);
+  });
+  expect(overflow).toBe(false);
+  await dialog.screenshot({ path: ".e2e/results/long-repo-picker.png" });
+});
+
 test("an admin revokes a key after confirming", async ({ page }) => {
   const repo = uniqueName("revoke");
   const keyName = uniqueName("old").slice(0, 32);

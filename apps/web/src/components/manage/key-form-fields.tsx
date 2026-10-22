@@ -117,7 +117,7 @@ export function KeyFormFields({
                       }}
                     >
                       <FormControl>
-                        <SelectTrigger className="w-full font-mono data-[placeholder]:font-sans" aria-label="Repository">
+                        <SelectTrigger className="w-full min-w-0 font-mono data-[placeholder]:font-sans" aria-label="Repository">
                           <SelectValue placeholder={loading ? "Loading…" : "Choose repository"} />
                         </SelectTrigger>
                       </FormControl>
@@ -127,8 +127,8 @@ export function KeyFormFields({
                         )}
                         {repos.map((repo) => (
                           <SelectItem key={repo.name} value={repo.name} className="font-mono">
-                            <FormatBadge format={repo.format} className="w-14 justify-center" aria-hidden />
-                            {repo.name}
+                            <FormatBadge format={repo.format} className="w-14 shrink-0 justify-center" aria-hidden />
+                            <span className="truncate">{repo.name}</span>
                           </SelectItem>
                         ))}
                       </SelectContent>
