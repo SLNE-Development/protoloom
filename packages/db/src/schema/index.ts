@@ -5,3 +5,4 @@ export * from "./proto.js";
 export * from "./settings.js";
 export * from "./audit.js";
 export * from "./invite.js";
+export * from "./docker.js";

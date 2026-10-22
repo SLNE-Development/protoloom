@@ -43,6 +43,13 @@
       "when": 1792673815145,
       "tag": "0005_multi_format_reset",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792674743121,
+      "tag": "0006_bored_triton",
+      "breakpoints": true
     }
   ]
 }
