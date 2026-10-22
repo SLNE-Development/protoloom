@@ -55,6 +55,8 @@ export interface MirrorResponse {
   /**
    * The content; null for HEAD. Callers must read it to the end or cancel it: an unread body holds
    * the upstream connection and, on a cache miss, stalls the cache write until its idle timeout.
+   * A client that pauses reading for longer than that idle timeout (60 s) aborts the download
+   * together with the cache write.
    */
   body: ReadableStream<Uint8Array> | null;
   cache: CacheResult;
@@ -66,7 +68,7 @@ export interface MirrorResponse {
 
 /** Serves mirror repositories from their upstreams, optionally caching what they return. */
 export interface MirrorEngine {
-  /** null = not found: rules reject, offline without cache, or every upstream answered 404. Upstream 5xx/network errors with no usable cache throw RegistryError("upstream_unavailable"). */
+  /** null = not found: rules reject, offline without cache, or every upstream answered 404. Upstream 5xx, 429 and network errors with no usable cache throw RegistryError("upstream_unavailable"). */
   fetch(req: MirrorFetch): Promise<MirrorResponse | null>;
   /** Resolves once every cache write started so far has finished or failed. */
   drain(): Promise<void>;
@@ -385,6 +387,8 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
       if (outcome.kind === "response") {
         const { response, url } = outcome;
         const encoding = bodyEncoding(response.headers, method, response.status);
+        // A HEAD describes what the GET would return, so it drops the encoding headers when the GET body would be decoded.
+        const headerEncoding = method === "HEAD" ? bodyEncoding(response.headers, "GET", response.status) : encoding;
         // A body fetch could not decode is still encoded; it is passed through, never cached.
         if (config.cache.enabled && method === "GET" && response.status === 200 && response.body !== null && encoding !== "encoded") {
           return cacheThrough(req, config, outcome);
@@ -394,7 +398,7 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
           await discardBody(response);
           body = null;
         }
-        return { status: response.status, headers: forwardableHeaders(response.headers, encoding), body, cache: "bypass", asset: null, upstreamUrl: url };
+        return { status: response.status, headers: forwardableHeaders(response.headers, headerEncoding), body, cache: "bypass", asset: null, upstreamUrl: url };
       }
       if (outcome.kind === "not_found") return null;
 

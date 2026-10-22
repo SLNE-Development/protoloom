@@ -367,6 +367,21 @@ describe("mirror engine", () => {
     expect(up.hits).toHaveLength(2);
   });
 
+  it("HEAD of a decodable gzip body drops the encoding headers like GET", async () => {
+    const { gzipSync } = await import("node:zlib");
+    const zipped = gzipSync("decoded-content");
+    up.handler = (_req, res) => res.writeHead(200, { "content-type": "text/plain", "content-encoding": "gzip", "content-length": zipped.length }).end(res.req.method === "HEAD" ? undefined : zipped);
+    const repo = await mirror();
+    const get = await engine.fetch({ repo, path: "g.txt", subject: "g.txt", class: "immutable" });
+    await readText(get!);
+    const head = await engine.fetch({ repo, path: "g.txt", subject: "g.txt", class: "immutable", method: "HEAD" });
+    expect(head!.body).toBeNull();
+    expect(head!.headers.get("content-encoding")).toBeNull();
+    expect(head!.headers.get("content-length")).toBeNull();
+    expect(head!.headers.get("content-type")).toBe("text/plain");
+    expect([...head!.headers.keys()].sort()).toEqual([...get!.headers.keys()].sort());
+  });
+
   it("HEAD never writes the cache", async () => {
     up.handler = serve({ "h.jar": "head-body" });
     const repo = await mirror(cached);
