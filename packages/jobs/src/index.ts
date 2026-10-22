@@ -1,7 +1,7 @@
 import { Queue, type ConnectionOptions, type DefaultJobOptions, type JobState } from "bullmq";
 
-/** Name of the BullMQ queue that carries cleanup jobs. */
-export const CLEANUP_QUEUE = "weaver-cleanup";
+/** Name of the BullMQ queue that carries maintenance jobs (cleanup, cache eviction, ...). */
+export const MAINTENANCE_QUEUE = "weaver-maintenance";
 
 /** Id of the job scheduler that runs every repository's cleanup policies once a day. */
 export const DAILY_SCHEDULER_ID = "cleanup-daily";
@@ -9,15 +9,28 @@ export const DAILY_SCHEDULER_ID = "cleanup-daily";
 /** Cron pattern of the daily cleanup: 03:00 server time. */
 export const DAILY_CLEANUP_PATTERN = "0 3 * * *";
 
-/** Payload of a cleanup job: all repositories, or a single one ("run now"). */
-export type CleanupJobData = { kind: "cleanup:all" } | { kind: "cleanup:repo"; repository: string };
+/** Id of the job scheduler that evicts mirror caches once an hour. */
+export const EVICT_SCHEDULER_ID = "evict-hourly";
+
+/** Cron pattern of the hourly cache eviction: minute 17 of every hour. */
+export const EVICT_PATTERN = "17 * * * *";
+
+/** Payload of a maintenance job; the worker dispatches on `kind`. Later features extend the union. */
+export type MaintenanceJobData =
+  | { kind: "cleanup:all" }
+  | { kind: "cleanup:repo"; repository: string }
+  | { kind: "evict:all" };
 
 /** Return value of a finished cleanup job. */
 export interface CleanupJobResult {
   deleted: number;
 }
 
-export type CleanupQueue = Queue<CleanupJobData, CleanupJobResult>;
+/** The maintenance queue; job results differ per `kind`, so they are untyped here. */
+export type MaintenanceQueue = Queue<MaintenanceJobData, unknown>;
+
+/** The maintenance queue as seen by the cleanup helpers below. */
+export type CleanupQueue = MaintenanceQueue;
 
 /** Where a job stands, with its result once completed or its failure reason once failed. */
 export interface CleanupJobStatus {
@@ -30,7 +43,7 @@ export interface CleanupJobStatus {
  * Retry a failing job at most three times with exponential backoff, and keep finished jobs
  * around for a day (at most 1000) so the UI can still poll their outcome.
  */
-export const CLEANUP_JOB_OPTIONS: DefaultJobOptions = {
+export const MAINTENANCE_JOB_OPTIONS: DefaultJobOptions = {
   attempts: 3,
   backoff: { type: "exponential", delay: 10_000 },
   removeOnComplete: { age: 86_400, count: 1000 },
@@ -114,15 +127,15 @@ export interface QueueOptions {
 }
 
 /**
- * Opens the cleanup queue on the given connection with {@link CLEANUP_JOB_OPTIONS} as job
+ * Opens the maintenance queue on the given connection with {@link MAINTENANCE_JOB_OPTIONS} as job
  * defaults and an `error` listener attached.
  */
-export function createQueue(connection: ConnectionOptions, options: QueueOptions = {}): CleanupQueue {
-  const queue = new Queue<CleanupJobData, CleanupJobResult>(CLEANUP_QUEUE, {
+export function createQueue(connection: ConnectionOptions, options: QueueOptions = {}): MaintenanceQueue {
+  const queue = new Queue<MaintenanceJobData, unknown>(MAINTENANCE_QUEUE, {
     connection,
-    defaultJobOptions: CLEANUP_JOB_OPTIONS,
+    defaultJobOptions: MAINTENANCE_JOB_OPTIONS,
   });
-  queue.on("error", options.onError ?? ((error: Error) => console.error("weaver: cleanup queue error:", error.message)));
+  queue.on("error", options.onError ?? ((error: Error) => console.error("weaver: maintenance queue error:", error.message)));
   return queue;
 }
 
@@ -178,18 +191,32 @@ export async function getJobState(
     const state = await job.getState();
     return {
       state,
-      result: state === "completed" ? (job.returnvalue ?? null) : null,
+      result: state === "completed" ? ((job.returnvalue as CleanupJobResult | undefined) ?? null) : null,
       failedReason: state === "failed" ? (job.failedReason ?? null) : null,
     };
   };
   return withinTimeout(lookup(), options.timeoutMs ?? PRODUCER_TIMEOUT_MS);
 }
 
+/**
+ * Upserts the job scheduler `id` with a cron `pattern`; the jobs it creates carry `data` and the
+ * default job options. Calling it again with the same id updates the scheduler instead of adding one.
+ */
+export async function scheduleRepeating(
+  queue: MaintenanceQueue,
+  id: string,
+  pattern: string,
+  data: MaintenanceJobData,
+): Promise<void> {
+  await queue.upsertJobScheduler(id, { pattern }, { name: data.kind, data, opts: MAINTENANCE_JOB_OPTIONS });
+}
+
 /** Creates or updates the daily cleanup scheduler; calling it again never adds a second one. */
-export async function scheduleDailyCleanup(queue: CleanupQueue): Promise<void> {
-  await queue.upsertJobScheduler(
-    DAILY_SCHEDULER_ID,
-    { pattern: DAILY_CLEANUP_PATTERN },
-    { name: "cleanup:all", data: { kind: "cleanup:all" }, opts: CLEANUP_JOB_OPTIONS },
-  );
+export function scheduleDailyCleanup(queue: MaintenanceQueue): Promise<void> {
+  return scheduleRepeating(queue, DAILY_SCHEDULER_ID, DAILY_CLEANUP_PATTERN, { kind: "cleanup:all" });
+}
+
+/** Creates or updates the hourly cache-eviction scheduler; calling it again never adds a second one. */
+export function scheduleHourlyEviction(queue: MaintenanceQueue): Promise<void> {
+  return scheduleRepeating(queue, EVICT_SCHEDULER_ID, EVICT_PATTERN, { kind: "evict:all" });
 }
