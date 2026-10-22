@@ -24,7 +24,14 @@ export async function startStubUpstream(files: Record<string, string | Buffer> =
       res.writeHead(503).end("down");
       return;
     }
-    const body = stub.files.get(decodeURIComponent(path.slice(1)));
+    let key: string;
+    try {
+      key = decodeURIComponent(path.slice(1));
+    } catch {
+      res.writeHead(400).end("bad path");
+      return;
+    }
+    const body = stub.files.get(key);
     if (body === undefined) {
       res.writeHead(404).end("not found");
       return;

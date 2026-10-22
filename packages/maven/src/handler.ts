@@ -2,31 +2,22 @@ import {
   RegistryError,
   canAccess,
   canReadThroughGroup,
-  type FormatDeps,
   type FormatFactory,
   type Principal,
   type Repo,
 } from "@weaver/core";
 import type { MavenContext } from "./context.js";
+import { readHosted, writeHosted } from "./hosted.js";
 import { methodNotAllowed, textResponse, unauthorized } from "./http.js";
 import { parseMavenPath, type MavenPath } from "./path.js";
 
 /** A stub reader that serves one request for a repository. */
 type Reader = (ctx: MavenContext, repo: Repo, target: MavenPath) => Promise<Response>;
 
-/** A stub writer that handles one upload to a hosted repository. */
-type Writer = (ctx: { deps: FormatDeps; principal: Principal }, repo: Repo, target: MavenPath, req: Request) => Promise<Response>;
-
 /** The 404 answer for everything that does not exist. */
 function notFound(): Response {
   return textResponse(404, "Not Found");
 }
-
-/** Serves a file from a hosted repository (implemented by the hosted task). */
-const readHosted: Reader = async () => notFound();
-
-/** Stores an uploaded file in a hosted repository (implemented by the hosted task). */
-const writeHosted: Writer = async () => notFound();
 
 /** Serves a file through a mirror repository (implemented by the mirror task). */
 const readMirror: Reader = async () => notFound();
@@ -69,13 +60,13 @@ export const createMavenHandler: FormatFactory = (deps) => async (req, rest) => 
     const principal = await deps.principal(req);
     if (method === "PUT") {
       if (!canAccess(principal, repo, "", "write")) return denied(principal);
-      return await writeHosted({ deps, principal }, repo, target, req);
+      return await writeHosted({ deps, principal, method }, repo, target, req);
     }
 
     if (!mayRead(principal, repo)) return denied(principal);
     const ctx: MavenContext = { deps, principal, method };
     if (target.type === "directory") return await listDirectory(ctx, repo, target);
-    if (repo.kind === "hosted") return await readHosted(ctx, repo, target);
+    if (repo.kind === "hosted") return (await readHosted(ctx, repo, target)) ?? notFound();
     if (repo.kind === "mirror") return await readMirror(ctx, repo, target);
     return await readGroup(ctx, repo, target);
   } catch (err) {

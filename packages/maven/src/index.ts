@@ -4,3 +4,6 @@ export * from "./metadata.js";
 export * from "./context.js";
 export * from "./http.js";
 export * from "./handler.js";
+export * from "./checksum.js";
+export * from "./generate.js";
+export * from "./hosted.js";
