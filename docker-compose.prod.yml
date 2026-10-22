@@ -15,7 +15,8 @@ x-weaver-env: &weaver-env
   VALKEY_URL: redis://valkey:6379
   STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
   STORAGE_LOCAL_PATH: /data/storage
-  # S3 (only used with STORAGE_DRIVER=s3), set in .env:
+  # S3, set in .env. A non-empty S3_BUCKET configures the S3 store whatever STORAGE_DRIVER says,
+  # and then S3_REGION and the keys are required; STORAGE_DRIVER=s3 makes it the primary store:
   #   S3_ENDPOINT=https://s3.example.com   (leave empty for AWS)
   #   S3_BUCKET=weaver
   #   S3_REGION=us-east-1

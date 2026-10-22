@@ -3,6 +3,10 @@ import { mkdtemp, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { createServer, request, type IncomingMessage, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { setTimeout as sleep } from "node:timers/promises";
+import { GenericContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createStoreSetFromEnv, getBuffer, putBuffer, type ObjectStore } from "./index.js";
 import { createLocalStore } from "./local.js";
@@ -125,6 +129,43 @@ function sharedSuite(name: string, make: () => Promise<{ store: ObjectStore; cle
       });
       await expect(store.put(key("aborted"), body, { signal: controller.signal })).rejects.toThrow();
       expect(await store.head(key("aborted"))).toBeNull();
+    }, 60_000);
+
+    for (const [label, total] of [
+      ["single-part", 64 * 1024],
+      ["multipart", 10 * MiB],
+    ] as const) {
+      it(`put aborted after the body has ended leaves no object (${label})`, async () => {
+        const controller = new AbortController();
+        const body = generated(total).stream();
+        // The whole body has been read, so only the request that writes it is still in flight.
+        body.once("end", () => controller.abort());
+        await expect(store.put(key(`aborted-late-${label}`), body, { signal: controller.signal })).rejects.toThrow();
+        // A request that kept running in the background would only show up after the rejection.
+        await sleep(1000);
+        expect(await store.head(key(`aborted-late-${label}`))).toBeNull();
+      }, 60_000);
+    }
+
+    it("put fails and writes nothing when the body is longer than contentLength", async () => {
+      await expect(store.put(key("too-long"), Buffer.from("0123456789"), { contentLength: 4 })).rejects.toThrow(
+        /contentLength/,
+      );
+      expect(await store.head(key("too-long"))).toBeNull();
+    });
+
+    it("put fails and writes nothing when the body is shorter than contentLength", async () => {
+      await expect(store.put(key("too-short"), Buffer.from("0123"), { contentLength: 10 })).rejects.toThrow(
+        /contentLength/,
+      );
+      expect(await store.head(key("too-short"))).toBeNull();
+    });
+
+    it("put of a multipart stream longer than contentLength writes nothing", async () => {
+      await expect(
+        store.put(key("too-long-big"), generated(10 * MiB).stream(), { contentLength: 9 * MiB }),
+      ).rejects.toThrow(/contentLength/);
+      expect(await store.head(key("too-long-big"))).toBeNull();
     }, 60_000);
 
     it("put already aborted leaves no object", async () => {
@@ -259,15 +300,113 @@ describe("local store specifics", () => {
   });
 });
 
-const s3Endpoint = process.env.S3_TEST_ENDPOINT;
-describe.skipIf(!s3Endpoint)("s3 store", () => {
+/**
+ * Starts a throwaway SeaweedFS S3 server (same image and flags as docker-compose.yml) with a
+ * `weaver` bucket. `S3_TEST_ENDPOINT` overrides it with an already running server.
+ */
+async function startTestS3(): Promise<{ endpoint: string; stop(): Promise<void> }> {
+  if (process.env.S3_TEST_ENDPOINT) return { endpoint: process.env.S3_TEST_ENDPOINT, stop: async () => {} };
+  const container = await new GenericContainer("chrislusf/seaweedfs:4.48")
+    .withCommand(["server", "-s3", "-s3.port=9000", "-dir=/data"])
+    .withExposedPorts(9000)
+    .withWaitStrategy(Wait.forListeningPorts())
+    .start();
+  try {
+    // The bucket can only be created once both the master and the filer answer.
+    const healthy = "wget -q -O /dev/null http://127.0.0.1:9333/cluster/status && wget -q -O /dev/null http://127.0.0.1:8888/";
+    for (let attempt = 0; ; attempt++) {
+      if ((await container.exec(["sh", "-c", healthy])).exitCode === 0) break;
+      if (attempt >= 60) throw new Error("SeaweedFS did not become healthy");
+      await sleep(1000);
+    }
+    const created = await container.exec([
+      "sh",
+      "-c",
+      "echo 's3.bucket.create -name weaver' | weed shell -master=127.0.0.1:9333",
+    ]);
+    if (!/created bucket|already exists/.test(created.output)) {
+      throw new Error(`Creating the test bucket failed: ${created.output}`);
+    }
+  } catch (error) {
+    await container.stop();
+    throw error;
+  }
+  return {
+    endpoint: `http://${container.getHost()}:${container.getMappedPort(9000)}`,
+    stop: async () => {
+      await container.stop();
+    },
+  };
+}
+
+/**
+ * HTTP proxy to `target` that holds each committing request (PutObject, CompleteMultipartUpload)
+ * for `delayMs` after it has fully arrived, calling `onCommit` first. That makes "abort while the
+ * request that creates the object is in flight" deterministic.
+ */
+async function startCommitDelayProxy(
+  target: string,
+  delayMs: number,
+  onCommit: () => void,
+): Promise<{ endpoint: string; close(): Promise<void> }> {
+  const upstream = new URL(target);
+  const isCommit = (req: IncomingMessage) => {
+    const query = new URL(req.url ?? "/", "http://x").searchParams;
+    return (req.method === "PUT" && !query.has("partNumber")) || (req.method === "POST" && query.has("uploadId"));
+  };
+  const server: Server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      const forward = () => {
+        const out = request(
+          { hostname: upstream.hostname, port: upstream.port, method: req.method, path: req.url, headers: req.headers },
+          (upRes) => {
+            res.writeHead(upRes.statusCode ?? 502, upRes.headers);
+            upRes.pipe(res);
+          },
+        );
+        out.on("error", () => res.destroy());
+        out.end(Buffer.concat(chunks));
+      };
+      if (isCommit(req)) {
+        onCommit();
+        setTimeout(forward, delayMs);
+      } else {
+        forward();
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    endpoint: `http://127.0.0.1:${port}`,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+describe("s3 store", () => {
+  let server: { endpoint: string; stop(): Promise<void> } | undefined;
   const s3Opts = {
-    endpoint: s3Endpoint,
+    endpoint: "",
     bucket: process.env.S3_TEST_BUCKET ?? "weaver",
     region: "us-east-1",
-    accessKeyId: process.env.S3_TEST_ACCESS_KEY_ID ?? "minioadmin",
-    secretAccessKey: process.env.S3_TEST_SECRET_ACCESS_KEY ?? "minioadmin",
+    accessKeyId: process.env.S3_TEST_ACCESS_KEY_ID ?? "test",
+    secretAccessKey: process.env.S3_TEST_SECRET_ACCESS_KEY ?? "test",
   };
+
+  beforeAll(async () => {
+    server = await startTestS3();
+    s3Opts.endpoint = server.endpoint;
+  }, 180_000);
+  afterAll(async () => {
+    await server?.stop();
+  });
+
   sharedSuite("s3 (S3-compatible server)", async () => ({
     store: createS3Store(s3Opts),
     cleanup: async () => {},
@@ -276,6 +415,27 @@ describe.skipIf(!s3Endpoint)("s3 store", () => {
   it("has id s3", () => {
     expect(createS3Store(s3Opts).id).toBe("s3");
   });
+
+  for (const [label, total] of [
+    ["single-part PutObject", 64 * 1024],
+    ["multipart CompleteMultipartUpload", 10 * MiB],
+  ] as const) {
+    it(`put aborted while the ${label} is in flight leaves no object`, async () => {
+      const controller = new AbortController();
+      const proxy = await startCommitDelayProxy(s3Opts.endpoint, 500, () => controller.abort());
+      const k = `t${Date.now()}/aborted-in-flight/${total}.tar.gz`;
+      try {
+        const store = createS3Store({ ...s3Opts, endpoint: proxy.endpoint });
+        await expect(store.put(k, generated(total).stream(), { signal: controller.signal })).rejects.toThrow();
+        // Give a request that would keep running in the background time to land.
+        await sleep(1500);
+        expect(await createS3Store(s3Opts).head(k)).toBeNull();
+      } finally {
+        await createS3Store(s3Opts).delete(k);
+        await proxy.close();
+      }
+    }, 60_000);
+  }
 
   it("throws (rather than returning null) when the bucket does not exist", async () => {
     const store = createS3Store({ ...s3Opts, bucket: "weaver-no-such-bucket" });

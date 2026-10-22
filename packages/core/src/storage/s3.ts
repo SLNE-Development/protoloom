@@ -9,7 +9,7 @@ import {
 import { Upload } from "@aws-sdk/lib-storage";
 import { pipeline } from "node:stream";
 import type { Readable } from "node:stream";
-import { assertContentLength, HashingStream, toReadable } from "./hashing.js";
+import { HashingStream, toReadable } from "./hashing.js";
 import { resolveRange, type ObjectStore } from "./object-store.js";
 
 /** Connection settings for an S3-compatible bucket. */
@@ -38,6 +38,15 @@ export function createS3Store(opts: S3StoreOptions): ObjectStore {
   });
   const Bucket = opts.bucket;
 
+  /** Deletes `key` after a failed put; a failure is logged so it cannot mask the put's own error. */
+  async function deleteLogged(key: string): Promise<void> {
+    try {
+      await client.send(new DeleteObjectCommand({ Bucket, Key: key }));
+    } catch (error) {
+      console.warn(`weaver: failed to delete object ${key} after an aborted put`, error);
+    }
+  }
+
   return {
     id: "s3",
 
@@ -45,7 +54,7 @@ export function createS3Store(opts: S3StoreOptions): ObjectStore {
       const { signal, contentLength } = putOpts;
       signal?.throwIfAborted();
       const source = toReadable(body);
-      const hasher = new HashingStream();
+      const hasher = new HashingStream(contentLength);
       // Destroys both streams on error, so the upload sees a failed body instead of hanging.
       pipeline(source, hasher, () => {});
       const upload = new Upload({
@@ -55,29 +64,27 @@ export function createS3Store(opts: S3StoreOptions): ObjectStore {
         queueSize: QUEUE_SIZE,
         leavePartsOnError: false,
       });
-      const onAbort = () => {
-        source.destroy(signal?.reason instanceof Error ? signal.reason : new Error("Upload aborted"));
-        void upload.abort();
-      };
+      // Only the body is failed: lib-storage then aborts the multipart upload itself, and done()
+      // settles once that cleanup or an already in-flight request has finished. Calling
+      // upload.abort() instead would reject at once while a PutObject or CompleteMultipartUpload
+      // still completes in the background.
+      const onAbort = () => source.destroy(abortReason(signal));
       signal?.addEventListener("abort", onAbort, { once: true });
       try {
         await upload.done();
+      } catch (error) {
+        source.destroy();
+        if (signal?.aborted) throw abortReason(signal);
+        throw error;
       } finally {
         signal?.removeEventListener("abort", onAbort);
       }
-      // The upload can win a race against a late abort; make sure an aborted put leaves nothing.
+      // The body was fully read before the abort, so the upload completed; remove what it wrote.
       if (signal?.aborted) {
-        await client.send(new DeleteObjectCommand({ Bucket, Key: key }));
-        signal.throwIfAborted();
+        await deleteLogged(key);
+        throw abortReason(signal);
       }
-      const result = hasher.result();
-      try {
-        assertContentLength(result, contentLength);
-      } catch (error) {
-        await client.send(new DeleteObjectCommand({ Bucket, Key: key }));
-        throw error;
-      }
-      return result;
+      return hasher.result();
     },
 
     async get(key, getOpts = {}) {
@@ -146,6 +153,12 @@ export function createS3Store(opts: S3StoreOptions): ObjectStore {
       }
     },
   };
+}
+
+/** The signal's abort reason as an Error, so callers always reject with one. */
+function abortReason(signal: AbortSignal | undefined): Error {
+  const reason: unknown = signal?.reason;
+  return reason instanceof Error ? reason : Object.assign(new Error("Upload aborted"), { name: "AbortError" });
 }
 
 /** Parses `bytes <start>-<end>/<size>`; returns `null` for anything else (including an unknown size `*`). */
