@@ -6,6 +6,9 @@ import type { DockerAction } from "./auth/jwt.js";
 import { handleToken } from "./auth/token-endpoint.js";
 import { DockerError, errorResponse } from "./errors.js";
 import { deleteHostedBlob, serveHostedBlob, type HostedCtx } from "./hosted/blobs.js";
+import { deleteManifest, putManifest, serveManifest } from "./hosted/manifests.js";
+import { serveReferrers } from "./hosted/referrers.js";
+import { serveTags } from "./hosted/tags.js";
 import { cancelUpload, finishUpload, patchUpload, startUpload, uploadStatus } from "./hosted/uploads.js";
 import { isDigest } from "./media-types.js";
 import { parseRoute, type Route } from "./route.js";
@@ -77,8 +80,28 @@ function methodNotAllowed(method: string): DockerError {
   return new DockerError(405, "UNSUPPORTED", `method ${method} not allowed here`);
 }
 
-/** Serves blob and upload routes of a hosted repository; null for routes it does not handle (yet). */
+/** Serves the routes of a hosted repository: manifests, blobs, uploads, tags and referrers. */
 function dispatchHosted(ctx: HostedCtx, req: Request, route: Route): Promise<Response> | null {
+  const { method } = req;
+  switch (route.kind) {
+    case "manifest":
+      if (method === "GET" || method === "HEAD") return serveManifest(ctx, req, route.reference);
+      if (method === "PUT") return putManifest(ctx, req, route.reference);
+      if (method === "DELETE") return deleteManifest(ctx, route.reference);
+      throw methodNotAllowed(method);
+    case "tags":
+      if (method === "GET") return serveTags(ctx, req);
+      throw methodNotAllowed(method);
+    case "referrers":
+      if (method === "GET") return serveReferrers(ctx, req, route.digest);
+      throw methodNotAllowed(method);
+    default:
+      return dispatchHostedBlobs(ctx, req, route);
+  }
+}
+
+/** Serves blob and upload routes of a hosted repository; null for routes it does not handle. */
+function dispatchHostedBlobs(ctx: HostedCtx, req: Request, route: Route): Promise<Response> | null {
   const { method } = req;
   switch (route.kind) {
     case "blob":
