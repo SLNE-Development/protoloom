@@ -25,6 +25,7 @@ import {
   asset,
   auditEvent,
   cleanupPolicy,
+  component,
   invite,
   protoBuild as build,
   repoPermission,
@@ -594,6 +595,87 @@ describe("browse by format", () => {
     expect(await call(viewer()).browse.repository({ name: "libs" })).toMatchObject({ name: "libs", format: "maven" });
     expect(await codeOf(call(anonymous, anonymousViewOn).browse.repository({ name: "internal" }))).toBe("NOT_FOUND");
     expect(await codeOf(call(viewer()).browse.artifacts({ repository: "libs" }))).toBe("BAD_REQUEST");
+  });
+});
+
+describe("maven", () => {
+  /** Inserts a component with one asset per file name below its version directory. */
+  async function deploy(repo: string, groupId: string, artifactId: string, version: string, files: string[]) {
+    const [row] = await db.select({ id: repository.id }).from(repository).where(eq(repository.name, repo));
+    const [comp] = await db.insert(component).values({ repositoryId: row!.id, namespace: groupId, name: artifactId, version }).returning();
+    for (const file of files) {
+      await db.insert(asset).values({
+        repositoryId: row!.id,
+        componentId: comp!.id,
+        path: `${groupId.replaceAll(".", "/")}/${artifactId}/${version}/${file}`,
+        store: "local",
+        storageKey: `k/${randomUUID()}`,
+        size: 10,
+        contentType: "application/java-archive",
+        md5: "m",
+        sha1: "s1",
+        sha256: "s256",
+        sha512: "s512",
+        origin: "hosted",
+      });
+    }
+  }
+
+  beforeEach(async () => {
+    await call(admin()).repositories.create({ name: "releases", format: "maven", kind: "hosted", visibility: "private" });
+    await call(admin()).repositories.create({ name: "pub", format: "maven", kind: "hosted", visibility: "public" });
+  });
+
+  it("artifacts lists components of a hosted maven repo", async () => {
+    await deploy("releases", "org.example", "lib", "1.0", ["lib-1.0.jar"]);
+    await deploy("releases", "org.example", "lib", "1.10", ["lib-1.10.jar"]);
+    await deploy("releases", "com.acme", "app", "2.0", ["app-2.0.jar"]);
+    const all = await call(viewer()).maven.artifacts({ repository: "releases" });
+    expect(all.map((a) => `${a.groupId}:${a.artifactId}:${a.latestVersion}:${a.versionCount}`)).toEqual(["com.acme:app:2.0:1", "org.example:lib:1.10:2"]);
+    expect(all[0]!.updatedAt).toBeInstanceOf(Date);
+    const filtered = await call(viewer()).maven.artifacts({ repository: "releases", groupPrefix: "org." });
+    expect(filtered.map((a) => a.artifactId)).toEqual(["lib"]);
+    expect(await codeOf(call(viewer()).maven.artifacts({ repository: "shared" }))).toBe("BAD_REQUEST");
+  });
+
+  it("versions sorted newest first", async () => {
+    for (const v of ["1.0", "1.9", "1.10-SNAPSHOT", "1.10"]) await deploy("releases", "org.example", "lib", v, [`lib-${v}.jar`]);
+    const versions = await call(viewer()).maven.versions({ repository: "releases", groupId: "org.example", artifactId: "lib" });
+    expect(versions.map((v) => v.version)).toEqual(["1.10", "1.10-SNAPSHOT", "1.9", "1.0"]);
+    expect(versions.find((v) => v.version === "1.10-SNAPSHOT")!.snapshot).toBe(true);
+  });
+
+  it("files lists assets of a version with download urls", async () => {
+    await deploy("releases", "org.example", "lib", "1.0", ["lib-1.0.jar", "lib-1.0.pom"]);
+    const files = await call(viewer()).maven.files({ repository: "releases", groupId: "org.example", artifactId: "lib", version: "1.0" });
+    expect(files.map((f) => f.name)).toEqual(["lib-1.0.jar", "lib-1.0.pom"]);
+    expect(files[0]).toMatchObject({ size: 10, sha1: "s1", url: `${BASE}/maven/releases/org/example/lib/1.0/lib-1.0.jar` });
+  });
+
+  it("anonymous cannot browse a private maven repo", async () => {
+    await deploy("releases", "org.example", "lib", "1.0", ["lib-1.0.jar"]);
+    expect(await codeOf(call(anonymous, anonymousViewOn).maven.artifacts({ repository: "releases" }))).toBe("NOT_FOUND");
+    expect(await codeOf(call(anonymous, anonymousViewOn).maven.overview({ repository: "releases" }))).toBe("NOT_FOUND");
+    await deploy("pub", "org.example", "open", "1.0", ["open-1.0.jar"]);
+    expect(await call(anonymous, anonymousViewOn).maven.artifacts({ repository: "pub" })).toHaveLength(1);
+  });
+
+  it("overview of a group lists members in order and exposes no mirror config", async () => {
+    await call(admin()).repositories.create({ name: "grp", format: "maven", kind: "group", members: ["pub", "releases"] });
+    await call(admin()).repositories.create({
+      name: "central",
+      format: "maven",
+      kind: "mirror",
+      upstreams: [{ url: "https://repo.example.org/maven2/", authType: "none" }],
+      config: { rules: { deny: ["secret.*"] } },
+    });
+    await deploy("releases", "org.example", "lib", "1.0", ["lib-1.0.jar"]);
+    const overview = await call(viewer()).maven.overview({ repository: "grp" });
+    expect(overview).toEqual({ kind: "group", members: ["pub", "releases"], cacheEnabled: null, versionPolicy: null });
+    expect((await call(viewer()).maven.artifacts({ repository: "grp" })).map((a) => a.artifactId)).toEqual(["lib"]);
+    const mirror = await call(viewer()).maven.overview({ repository: "central" });
+    expect(mirror).toEqual({ kind: "mirror", members: [], cacheEnabled: false, versionPolicy: null });
+    expect(await call(viewer()).maven.overview({ repository: "releases" })).toMatchObject({ kind: "hosted", versionPolicy: "mixed" });
   });
 });
 

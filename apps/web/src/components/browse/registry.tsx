@@ -1,6 +1,8 @@
 import { Suspense, type ReactNode } from "react";
 import type { Format, Repo } from "@weaver/core";
+import { env } from "@/env";
 import { api } from "@/trpc/server";
+import { MavenView } from "./maven-view";
 import { ProtoArtifactList } from "./proto-artifact-list";
 
 /** The proto browse view: the repository's artifacts with a `?q=` filter. */
@@ -18,10 +20,21 @@ async function ProtoRepositoryView({ repo }: { repo: Repo }) {
   );
 }
 
+/** The Maven browse view: the server fetches the overview, the client view browses by the g, a and v search params. */
+async function MavenRepositoryView({ repo }: { repo: Repo }) {
+  const overview = await api.maven.overview({ repository: repo.name });
+  return (
+    <Suspense>
+      <MavenView repository={repo.name} url={env.BETTER_AUTH_URL.replace(/\/+$/, "")} isPrivate={repo.visibility === "private"} overview={overview} />
+    </Suspense>
+  );
+}
+
 /**
  * The browse view of each format, rendered by `/browse/[repo]` below the common header. A format
  * without an entry shows a "not available yet" empty state; each format plan adds its entry.
  */
 export const BROWSE_VIEWS: Partial<Record<Format, (props: { repo: Repo }) => ReactNode>> = {
+  maven: MavenRepositoryView,
   proto: ProtoRepositoryView,
 };
