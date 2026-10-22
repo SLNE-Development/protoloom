@@ -350,6 +350,23 @@ describe("mirror engine", () => {
     expect(onChallenge).toHaveBeenCalledOnce();
   });
 
+  it("cacheKey separates cache entries for one upstream path", async () => {
+    up.handler = serve({ pkg: "doc" });
+    const repo = await mirror(cached);
+    const fetchKey = async (cacheKey: string) => {
+      const res = await engine.fetch({ repo, path: "pkg", subject: "pkg", class: "immutable", cacheKey });
+      await readText(res!);
+      await engine.drain();
+      return res!;
+    };
+    expect((await fetchKey("pkg/.corgi")).cache).toBe("miss");
+    expect((await fetchKey("pkg/.packument")).cache).toBe("miss");
+    expect(up.hits).toHaveLength(2);
+    expect((await assetRows()).map((a) => a.path).sort()).toEqual(["pkg/.corgi", "pkg/.packument"]);
+    expect((await fetchKey("pkg/.corgi")).cache).toBe("hit");
+    expect(up.hits).toHaveLength(2);
+  });
+
   it("HEAD never writes the cache", async () => {
     up.handler = serve({ "h.jar": "head-body" });
     const repo = await mirror(cached);

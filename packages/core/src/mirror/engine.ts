@@ -34,6 +34,8 @@ export interface MirrorFetch {
   path: string;
   /** what rules match against */
   subject: string;
+  /** Asset path used for the cache lookup and write; defaults to `path`. Lets one upstream path cache several representations. */
+  cacheKey?: string;
   class: ContentClass;
   method?: "GET" | "HEAD";
   /** forwarded (accept, etc.) */
@@ -332,7 +334,7 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
     const write = deps.assets
       .put({
         repo: req.repo,
-        path: req.path,
+        path: req.cacheKey ?? req.path,
         body,
         contentType: response.headers.get("content-type"),
         origin: "cache",
@@ -370,7 +372,7 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
       if (!matchesRules(config.rules, req.subject)) return null;
       const method = req.method ?? "GET";
 
-      const existing = config.cache.enabled || config.offline ? await deps.assets.find(repo.id, req.path) : null;
+      const existing = config.cache.enabled || config.offline ? await deps.assets.find(repo.id, req.cacheKey ?? req.path) : null;
       if (config.offline) {
         return existing ? serveAsset(existing, method, isFresh(existing, req.class) ? "hit" : "stale") : null;
       }
