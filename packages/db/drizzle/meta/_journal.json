@@ -50,6 +50,13 @@
       "when": 1792674743121,
       "tag": "0006_bored_triton",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792674996851,
+      "tag": "0007_talented_argent",
+      "breakpoints": true
     }
   ]
 }
