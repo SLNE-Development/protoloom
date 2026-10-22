@@ -160,7 +160,9 @@ export function tokenSeries(db: Db, apiKeyId: string, range: DayRange): Promise<
 }
 
 /**
- * The raw usage events of one API key, newest first, `limit` at a time; `before` continues below that event id.
+ * The raw usage events of one API key, newest first by time (then id), `limit` at a time; `before` (an event id)
+ * continues after that event, keyset on (at, id) so the (api_key_id, at) index serves it. A `before` event that
+ * retention already deleted ends the listing.
  * `repository` is null once the repository was deleted, `label` null when the event has no component.
  */
 export async function tokenEvents(
@@ -185,8 +187,10 @@ export async function tokenEvents(
     FROM usage_event e
     LEFT JOIN repository r ON r.id = e.repository_id
     LEFT JOIN component c ON c.id = e.component_id
-    WHERE e.api_key_id = ${apiKeyId}${opts.before === undefined ? sql`` : sql` AND e.id < ${opts.before}`}
-    ORDER BY e.id DESC
+    WHERE e.api_key_id = ${apiKeyId}${
+      opts.before === undefined ? sql`` : sql` AND (e.at, e.id) < (SELECT b.at, b.id FROM usage_event b WHERE b.id = ${opts.before})`
+    }
+    ORDER BY e.at DESC, e.id DESC
     LIMIT ${opts.limit}`);
   return rows.map((r) => ({
     id: Number(r.id),

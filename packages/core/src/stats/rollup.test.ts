@@ -4,6 +4,7 @@ import {
   asset,
   component,
   dockerBlob,
+  dockerBlobLink,
   dockerManifest,
   dockerManifestRef,
   protoArtifact,
@@ -17,7 +18,7 @@ import {
 } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
 import { toRepo, type Format, type Kind, type Repo } from "../repos/index.js";
-import { dockerStorageBytes, rollupUsage, type StorageProbe } from "./rollup.js";
+import { dockerStorageBytes, ROLLUP_MAX_EXPIRING_DAYS, rollupUsage, type StorageProbe } from "./rollup.js";
 
 const NOW = new Date("2026-06-30T12:00:00Z");
 const DAY_MS = 86_400_000;
@@ -207,6 +208,59 @@ describe("rollupUsage", () => {
     ]);
   });
 
+  it("keeps the rollup of an expired day on later runs", async () => {
+    const r = await repo("releases");
+    await event({ repositoryId: r.id, at: daysAgo(100), bytes: 8 });
+
+    expect((await run()).eventsDeleted).toBe(1);
+    await run();
+    await run(new Date(NOW.getTime() + DAY_MS));
+
+    expect((await daily()).map((d) => [d.day, d.count, d.bytes])).toEqual([[dayOf(daysAgo(100)), 1, 8]]);
+  });
+
+  it("never re-rolls days at or before the retention cutoff, so a long idle gap keeps its history", async () => {
+    const r = await repo("releases");
+    await event({ repositoryId: r.id, at: daysAgo(95) });
+    await run();
+    const later = new Date(NOW.getTime() + 30 * DAY_MS);
+    expect((await run(later)).daysRolled).toBe(0);
+    await event({ repositoryId: r.id, at: later });
+
+    const result = await run(later);
+
+    expect(result.daysRolled).toBe(1);
+    expect((await daily()).map((d) => [d.day, d.count])).toEqual([
+      [dayOf(daysAgo(95)), 1],
+      [dayOf(later), 1],
+    ]);
+  });
+
+  it("re-rolls at most the retention window of recent days", async () => {
+    const r = await repo("releases");
+    await testDb.db.insert(usageDaily).values({ day: dayOf(daysAgo(200)), repositoryId: r.id, action: "download", count: 1, bytes: 0 });
+    for (let d = 0; d < 89; d++) await event({ repositoryId: r.id, at: daysAgo(d) });
+    // An old rollup row (day 200) never pulls the start back: the oldest event (day 88) sets it.
+
+    expect((await run()).daysRolled).toBe(89);
+    const rows = await daily();
+    expect(rows).toHaveLength(90);
+    expect(rows[0]).toMatchObject({ day: dayOf(daysAgo(200)), count: 1 });
+  });
+
+  it("rolls a bounded number of expiring days per run and deletes only the rolled ones", async () => {
+    const r = await repo("releases");
+    for (let d = 0; d < ROLLUP_MAX_EXPIRING_DAYS + 2; d++) await event({ repositoryId: r.id, at: daysAgo(400 - d) });
+
+    const first = await run();
+
+    expect(first.eventsDeleted).toBe(ROLLUP_MAX_EXPIRING_DAYS);
+    expect(await testDb.db.select().from(usageEvent)).toHaveLength(2);
+    const second = await run();
+    expect(second.eventsDeleted).toBe(2);
+    expect(await daily()).toHaveLength(ROLLUP_MAX_EXPIRING_DAYS + 2);
+  });
+
   it("retention deletes events older than 90 days only after their day is rolled up", async () => {
     const r = await repo("releases");
     await event({ repositoryId: r.id, at: daysAgo(100), bytes: 8 });
@@ -340,12 +394,24 @@ describe("dockerStorageBytes", () => {
     await testDb?.stop();
   });
 
-  it("counts each blob referenced by a hosted repository's manifests once, plus the manifests", async () => {
+  it("counts each blob linked into a hosted repository once by digest, at its stored size, plus the manifests", async () => {
     const [row] = await testDb.db.insert(repository).values({ name: "images", format: "docker", kind: "hosted" }).returning();
     const repo = toRepo(row!);
-    await testDb.db.insert(dockerBlob).values([
-      { store: "local", digest: "sha256:l1", size: 1000, storageKey: "l1" },
-      { store: "local", digest: "sha256:c1", size: 10, storageKey: "c1" },
+    const [other] = await testDb.db.insert(repository).values({ name: "other", format: "docker", kind: "hosted" }).returning();
+    const blobs = await testDb.db
+      .insert(dockerBlob)
+      .values([
+        { store: "local", digest: "sha256:l1", size: 1000, storageKey: "l1" },
+        { store: "local", digest: "sha256:c1", size: 10, storageKey: "c1" },
+        { store: "local", digest: "sha256:x1", size: 7777, storageKey: "x1" },
+      ])
+      .returning();
+    const id = (digest: string) => blobs.find((b) => b.digest === digest)!.id;
+    await testDb.db.insert(dockerBlobLink).values([
+      { repositoryId: repo.id, image: "app", blobId: id("sha256:l1"), digest: "sha256:l1" },
+      { repositoryId: repo.id, image: "app", blobId: id("sha256:c1"), digest: "sha256:c1" },
+      { repositoryId: repo.id, image: "tool", blobId: id("sha256:l1"), digest: "sha256:l1" },
+      { repositoryId: other!.id, image: "x", blobId: id("sha256:x1"), digest: "sha256:x1" },
     ]);
     const manifest = async (image: string, digest: string, size: number) => {
       const [m] = await testDb.db
@@ -355,11 +421,10 @@ describe("dockerStorageBytes", () => {
       return m!;
     };
     const a = await manifest("app", "sha256:m1", 200);
-    const b = await manifest("app", "sha256:m2", 300);
+    await manifest("tool", "sha256:m2", 300);
+    // A manifest-declared size that disagrees with the stored blob is ignored.
     await testDb.db.insert(dockerManifestRef).values([
-      { manifestId: a.id, digest: "sha256:l1", kind: "blob", mediaType: "layer", size: 1000, position: 0 },
-      { manifestId: a.id, digest: "sha256:c1", kind: "blob", mediaType: "config", size: 10, position: 1 },
-      { manifestId: b.id, digest: "sha256:l1", kind: "blob", mediaType: "layer", size: 1000, position: 0 },
+      { manifestId: a.id, digest: "sha256:l1", kind: "blob", mediaType: "layer", size: 5, position: 0 },
     ]);
 
     expect(await dockerStorageBytes(testDb.db)(repo)).toEqual({ hostedBytes: 1510, cacheBytes: 0 });

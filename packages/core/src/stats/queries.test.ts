@@ -142,6 +142,26 @@ describe("stats queries", () => {
     ]);
   });
 
+  it("tokenEvents orders and pages by time, then id", async () => {
+    const a = await repo("a");
+    const at = (h: number) => new Date(Date.UTC(2026, 5, 1, h));
+    // Inserted out of time order: ids do not follow time.
+    for (const [path, h] of [["late", 5], ["early", 1], ["tie-a", 3], ["tie-b", 3], ["middle", 2]] as const) {
+      await testDb.db.insert(usageEvent).values({ repositoryId: a.id, path, action: "download", apiKeyId: "k1", at: at(h) });
+    }
+
+    const pages: string[][] = [];
+    let before: number | undefined;
+    for (;;) {
+      const page = await tokenEvents(testDb.db, "k1", { limit: 2, before });
+      if (page.length === 0) break;
+      pages.push(page.map((e) => e.path));
+      before = page.at(-1)!.id;
+    }
+
+    expect(pages).toEqual([["late", "tie-b"], ["tie-a", "middle"], ["early"]]);
+  });
+
   it("tokenEvents pages with before", async () => {
     const a = await repo("a", "npm");
     const [pkg] = await testDb.db.insert(component).values({ repositoryId: a.id, namespace: "acme", name: "ui", version: "1.0.0" }).returning();
