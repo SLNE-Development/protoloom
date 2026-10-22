@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { protoArtifact as artifact, protoVersion as version, type Db } from "@weaver/db";
+import { protoArtifact as artifact, protoVersion as version, repository, type Db } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
 import { getPublicStats, listDocsPaths, listPublicBrowsePages } from "./public-catalog";
 import { insertRepository, insertVersion } from "@/test/catalog";
@@ -51,6 +51,7 @@ describe("public catalog queries", () => {
     const releases = await insertRepository(db, "releases", "public");
     const internal = await insertRepository(db, "internal", "private");
     await insertRepository(db, "empty", "public");
+    await db.insert(repository).values({ name: "npm-public", visibility: "public", format: "npm", kind: "mirror" });
     await insertVersion(db, releases, { group: "dev.surf.economy", name: "economy-contracts", version: "1.4.0" });
     await insertVersion(db, releases, { group: "dev.surf.economy", name: "economy-contracts", version: "1.5.0-SNAPSHOT" });
     await insertVersion(db, releases, { group: "dev.surf.core", name: "core-types", version: "2.1.0" });
@@ -69,7 +70,7 @@ describe("public catalog queries", () => {
   });
 
   it("counts public repositories and their artifacts that have a published build, never private ones", async () => {
-    expect(await getPublicStats(db)).toEqual({ repositories: 2, artifacts: 2 });
+    expect(await getPublicStats(db)).toEqual({ repositories: 3, artifacts: 2 });
   });
 
   it("lists browse pages of public repositories only", async () => {
@@ -85,6 +86,8 @@ describe("public catalog queries", () => {
       "/browse/releases/dev.surf.economy/economy-contracts/1.5.0-SNAPSHOT",
     ]);
     expect(paths.join(" ")).not.toContain("internal");
+    // Only proto repositories have a browse view so far.
+    expect(paths.join(" ")).not.toContain("npm-public");
     expect(paths.join(" ")).not.toMatch(/no-versions|no-builds/);
     expect(paths.join(" ")).not.toContain("hidden");
     expect(pages.find((p) => p.path.endsWith("/1.4.0"))?.lastModified).toBeInstanceOf(Date);

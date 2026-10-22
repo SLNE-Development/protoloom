@@ -53,6 +53,9 @@ const policyInput = z.object({
   enabled: z.boolean().optional(),
 });
 
+/** Cleanup policies exist for proto repositories only. */
+const PROTO_ONLY = { format: "proto" } as const;
+
 function requireQueue(ctx: TrpcContext) {
   const queue = ctx.cleanupQueue();
   if (!queue) {
@@ -64,7 +67,7 @@ function requireQueue(ctx: TrpcContext) {
 /** Cleanup policies per repository (admin): edit, preview (dry run) and run now as a background job. */
 export const policiesRouter = router({
   list: adminProcedure.input(z.object({ repository: repositoryName })).query(async ({ ctx, input }): Promise<CleanupPolicy[]> => {
-    const repo = await requireRepository(ctx.db, input.repository);
+    const repo = await requireRepository(ctx.db, input.repository, PROTO_ONLY);
     return ctx.db
       .select(policyColumns)
       .from(cleanupPolicy)
@@ -86,7 +89,7 @@ export const policiesRouter = router({
         details: fields,
       }),
       async (tx) => {
-        const repo = await requireRepository(tx, repoName);
+        const repo = await requireRepository(tx, repoName, PROTO_ONLY);
         if (!id) {
           const { kind, value } = fields;
           if (kind === undefined || value === undefined) {
@@ -122,6 +125,7 @@ export const policiesRouter = router({
   preview: adminProcedure
     .input(z.object({ repository: repositoryName }))
     .query(async ({ ctx, input }): Promise<CleanupPreviewItem[]> => {
+      await requireRepository(ctx.db, input.repository, PROTO_ONLY);
       const candidates = await planCleanup(ctx.db, input.repository, new Date());
       return candidates.map((c) => ({ ...c, coordinate: coordinateText(c.coordinate) }));
     }),
@@ -131,7 +135,7 @@ export const policiesRouter = router({
    * `SERVICE_UNAVAILABLE` within a few seconds when Valkey is down.
    */
   runNow: adminProcedure.input(z.object({ repository: repositoryName })).mutation(async ({ ctx, input }) => {
-    await requireRepository(ctx.db, input.repository);
+    await requireRepository(ctx.db, input.repository, PROTO_ONLY);
     const jobId = await enqueueCleanup(requireQueue(ctx), input.repository);
     await ctx.db.transaction((tx) =>
       recordAudit(tx, { actor: ctx.principal, action: "policy.runNow", target: input.repository, details: { jobId } }),

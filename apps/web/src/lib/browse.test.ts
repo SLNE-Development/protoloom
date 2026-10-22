@@ -9,6 +9,7 @@ import {
   listingMetadataInput,
   buildFileTree,
   firstFile,
+  filterArtifacts,
   formatBytes,
   formatRelative,
   gradleSnippet,
@@ -91,6 +92,8 @@ describe("formatting", () => {
     expect(formatBytes(512)).toBe("512 B");
     expect(formatBytes(2048)).toBe("2.0 KiB");
     expect(formatBytes(5 * 1024 * 1024)).toBe("5.0 MiB");
+    expect(formatBytes(3 * 1024 ** 3)).toBe("3.0 GiB");
+    expect(formatBytes(2 * 1024 ** 4)).toBe("2.0 TiB");
   });
 
   it("formats relative times", () => {
@@ -151,5 +154,24 @@ describe("listingMetadataInput", () => {
       expect(meta.description).not.toContain("secret");
       expect(meta.description).not.toContain("Top");
     }
+  });
+});
+
+describe("filterArtifacts", () => {
+  const artifacts = [
+    { group: "acme", name: "money" },
+    { group: "acme", name: "order" },
+    { group: "corp.secret", name: "vault" },
+  ];
+
+  it("matches group, name and group:name case-insensitively", () => {
+    expect(filterArtifacts(artifacts, "MONEY").map((a) => a.name)).toEqual(["money"]);
+    expect(filterArtifacts(artifacts, "acme:ord").map((a) => a.name)).toEqual(["order"]);
+    expect(filterArtifacts(artifacts, "corp.SEC").map((a) => a.name)).toEqual(["vault"]);
+    expect(filterArtifacts(artifacts, "nothing")).toEqual([]);
+  });
+
+  it("returns everything for an empty or blank filter", () => {
+    expect(filterArtifacts(artifacts, "  ")).toBe(artifacts);
   });
 });

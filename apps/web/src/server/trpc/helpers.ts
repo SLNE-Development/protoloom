@@ -9,6 +9,7 @@ import {
   recordAudit,
   type AuditEntry,
   type Coordinate,
+  type Format,
   type Principal,
   type RepoRef,
 } from "@weaver/core";
@@ -64,24 +65,45 @@ export async function browsableRepositories(db: Db, p: Principal): Promise<Repos
   return rows.filter((repo) => canBrowseRepository(p, repo));
 }
 
+/** `BAD_REQUEST` unless `repo` has the `format` a procedure needs (when one is given). */
+function checkFormat(repo: RepositoryRow, format: Format | undefined): void {
+  if (format !== undefined && repo.format !== format) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `Repository ${repo.name} is a ${repo.format} repository, not ${format}` });
+  }
+}
+
 /**
  * A repository the principal may browse. Missing and hidden repositories both throw the same
- * `NOT_FOUND`, so private repositories are not disclosed.
+ * `NOT_FOUND`, so private repositories are not disclosed. With `format`, a browsable repository
+ * of another format is `BAD_REQUEST` (format-specific listings such as proto artifacts).
  */
-export async function requireBrowsableRepository(db: Db, p: Principal, name: string): Promise<RepositoryRow> {
+export async function requireBrowsableRepository(
+  db: Db,
+  p: Principal,
+  name: string,
+  opts: { format?: Format } = {},
+): Promise<RepositoryRow> {
   const [repo] = await db.select().from(repository).where(eq(repository.name, name));
   if (!repo || !canBrowseRepository(p, repo)) throw notFound(`Repository ${name} was not found`);
+  checkFormat(repo, opts.format);
   return repo;
 }
 
 /**
- * A repository by name for admin procedures; `NOT_FOUND` when missing. With `forUpdate` (inside a
- * transaction) the row stays locked, which also blocks concurrent inserts of artifacts into it.
+ * A repository by name for admin procedures; `NOT_FOUND` when missing, `BAD_REQUEST` when `format`
+ * is given and the repository has another one (e.g. cleanup policies exist for proto only). With
+ * `forUpdate` (inside a transaction) the row stays locked, which also blocks concurrent inserts of
+ * artifacts into it.
  */
-export async function requireRepository(db: Db | Tx, name: string, opts: { forUpdate?: boolean } = {}): Promise<RepositoryRow> {
+export async function requireRepository(
+  db: Db | Tx,
+  name: string,
+  opts: { forUpdate?: boolean; format?: Format } = {},
+): Promise<RepositoryRow> {
   const query = db.select().from(repository).where(eq(repository.name, name));
   const [repo] = await (opts.forUpdate ? query.for("update") : query);
   if (!repo) throw notFound(`Repository ${name} was not found`);
+  checkFormat(repo, opts.format);
   return repo;
 }
 

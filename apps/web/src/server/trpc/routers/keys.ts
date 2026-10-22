@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { maxKeyAccess, recordAudit, type KeyPermission } from "@weaver/core";
+import { maxKeyAccess, recordAudit, type Format, type KeyPermission, type Kind } from "@weaver/core";
 import { apikey, repoPermission, repository, user } from "@weaver/db";
 import { authedProcedure, router } from "../init";
 import { groupPrefix, notFound, repositoryName } from "../helpers";
@@ -29,6 +29,23 @@ const permissionInput = z.object({
   groupPrefix,
   access: z.enum(["read", "write"]),
 });
+
+/**
+ * Why a key entry could never grant anything, or null when it can: groups are read-only, and group
+ * prefixes narrow only proto hosted and proto mirror repositories (their artifacts have groups).
+ */
+function uselessEntry(
+  repo: { name: string; format: Format; kind: Kind },
+  entry: { groupPrefix: string | null; access: "read" | "write" },
+): string | null {
+  if (entry.access === "write" && repo.kind === "group") {
+    return `${repo.name} is a group, and groups are read-only; grant write on its members instead`;
+  }
+  if (entry.groupPrefix !== null && (repo.format !== "proto" || repo.kind === "group")) {
+    return `A group prefix only applies to proto hosted and proto mirror repositories; remove it for ${repo.name}`;
+  }
+  return null;
+}
 
 /** Personal API keys: create (the secret is shown once), list, revoke. */
 export const keysRouter = router({
@@ -90,7 +107,8 @@ export const keysRouter = router({
 
   /**
    * Creates a key for the caller and returns `{ id, key }`; the only time the secret is returned.
-   * Viewers may only grant `read` (`FORBIDDEN` otherwise); unknown repositories are `BAD_REQUEST`.
+   * Viewers may only grant `read` (`FORBIDDEN` otherwise); unknown repositories and entries that
+   * can never grant anything (write on a group, a group prefix outside proto hosted/mirror) are `BAD_REQUEST`.
    */
   create: authedProcedure
     .input(
@@ -106,17 +124,21 @@ export const keysRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Viewers can only create read-only keys" });
       }
       const names = [...new Set(input.permissions.map((p) => p.repository))];
-      const idByName = new Map(
+      const byName = new Map(
         (
           await ctx.db
-            .select({ id: repository.id, name: repository.name })
+            .select({ id: repository.id, name: repository.name, format: repository.format, kind: repository.kind })
             .from(repository)
             .where(inArray(repository.name, names))
-        ).map((r) => [r.name, r.id]),
+        ).map((r) => [r.name, r]),
       );
-      const unknown = names.filter((name) => !idByName.has(name));
+      const unknown = names.filter((name) => !byName.has(name));
       if (unknown.length > 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Unknown repositories: ${unknown.join(", ")}` });
+      }
+      for (const entry of input.permissions) {
+        const problem = uselessEntry(byName.get(entry.repository)!, entry);
+        if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
       }
 
       const created = await ctx.auth.api.createApiKey({
@@ -132,7 +154,7 @@ export const keysRouter = router({
           await tx.insert(repoPermission).values(
             input.permissions.map(({ repository: name, groupPrefix: prefix, access }) => ({
               apiKeyId: created.id,
-              repositoryId: idByName.get(name)!,
+              repositoryId: byName.get(name)!.id,
               groupPrefix: prefix,
               access,
             })),
