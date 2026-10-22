@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { asset, repository } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
@@ -116,5 +116,43 @@ describe("evictCaches", () => {
     expect(await paths(hosted.id)).toEqual(["h.jar"]);
     expect(await paths(unlimited.id)).toEqual(["c.jar"]);
     expect(await paths(limited.id)).toEqual(["kept-hosted.jar"]);
+  });
+
+  it("works through more rows than one batch", async () => {
+    const aged = await repo("aged", { enabled: true, maxAgeDays: 10 });
+    const sized = await repo("sized", { enabled: true, maxSizeBytes: 20 });
+    const off = await repo("off", { enabled: false });
+    for (let n = 0; n < 7; n++) {
+      await put(aged.id, `old-${n}.jar`, "cache", 1, daysAgo(20 + n));
+      await put(sized.id, `s-${n}.jar`, "cache", 10, daysAgo(n + 1));
+      await put(off.id, `o-${n}.jar`, "cache", 1, daysAgo(n));
+    }
+    await put(aged.id, "fresh.jar", "cache", 1, daysAgo(1));
+
+    const result = await evictCaches({ db: testDb.db, assets, now: NOW, batchSize: 3 });
+
+    expect(result).toEqual({ repositories: 3, assetsDeleted: 7 + 5 + 7, bytesFreed: 7 + 50 + 7 });
+    expect(await paths(aged.id)).toEqual(["fresh.jar"]);
+    expect(await paths(sized.id)).toEqual(["s-0.jar", "s-1.jar"]);
+    expect(await paths(off.id)).toEqual([]);
+  });
+
+  it("logs and skips a repository whose eviction fails, and still evicts the others", async () => {
+    const bad = await repo("a-bad", { enabled: false });
+    const good = await repo("b-good", { enabled: false });
+    await put(bad.id, "x.jar", "cache", 1, daysAgo(1));
+    await put(good.id, "y.jar", "cache", 2, daysAgo(1));
+    const failing: AssetService = {
+      ...assets,
+      delete: (row) => (row.path === "x.jar" ? Promise.reject(new Error("boom")) : assets.delete(row)),
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const result = await evictCaches({ db: testDb.db, assets: failing, now: NOW });
+    warn.mockRestore();
+
+    expect(result).toEqual({ repositories: 1, assetsDeleted: 1, bytesFreed: 2 });
+    expect(await paths(bad.id)).toEqual(["x.jar"]);
+    expect(await paths(good.id)).toEqual([]);
   });
 });
