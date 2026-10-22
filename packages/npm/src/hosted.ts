@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
-import { RegistryError, type CommittedAsset, type FormatDeps, type Principal, type Repo } from "@weaver/core";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { asset, component, type Tx } from "@weaver/db";
+import { RegistryError, type AssetRow, type CommittedAsset, type FormatDeps, type Principal, type Repo } from "@weaver/core";
 import { npmError, npmJson } from "./http.js";
-import { isValidNewPackageName, tarballFile, type PackageName } from "./names.js";
+import { isValidNewPackageName, tarballFile, versionFromTarball, type PackageName } from "./names.js";
 import {
   ABBREVIATED_TYPE,
   abbreviate,
@@ -12,6 +14,7 @@ import {
   type Packument,
   type VersionManifest,
 } from "./packument.js";
+import { compareSemver } from "./semver.js";
 import { formatRev, type NpmStore } from "./store.js";
 
 /** Largest accepted publish body (JSON with the base64 tarball): 256 MiB. */
@@ -171,15 +174,33 @@ function parsePublish(name: PackageName, body: unknown) {
   return { version, manifest, tarball, distTags, body };
 }
 
-/** `PUT <name>` with attachments: validates the single new version, stores its tarball and adds it to the packument. */
-export async function publish(ctx: HostedContext, name: PackageName, req: Request): Promise<Response> {
+/** Reads and parses a JSON request body of at most {@link MAX_PUBLISH_BYTES}. */
+async function readJson(req: Request): Promise<unknown> {
   const raw = await readBody(req, MAX_PUBLISH_BYTES);
-  let parsedJson: unknown;
   try {
-    parsedJson = JSON.parse(raw.toString("utf8"));
+    return JSON.parse(raw.toString("utf8"));
   } catch {
     throw new RegistryError("invalid_request", "invalid JSON body");
   }
+}
+
+/**
+ * `PUT <name>` and `PUT <name>/-rev/<rev>`: a body with attachments (and no rev in the URL) is a publish, anything
+ * else is a modification (deprecate, version unpublish) of the packument at the rev from the URL or the body.
+ */
+export async function putPackument(ctx: HostedContext, name: PackageName, rev: string | null, req: Request): Promise<Response> {
+  const body = await readJson(req);
+  const attachments = isRecord(body) ? body["_attachments"] : undefined;
+  if (rev === null && isRecord(attachments) && Object.keys(attachments).length > 0) return publish(ctx, name, body);
+  if (!isRecord(body)) throw new RegistryError("invalid_request", "invalid request body");
+  const bodyRev = body["_rev"];
+  const expected = rev ?? (typeof bodyRev === "string" ? bodyRev : null);
+  if (expected === null) throw new RegistryError("invalid_request", "nothing to publish: the body has no attachments");
+  return modifyPackument(ctx, name, expected, body);
+}
+
+/** `PUT <name>` with attachments: validates the single new version, stores its tarball and adds it to the packument. */
+async function publish(ctx: HostedContext, name: PackageName, parsedJson: unknown): Promise<Response> {
   const { version, manifest, tarball, distTags, body } = parsePublish(name, parsedJson);
 
   const sha1 = createHash("sha1").update(tarball).digest();
@@ -278,4 +299,184 @@ function publishedBefore(doc: Packument, version: string): boolean {
   const base = withoutBuild(version);
   const keys = [...Object.keys(doc.versions), ...Object.keys(doc.time).filter((k) => k !== "created" && k !== "modified")];
   return keys.some((k) => withoutBuild(k) === base);
+}
+
+/** Throws 409 unless `rev` is the current revision of the stored packument. */
+function checkRev(current: { document: Packument; rev: number }, rev: string): void {
+  if (formatRev(current.rev, current.document) !== rev) throw new RegistryError("immutable", "document update conflict");
+}
+
+/**
+ * Deletes the asset rows `rows` and the components of the package (all of them, or only `versions`) inside `tx`.
+ * The objects behind the rows are removed by {@link deleteObjects} once `tx` has committed.
+ */
+async function dropAssets(tx: Tx, ctx: HostedContext, name: PackageName, rows: AssetRow[], versions: string[] | null): Promise<void> {
+  if (rows.length > 0) {
+    await tx.delete(asset).where(inArray(asset.id, rows.map((r) => r.id)));
+  }
+  const scope = and(eq(component.repositoryId, ctx.repo.id), eq(component.namespace, name.scope), eq(component.name, name.bare));
+  await tx.delete(component).where(versions === null ? scope : and(scope, inArray(component.version, versions)));
+}
+
+/** Deletes the stored objects of removed assets; failures only leave orphans and are logged. */
+async function deleteObjects(ctx: HostedContext, rows: AssetRow[]): Promise<void> {
+  for (const row of rows) {
+    try {
+      await ctx.deps.stores.get(row.store)?.delete(row.storageKey);
+    } catch (error) {
+      console.warn(`weaver: failed to delete asset object ${row.storageKey}`, error);
+    }
+  }
+}
+
+/** The asset rows of a repository whose path equals one of `paths`, read through `tx`. */
+async function assetsAt(tx: Tx, repoId: string, paths: string[]): Promise<AssetRow[]> {
+  if (paths.length === 0) return [];
+  return (await tx.select().from(asset).where(and(eq(asset.repositoryId, repoId), inArray(asset.path, paths)))) as AssetRow[];
+}
+
+/**
+ * Applies a client-sent packument to the stored one at `rev`: versions missing from the body are unpublished (asset
+ * and component deleted, `time` entry kept as tombstone, tags dropped, `latest` re-pointed), and for kept versions
+ * only `deprecated` is taken over (an empty string clears it).
+ */
+async function modifyPackument(ctx: HostedContext, name: PackageName, rev: string, body: Record<string, unknown>): Promise<Response> {
+  const sent = body["versions"];
+  if (!isRecord(sent)) throw new RegistryError("invalid_request", "invalid packument: versions missing");
+  const { repo, store } = ctx;
+  const result = await store.locked(repo.id, name.full, async (tx) => {
+    const current = await store.get(repo.id, name.full, tx);
+    if (!current) throw new RegistryError("not_found", "not found");
+    checkRev(current, rev);
+    const doc = structuredClone(current.document);
+    const versions = isRecord(doc.versions) ? doc.versions : {};
+    const tags = isRecord(doc["dist-tags"]) ? doc["dist-tags"] : {};
+    const time = isRecord(doc.time) ? doc.time : {};
+    doc.versions = versions;
+    doc["dist-tags"] = tags;
+    doc.time = time;
+
+    for (const v of Object.keys(sent)) {
+      if (!Object.hasOwn(versions, v)) throw new RegistryError("invalid_request", `version ${v} does not exist`);
+    }
+    const removed = Object.keys(versions).filter((v) => !Object.hasOwn(sent, v));
+    if (removed.length > 0 && removed.length === Object.keys(versions).length) {
+      throw new RegistryError("invalid_request", "use npm unpublish --force");
+    }
+
+    let changed = false;
+    for (const [v, manifest] of Object.entries(sent)) {
+      const deprecated = isRecord(manifest) ? manifest["deprecated"] : undefined;
+      if (typeof deprecated !== "string") continue;
+      const target = versions[v]!;
+      if (deprecated === "") {
+        if (target.deprecated !== undefined) {
+          delete target.deprecated;
+          changed = true;
+        }
+      } else if (target.deprecated !== deprecated) {
+        target.deprecated = deprecated;
+        changed = true;
+      }
+    }
+
+    let dropped: AssetRow[] = [];
+    if (removed.length > 0) {
+      changed = true;
+      dropped = await assetsAt(tx, repo.id, removed.map((v) => tarballPath(name, tarballFile(name, v))));
+      await dropAssets(tx, ctx, name, dropped, removed);
+      for (const v of removed) delete versions[v];
+      for (const [tag, target] of Object.entries(tags)) {
+        if (typeof target === "string" && removed.includes(target)) delete tags[tag];
+      }
+      if (!Object.hasOwn(tags, "latest")) {
+        const highest = Object.keys(versions).sort(compareSemver).at(-1);
+        if (highest !== undefined) setOwn(tags, "latest", highest);
+      }
+    }
+    if (changed) setOwn(time, "modified", new Date().toISOString());
+    const saved = changed ? await store.save(tx, repo.id, name.full, doc, current.rev) : current.rev;
+    return { rev: saved, document: doc, dropped };
+  });
+  await deleteObjects(ctx, result.dropped);
+  return npmJson({ ok: true, id: name.full, rev: formatRev(result.rev, result.document) });
+}
+
+/** `DELETE <name>/-rev/<rev>`: removes the whole package (row, components, every tarball), freeing the name. */
+export async function unpublishPackage(ctx: HostedContext, name: PackageName, rev: string): Promise<Response> {
+  const { repo, store } = ctx;
+  const dropped = await store.locked(repo.id, name.full, async (tx) => {
+    const current = await store.get(repo.id, name.full, tx);
+    if (!current) throw new RegistryError("not_found", "not found");
+    checkRev(current, rev);
+    const prefix = `${name.full}/-/`;
+    const rows = (await tx
+      .select()
+      .from(asset)
+      .where(and(eq(asset.repositoryId, repo.id), sql`starts_with(${asset.path}, ${prefix})`))) as AssetRow[];
+    await dropAssets(tx, ctx, name, rows, null);
+    await store.remove(tx, repo.id, name.full);
+    return rows;
+  });
+  await deleteObjects(ctx, dropped);
+  return npmJson({ ok: true });
+}
+
+/**
+ * `DELETE <name>/-/<file>/-rev/<rev>`: npm sends it after the packument PUT of a version unpublish. The tarball is
+ * already gone by then, so this only confirms that its version is a tombstone (200), else 404.
+ */
+export async function confirmTarballRemoved(ctx: HostedContext, name: PackageName, file: string): Promise<Response> {
+  const version = versionFromTarball(name, file);
+  const found = await ctx.store.get(ctx.repo.id, name.full);
+  if (!found || version === null) return npmError(404, "not found");
+  const doc = found.document;
+  const gone = !Object.hasOwn(doc.versions ?? {}, version) && Object.hasOwn(doc.time ?? {}, version);
+  return gone ? npmJson({ ok: true }) : npmError(404, "not found");
+}
+
+/** `GET -/package/<name>/dist-tags`: the `{ tag: version }` map. */
+export async function listDistTags(ctx: HostedContext, name: PackageName): Promise<Response> {
+  const found = await ctx.store.get(ctx.repo.id, name.full);
+  if (!found) return npmError(404, "not found");
+  return npmJson(found.document["dist-tags"] ?? {});
+}
+
+/** `PUT -/package/<name>/dist-tags/<tag>`: points `tag` at the version in the JSON string body. */
+export async function setDistTag(ctx: HostedContext, name: PackageName, tag: string, req: Request): Promise<Response> {
+  const version = await readJson(req);
+  if (typeof version !== "string" || version === "") throw new RegistryError("invalid_request", "the body must be a version string");
+  if (encodeURIComponent(tag) !== tag || SEMVER.test(tag)) throw new RegistryError("invalid_request", `invalid dist-tag: ${tag}`);
+  const { repo, store } = ctx;
+  await store.locked(repo.id, name.full, async (tx) => {
+    const current = await store.get(repo.id, name.full, tx);
+    if (!current) throw new RegistryError("not_found", "not found");
+    const doc = structuredClone(current.document);
+    if (!isRecord(doc.versions) || !Object.hasOwn(doc.versions, version)) {
+      throw new RegistryError("invalid_request", `version ${version} does not exist`);
+    }
+    doc["dist-tags"] = isRecord(doc["dist-tags"]) ? doc["dist-tags"] : {};
+    doc.time = isRecord(doc.time) ? doc.time : {};
+    setOwn(doc["dist-tags"], tag, version);
+    setOwn(doc.time, "modified", new Date().toISOString());
+    await store.save(tx, repo.id, name.full, doc, current.rev);
+  });
+  return npmJson({ ok: true }, { status: 201 });
+}
+
+/** `DELETE -/package/<name>/dist-tags/<tag>`: removes a tag other than `latest`. */
+export async function removeDistTag(ctx: HostedContext, name: PackageName, tag: string): Promise<Response> {
+  if (tag === "latest") throw new RegistryError("invalid_request", "cannot remove the latest tag");
+  const { repo, store } = ctx;
+  await store.locked(repo.id, name.full, async (tx) => {
+    const current = await store.get(repo.id, name.full, tx);
+    if (!current) throw new RegistryError("not_found", "not found");
+    const doc = structuredClone(current.document);
+    if (!isRecord(doc["dist-tags"]) || !Object.hasOwn(doc["dist-tags"], tag)) throw new RegistryError("not_found", `tag ${tag} not found`);
+    delete doc["dist-tags"][tag];
+    doc.time = isRecord(doc.time) ? doc.time : {};
+    setOwn(doc.time, "modified", new Date().toISOString());
+    await store.save(tx, repo.id, name.full, doc, current.rev);
+  });
+  return npmJson({ ok: true });
 }

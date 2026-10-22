@@ -1,6 +1,17 @@
 import { canAccess, canReadThroughGroup, RegistryError, type FormatFactory, type Principal, type Repo } from "@weaver/core";
 import { npmError, npmJson, toNpmResponse } from "./http.js";
-import { publish, servePackument, serveTarball, serveVersion, type HostedContext } from "./hosted.js";
+import {
+  confirmTarballRemoved,
+  listDistTags,
+  putPackument,
+  removeDistTag,
+  servePackument,
+  serveTarball,
+  serveVersion,
+  setDistTag,
+  unpublishPackage,
+  type HostedContext,
+} from "./hosted.js";
 import { parseNpmPath, type NpmRoute } from "./route.js";
 import { createNpmStore } from "./store.js";
 
@@ -30,13 +41,21 @@ async function serveHosted(ctx: HostedContext, route: NpmRoute, req: Request, me
   const read = method === "GET" || method === "HEAD";
   switch (route.kind) {
     case "packument":
-      if (read) return servePackument(ctx, route.name, req);
-      if (method === "PUT") return publish(ctx, route.name, req);
-      return methodNotAllowed("GET, HEAD, PUT");
+      if (read && route.rev === null) return servePackument(ctx, route.name, req);
+      if (method === "PUT") return putPackument(ctx, route.name, route.rev, req);
+      if (method === "DELETE" && route.rev !== null) return unpublishPackage(ctx, route.name, route.rev);
+      return methodNotAllowed(route.rev === null ? "GET, HEAD, PUT" : "PUT, DELETE");
     case "version":
       return read ? serveVersion(ctx, route.name, route.spec, req) : methodNotAllowed("GET, HEAD");
     case "tarball":
-      return read ? serveTarball(ctx, route.name, route.file, req) : methodNotAllowed("GET, HEAD");
+      if (read && route.rev === null) return serveTarball(ctx, route.name, route.file, req);
+      if (method === "DELETE" && route.rev !== null) return confirmTarballRemoved(ctx, route.name, route.file);
+      return methodNotAllowed(route.rev === null ? "GET, HEAD" : "DELETE");
+    case "distTags":
+      if (route.tag === null) return read ? listDistTags(ctx, route.name) : methodNotAllowed("GET, HEAD");
+      if (method === "PUT") return setDistTag(ctx, route.name, route.tag, req);
+      if (method === "DELETE") return removeDistTag(ctx, route.name, route.tag);
+      return methodNotAllowed("PUT, DELETE");
     default:
       return npmError(404, "not found");
   }
