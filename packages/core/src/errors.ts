@@ -6,7 +6,8 @@ export type ErrorCode =
   | "immutable"
   | "has_dependents"
   | "payload_too_large"
-  | "validation_failed";
+  | "validation_failed"
+  | "upstream_unavailable";
 
 const STATUS_BY_CODE: Record<ErrorCode, number> = {
   invalid_request: 400,
@@ -17,6 +18,7 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   has_dependents: 409,
   payload_too_large: 413,
   validation_failed: 422,
+  upstream_unavailable: 502,
 };
 
 /** Process-wide brand of {@link RegistryError} instances, shared by every copy of this module. */

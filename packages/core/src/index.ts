@@ -12,3 +12,6 @@ export * from "./cleanup.js";
 export * from "./settings.js";
 export * from "./crypto.js";
 export * from "./repos/index.js";
+export * from "./content/assets.js";
+export * from "./content/usage.js";
+export * from "./mirror/index.js";

@@ -78,6 +78,7 @@ const TRPC_CODE_BY_REGISTRY_CODE: Record<ErrorCode, TRPC_ERROR_CODE_KEY> = {
   has_dependents: "CONFLICT",
   payload_too_large: "PAYLOAD_TOO_LARGE",
   validation_failed: "UNPROCESSABLE_CONTENT",
+  upstream_unavailable: "INTERNAL_SERVER_ERROR",
 };
 
 /** Registry error code and details, carried to the client in `error.data.registry`. */
