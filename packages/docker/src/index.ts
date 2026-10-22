@@ -31,3 +31,15 @@ export { mirrorBlob, mirrorManifest, mirrorReferrers, mirrorTags, upstreamImage,
 export { fromGroup, type GroupCtx, type GroupOp } from "./group.js";
 export { DOCKER_GC_GRACE_MS, runDockerGc, type DockerGcDeps, type DockerGcResult } from "./gc.js";
 export { SWEEP_INTERVAL_MS, maybeSweepUploads, sweepUploads } from "./sweep.js";
+export {
+  collectGarbage,
+  createDockerCleanup,
+  deleteManifest,
+  deleteTag,
+  dockerCleanup,
+  listOrphanManifests,
+  listTags,
+  type DockerCleanupOptions,
+  type DockerManifestInfo,
+  type DockerTagInfo,
+} from "./cleanup.js";

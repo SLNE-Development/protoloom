@@ -221,6 +221,25 @@ async function touchRequired(tx: Tx, repoId: string, image: string, required: st
   if (touched.length < required.length) throw blobUnknownInManifest(required.find((d) => !touched.some((t) => t.digest === d)));
 }
 
+/**
+ * Inside the manifest write transaction of an index: takes a key-share lock on the stored child manifests
+ * (sorted by id, after the blob and link locks), so a concurrent cleanup or DELETE cannot remove a child
+ * before the index referencing it commits. A child deleted since the check outside the transaction is
+ * `400 MANIFEST_UNKNOWN`.
+ */
+async function holdChildren(tx: Tx, repoId: string, image: string, children: string[]): Promise<void> {
+  const digests = [...new Set(children)];
+  if (digests.length === 0) return;
+  const rows = await tx
+    .select({ id: dockerManifest.id, digest: dockerManifest.digest })
+    .from(dockerManifest)
+    .where(and(eq(dockerManifest.repositoryId, repoId), eq(dockerManifest.image, image), inArray(dockerManifest.digest, digests)))
+    .orderBy(asc(dockerManifest.id))
+    .for("key share");
+  const missing = digests.find((d) => !rows.some((r) => r.digest === d));
+  if (missing) throw new DockerError(400, "MANIFEST_UNKNOWN", "manifest references an unknown child manifest", { digest: missing });
+}
+
 /** Whether `err` (or an error it wraps) is a Postgres foreign key violation (`23503`). */
 function isForeignKeyViolation(err: unknown): boolean {
   for (let e: unknown = err; e instanceof Error; e = e.cause) {
@@ -237,7 +256,7 @@ function effectiveArtifactType(parsed: ParsedManifest): string | null {
 /**
  * `PUT .../manifests/<reference>`: stores the exact pushed bytes (at most 4 MiB, `413 SIZE_INVALID`) under their
  * sha256 digest after validating shape and references; a digest reference must match (`400 DIGEST_INVALID`).
- * Row, refs and tag are written in one transaction that first refreshes the referenced blobs and links (so garbage collection keeps them); on a `tagImmutable` repository moving an existing tag to
+ * Row, refs and tag are written in one transaction that first refreshes the referenced blobs and links (so garbage collection keeps them) and holds the child manifests of an index (so cleanup keeps them); on a `tagImmutable` repository moving an existing tag to
  * another digest is `403 DENIED`. A concurrent DELETE of the same digest mid-transaction is retried once, then
  * answered `503 UNAVAILABLE`. Answers `201` with `Location`, `Docker-Content-Digest` and, for a manifest with a
  * subject, `OCI-Subject`.
@@ -265,6 +284,7 @@ export async function putManifest(ctx: HostedCtx, req: Request, reference: strin
       }
       await ctx.opts.onManifestPutStep?.("begin");
       await touchRequired(tx, repoId, image, derived.required);
+      if (parsed.isIndex) await holdChildren(tx, repoId, image, parsed.manifests.map((d) => d.digest));
       const [inserted] = await tx
         .insert(dockerManifest)
         .values({
