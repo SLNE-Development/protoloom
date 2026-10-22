@@ -83,32 +83,35 @@ export async function identify(
   }
 }
 
-/** The 401 an anonymous caller gets when it may not do something: the challenge, flagged `insufficient_scope` when it already sent a token. */
-export function anonymousDenial(deps: FormatDeps, caller: Caller, scope: string): DockerError {
+/** The 401 challenge for `scope`, flagged `insufficient_scope` when the caller already sent a JWT. */
+export function scopeChallenge(deps: FormatDeps, caller: Caller, scope: string): DockerError {
   return challenge(deps.publicUrl, { scope, error: caller.claims ? "insufficient_scope" : undefined });
 }
 
 /**
  * Checks that the caller may perform `action` on the target, from the JWT claims alone when one was
- * sent, otherwise from the principal. Throws a 401 challenge for anonymous callers, `403 DENIED` for
- * authenticated ones, and `405 UNSUPPORTED` for writes to a mirror or group (anonymous callers that
- * cannot read the repository are challenged instead, so they do not learn its kind).
+ * sent, otherwise from the principal. A JWT entry counts only when its name matches and it is bound to
+ * the target's repository id. A JWT without such an entry gets a 401 `insufficient_scope` challenge (so
+ * the client fetches a token for the scope); otherwise anonymous callers get a 401 challenge and
+ * authenticated ones `403 DENIED`. Writes to a mirror or group are `405 UNSUPPORTED` (anonymous callers
+ * that cannot read the repository are challenged instead, so they do not learn its kind).
  */
 export function requireAccess(deps: FormatDeps, caller: Caller, target: Target, action: DockerAction): void {
   const scope = scopeFor(target.name, action);
   const anonymous = caller.principal.kind === "anonymous";
+  const entry = caller.claims?.access.find(
+    (e) => e.type === "repository" && e.name === target.name && e.repo === target.repo.id,
+  );
   const has = (a: DockerAction): boolean =>
-    caller.claims
-      ? caller.claims.access.some((e) => e.type === "repository" && e.name === target.name && e.actions.includes(a))
-      : permits(caller.principal, target.repo, a);
+    caller.claims ? (entry?.actions.includes(a) ?? false) : permits(caller.principal, target.repo, a);
 
   if (action !== "pull" && target.repo.kind !== "hosted") {
-    if (anonymous && !has("pull")) throw anonymousDenial(deps, caller, scope);
+    if (anonymous && !has("pull")) throw scopeChallenge(deps, caller, scope);
     throw new DockerError(405, "UNSUPPORTED", `${target.repo.name} is a ${target.repo.kind} repository and read-only`, {
       name: target.name,
     });
   }
   if (has(action)) return;
-  if (anonymous) throw anonymousDenial(deps, caller, scope);
+  if (anonymous || (caller.claims && !entry)) throw scopeChallenge(deps, caller, scope);
   throw new DockerError(403, "DENIED", "requested access to the resource is denied", { name: target.name });
 }

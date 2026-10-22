@@ -40,8 +40,23 @@ describe("docker jwt", () => {
 
   it("expired (exp+31 s) → null", () => {
     const token = signToken(key, claims());
-    expect(verifyToken(key, token, "weaver.test", new Date((iat + 330) * 1000))).not.toBeNull();
     expect(verifyToken(key, token, "weaver.test", new Date((iat + 331) * 1000))).toBeNull();
+  });
+
+  it("exp has no leeway: valid at exp, null one second later", () => {
+    const token = signToken(key, claims());
+    expect(verifyToken(key, token, "weaver.test", new Date((iat + 300) * 1000))).not.toBeNull();
+    expect(verifyToken(key, token, "weaver.test", new Date((iat + 301) * 1000))).toBeNull();
+  });
+
+  it('alg "none" and "RS256" tokens → null', () => {
+    const payload = Buffer.from(JSON.stringify(claims())).toString("base64url");
+    const none = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+    const rs = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
+    const sig = signToken(key, claims()).split(".")[2]!;
+    expect(verifyToken(key, `${none}.${payload}.`, "weaver.test", now)).toBeNull();
+    expect(verifyToken(key, `${none}.${payload}.${sig}`, "weaver.test", now)).toBeNull();
+    expect(verifyToken(key, `${rs}.${payload}.${sig}`, "weaver.test", now)).toBeNull();
   });
 
   it("nbf in the future beyond the leeway → null", () => {
