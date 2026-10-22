@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
     }
   },
   "scripts": {
@@ -23,5 +27,11 @@
     "eslint": "10.13.0",
     "typescript": "6.0.3",
     "vitest": "5.0.5"
+  },
+  "dependencies": {
+    "@weaver/core": "workspace:*",
+    "@weaver/db": "workspace:*",
+    "drizzle-orm": "0.45.4",
+    "zod": "4.6.7"
   }
 }

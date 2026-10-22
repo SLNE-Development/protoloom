@@ -156,6 +156,14 @@ export function parseMavenPath(rest: string): { repo: string; target: MavenPath 
 }
 
 /**
+ * Classifies a stored asset path (already decoded and validated when it was written), e.g. to
+ * read the snapshot stamp of each file in a version directory.
+ */
+export function classifyStoredPath(path: string): MavenPath {
+  return classify(path.split("/"));
+}
+
+/**
  * Rule subjects used to match mirror rules. Files yield `groupId:artifactId`. A metadata path
  * is ambiguous (artifact, snapshot or group-level), so it yields every plausible reading:
  * `groupId:artifactId` (with a trailing version directory dropped) and the group-level

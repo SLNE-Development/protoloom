@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import type { FormatFactory } from "@weaver/core";
 import config from "../../next.config";
 import { config as proxyConfig } from "../proxy";
-import { getFormatHandler, mountRest } from "./formats";
+import { FACTORIES, getFormatHandler, mountRest } from "./formats";
 
 // A server context without a database: every repository lookup misses.
 vi.mock("./context", () => ({
@@ -11,7 +12,7 @@ vi.mock("./context", () => ({
     repos: { get: async () => null },
     assets: {},
     mirror: {},
-    secretKey: Buffer.alloc(32),
+    secretKey: Buffer.alloc(32, 1),
   }),
 }));
 
@@ -39,8 +40,22 @@ describe("placeholder mounts", () => {
 });
 
 describe("npm mount", () => {
-  it("serves npm through the real handler: a missing repo answers 404 JSON", async () => {
-    const res = await getFormatHandler("npm")(req("/npm/x/-/ping"), "x/-/ping");
+  it("builds the real npm handler from deps carrying the secret key; a missing repo answers 404 JSON", async () => {
+    let seen: Buffer | undefined;
+    const original = FACTORIES.npm!;
+    const factory: FormatFactory = (deps) => {
+      seen = deps.secretKey;
+      return original(deps);
+    };
+    FACTORIES.npm = factory;
+    let handler;
+    try {
+      handler = getFormatHandler("npm");
+    } finally {
+      FACTORIES.npm = original;
+    }
+    expect(seen?.length).toBe(32);
+    const res = await handler(req("/npm/x/-/ping"), "x/-/ping");
     expect(res.status).toBe(404);
     expect(res.headers.get("content-type")).toBe("application/json");
     expect(await res.json()).toEqual({ error: "not found" });

@@ -1,3 +1,4 @@
+import { createDockerHandler } from "@weaver/docker";
 import { getSettings, recordUsage, type FormatFactory, type FormatHandler } from "@weaver/core";
 import { createNpmHandler } from "@weaver/npm";
 import { env } from "@/env";
@@ -12,10 +13,10 @@ export type FormatMount = "maven" | "npm" | "docker";
  * Format factories by mount. A format plan replaces its `undefined` with one import and one map
  * entry; until then the mount answers 501.
  */
-const FACTORIES: Record<FormatMount, FormatFactory | undefined> = {
+export const FACTORIES: Record<FormatMount, FormatFactory | undefined> = {
   maven: undefined,
   npm: createNpmHandler,
-  docker: undefined,
+  docker: createDockerHandler,
 };
 
 /** The 501 answer of a mount whose format is not installed. */

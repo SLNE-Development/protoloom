@@ -21,6 +21,7 @@
     "@next/env": "16.4.2",
     "@weaver/core": "workspace:*",
     "@weaver/db": "workspace:*",
+    "@weaver/docker": "workspace:*",
     "@weaver/jobs": "workspace:*",
     "@weaver/npm": "workspace:*",
     "@weaver/ui": "workspace:*",

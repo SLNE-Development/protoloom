@@ -316,6 +316,72 @@ describe("mirror engine", () => {
     expect(onChallenge).toHaveBeenCalledTimes(2);
   });
 
+  it("authorize result replaces upstream credentials", async () => {
+    up.handler = serve({ x: "ok" });
+    const repo = await mirror({}, [{ url: up.base, authType: "basic", username: "alice", secret: "s3cret" }]);
+    const authorize = vi.fn().mockResolvedValue("Bearer t1");
+    await readText((await engine.fetch({ repo, path: "x", subject: "x", class: "immutable", authorize }))!);
+    expect(up.auth).toEqual(["Bearer t1"]);
+    expect(authorize).toHaveBeenCalledOnce();
+    expect(authorize.mock.calls[0]![0]).toMatchObject({ url: up.base, authType: "basic", username: "alice", secret: "s3cret" });
+  });
+
+  it("authorize null falls back to row credentials", async () => {
+    up.handler = serve({ x: "ok" });
+    const repo = await mirror({}, [{ url: up.base, authType: "bearer", secret: "tok" }]);
+    const authorize = vi.fn().mockResolvedValue(null);
+    await readText((await engine.fetch({ repo, path: "x", subject: "x", class: "immutable", authorize }))!);
+    expect(up.auth).toEqual(["Bearer tok"]);
+  });
+
+  it("onChallenge still retries once after an authorize value is rejected with 401", async () => {
+    up.handler = (req, res) => {
+      if (req.headers.authorization === "Bearer granted") return void res.writeHead(200).end("content");
+      res.writeHead(401, { "www-authenticate": 'Bearer realm="https://auth.example/token"' }).end();
+    };
+    const repo = await mirror();
+    const authorize = vi.fn().mockResolvedValue("Bearer t1");
+    const onChallenge = vi.fn().mockResolvedValue("Bearer granted");
+    const res = await engine.fetch({ repo, path: "v2/x", subject: "x", class: "metadata", authorize, onChallenge });
+    expect(res!.status).toBe(200);
+    expect(await readText(res!)).toBe("content");
+    expect(up.auth).toEqual(["Bearer t1", "Bearer granted"]);
+    expect(authorize).toHaveBeenCalledOnce();
+    expect(onChallenge).toHaveBeenCalledOnce();
+  });
+
+  it("cacheKey separates cache entries for one upstream path", async () => {
+    up.handler = serve({ pkg: "doc" });
+    const repo = await mirror(cached);
+    const fetchKey = async (cacheKey: string) => {
+      const res = await engine.fetch({ repo, path: "pkg", subject: "pkg", class: "immutable", cacheKey });
+      await readText(res!);
+      await engine.drain();
+      return res!;
+    };
+    expect((await fetchKey("pkg/.corgi")).cache).toBe("miss");
+    expect((await fetchKey("pkg/.packument")).cache).toBe("miss");
+    expect(up.hits).toHaveLength(2);
+    expect((await assetRows()).map((a) => a.path).sort()).toEqual(["pkg/.corgi", "pkg/.packument"]);
+    expect((await fetchKey("pkg/.corgi")).cache).toBe("hit");
+    expect(up.hits).toHaveLength(2);
+  });
+
+  it("HEAD of a decodable gzip body drops the encoding headers like GET", async () => {
+    const { gzipSync } = await import("node:zlib");
+    const zipped = gzipSync("decoded-content");
+    up.handler = (_req, res) => res.writeHead(200, { "content-type": "text/plain", "content-encoding": "gzip", "content-length": zipped.length }).end(res.req.method === "HEAD" ? undefined : zipped);
+    const repo = await mirror();
+    const get = await engine.fetch({ repo, path: "g.txt", subject: "g.txt", class: "immutable" });
+    await readText(get!);
+    const head = await engine.fetch({ repo, path: "g.txt", subject: "g.txt", class: "immutable", method: "HEAD" });
+    expect(head!.body).toBeNull();
+    expect(head!.headers.get("content-encoding")).toBeNull();
+    expect(head!.headers.get("content-length")).toBeNull();
+    expect(head!.headers.get("content-type")).toBe("text/plain");
+    expect([...head!.headers.keys()].sort()).toEqual([...get!.headers.keys()].sort());
+  });
+
   it("HEAD never writes the cache", async () => {
     up.handler = serve({ "h.jar": "head-body" });
     const repo = await mirror(cached);
