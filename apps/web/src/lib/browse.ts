@@ -109,7 +109,9 @@ export function firstFile(nodes: FileTreeNode[]): string | null {
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  if (bytes < 1024 ** 3) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  if (bytes < 1024 ** 4) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  return `${(bytes / 1024 ** 4).toFixed(1)} TiB`;
 }
 
 const RELATIVE = new Intl.RelativeTimeFormat("en", { numeric: "auto" });

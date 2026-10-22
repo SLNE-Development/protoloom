@@ -17,7 +17,7 @@ import {
 } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
 import { deriveSecretKey, decryptSecret } from "../crypto.js";
-import type { RegistryError } from "../errors.js";
+import { RegistryError } from "../errors.js";
 import type { Principal } from "../permissions.js";
 import { createStoreSetFromEnv, getBuffer, putBuffer, type StoreSet } from "../storage/index.js";
 import { createRepoService, type CreateRepoInput, type RepoService } from "./service.js";
@@ -251,6 +251,22 @@ describe("repository service", () => {
     await repos.delete(admin, "a");
     expect((await repos.members(group.id)).map((r) => r.name)).toEqual(["b"]);
     expect(await codeOf(repos.delete(admin, "a"))).toBe("not_found");
+  });
+
+  it("lets a delete guard refuse the delete with the row locked", async () => {
+    await create({ name: "kept", format: "maven", kind: "hosted" });
+    const seen: string[] = [];
+    const refuse = repos.delete(admin, "kept", {
+      guard: async (_tx, repo) => {
+        seen.push(`${repo.format}/${repo.name}`);
+        throw new RegistryError("invalid_request", "not now");
+      },
+    });
+    expect(await codeOf(refuse)).toBe("invalid_request");
+    expect(seen).toEqual(["maven/kept"]);
+    expect(await repos.get("kept")).not.toBeNull();
+    await repos.delete(admin, "kept", { guard: async () => undefined });
+    expect(await repos.get("kept")).toBeNull();
   });
 
   it("deleting a repo deletes its stored asset objects and cascades key permissions", async () => {
