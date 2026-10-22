@@ -1,7 +1,7 @@
 import { and, asc, eq, gt, sql } from "drizzle-orm";
 import { dockerBlobLink, dockerManifest, dockerTag, type Db } from "@weaver/db";
 import { DockerError } from "../errors.js";
-import { API_VERSION, type HostedCtx } from "./blobs.js";
+import { API_VERSION, type HostedReadCtx } from "./blobs.js";
 
 /** The most tags one `tags/list` page returns. */
 export const MAX_TAGS_PAGE = 1000;
@@ -57,7 +57,7 @@ async function imageExists(db: Db, repoId: string, image: string): Promise<boole
  * `GET .../tags/list?n=&last=`: `{name, tags}` with a `Link: <...>; rel="next"` header when more tags follow.
  * An image holding nothing is `404 NAME_UNKNOWN`; a non-numeric `n` is `400 UNSUPPORTED`.
  */
-export async function serveTags(ctx: HostedCtx, req: Request): Promise<Response> {
+export async function serveTags(ctx: HostedReadCtx, req: Request): Promise<Response> {
   const { deps, target } = ctx;
   const params = new URL(req.url).searchParams;
   const rawN = params.get("n");

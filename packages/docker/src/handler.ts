@@ -5,12 +5,16 @@ import { challenge, identify, requireAccess, scopeChallenge, scopeFor } from "./
 import type { DockerAction } from "./auth/jwt.js";
 import { handleToken } from "./auth/token-endpoint.js";
 import { DockerError, errorResponse } from "./errors.js";
+import { fromGroup, type GroupOp } from "./group.js";
 import { deleteHostedBlob, serveHostedBlob, type HostedCtx } from "./hosted/blobs.js";
-import { deleteManifest, putManifest, serveManifest } from "./hosted/manifests.js";
+import { blobUnknown } from "./hosted/blobs.js";
+import { deleteManifest, manifestUnknown, putManifest, serveManifest } from "./hosted/manifests.js";
 import { serveReferrers } from "./hosted/referrers.js";
 import { serveTags } from "./hosted/tags.js";
 import { cancelUpload, finishUpload, patchUpload, startUpload, uploadStatus } from "./hosted/uploads.js";
 import { isDigest } from "./media-types.js";
+import { createHubAuth } from "./mirror/hub-auth.js";
+import { mirrorBlob, mirrorManifest, mirrorReferrers, mirrorTags, type MirrorCtx } from "./mirror/mirror.js";
 import { parseRoute, type Route } from "./route.js";
 import { resolveTarget, type Target } from "./target.js";
 
@@ -127,8 +131,60 @@ function dispatchHostedBlobs(ctx: HostedCtx, req: Request, route: Route): Promis
   }
 }
 
+/** A route that names an image. */
+type NamedRoute = Exclude<Route, { kind: "base" } | { kind: "token" }>;
+
+/** The `404` a read answers when no repository has the item. */
+function notFound(route: NamedRoute): DockerError {
+  switch (route.kind) {
+    case "manifest":
+      return manifestUnknown(route.reference);
+    case "blob":
+      return blobUnknown(route.digest);
+    default:
+      return new DockerError(404, "NAME_UNKNOWN", "repository name not known to registry", { name: route.name });
+  }
+}
+
+/** The group operation and its argument for a read route, or null when the route and method are not a read. */
+function readOf(method: string, route: NamedRoute): { op: GroupOp; arg: string } | null {
+  const read = method === "GET" || method === "HEAD";
+  if (route.kind === "manifest" && read) return { op: "manifest", arg: route.reference };
+  if (route.kind === "blob" && read) return { op: "blob", arg: route.digest };
+  if (route.kind === "tags" && method === "GET") return { op: "tags", arg: "" };
+  if (route.kind === "referrers" && method === "GET") return { op: "referrers", arg: route.digest };
+  return null;
+}
+
+/** Serves one read of a mirror repository. */
+function fromMirror(ctx: MirrorCtx, op: GroupOp, req: Request, arg: string): Promise<Response | null> {
+  switch (op) {
+    case "manifest":
+      return mirrorManifest(ctx, req, arg);
+    case "blob":
+      return mirrorBlob(ctx, req, arg);
+    case "tags":
+      return mirrorTags(ctx, req);
+    case "referrers":
+      return mirrorReferrers(ctx, req, arg);
+  }
+}
+
+/** Serves the read routes of a mirror or group repository (writes were refused by `requireAccess`); a miss is the route's `404`. */
+async function dispatchReadOnly(ctx: MirrorCtx, req: Request, route: NamedRoute): Promise<Response> {
+  const read = readOf(req.method, route);
+  if (!read) throw methodNotAllowed(req.method);
+  const served =
+    ctx.target.repo.kind === "group"
+      ? await fromGroup(ctx, read.op, req, read.arg)
+      : await fromMirror(ctx, read.op, req, read.arg);
+  if (!served) throw notFound(route);
+  return served;
+}
+
 /** Builds the docker handler for the `/v2` mount: routing, token endpoint, authentication challenge, authorization and error mapping. */
 export function createDockerHandlerWith(deps: FormatDeps, opts: DockerOptions): FormatHandler {
+  const hub = createHubAuth(fetch, () => opts.now?.() ?? new Date());
   async function dispatch(req: Request, rest: string): Promise<Response> {
     const route = parseRoute(rest);
     if (!route) {
@@ -166,8 +222,9 @@ export function createDockerHandlerWith(deps: FormatDeps, opts: DockerOptions): 
     if (target.repo.kind === "hosted") {
       const served = dispatchHosted({ deps, opts, caller, target }, req, route);
       if (served) return served;
+      throw methodNotAllowed(req.method);
     }
-    throw new DockerError(501, "UNSUPPORTED", `${route.kind} is not implemented yet`);
+    return dispatchReadOnly({ deps, caller, target, hub }, req, route);
   }
 
   return async (req, rest) => {

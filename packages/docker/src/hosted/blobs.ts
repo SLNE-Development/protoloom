@@ -15,6 +15,9 @@ export interface HostedCtx {
   target: Target;
 }
 
+/** What a hosted read (manifest, blob, tags, referrers) works with: a {@link HostedCtx} without the handler options. */
+export type HostedReadCtx = Omit<HostedCtx, "opts">;
+
 /** A stored blob as seen through a link: where its bytes live, its size and digest. */
 export interface BlobRef {
   blobId: string;
@@ -85,7 +88,7 @@ export function parseRange(header: string | null, size: number): { start: number
  * satisfiable `Range`, `416` otherwise) and records a download; `HEAD` answers headers only.
  * An unlinked digest is `404 BLOB_UNKNOWN`, also when another repository holds it.
  */
-export async function serveHostedBlob(ctx: HostedCtx, req: Request, digest: string): Promise<Response> {
+export async function serveHostedBlob(ctx: HostedReadCtx, req: Request, digest: string): Promise<Response> {
   const { deps, target } = ctx;
   const blob = await findLinkedBlob(deps.db, target.repo.id, target.image, digest);
   if (!blob) throw blobUnknown(digest);
