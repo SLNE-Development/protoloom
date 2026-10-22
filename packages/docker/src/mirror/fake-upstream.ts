@@ -28,7 +28,9 @@ export interface FakeUpstream {
   locked: Set<string>;
   /**
    * Images that do not exist upstream, answered like Docker Hub: a request without a token gets the plain
-   * challenge, one with a valid token `401` with `error="insufficient_scope"`.
+   * challenge, one with a valid token `401` with `error="insufficient_scope"`. Like Hub, a token's access is
+   * fixed when it is issued: a token issued while its image was missing keeps being refused after the image
+   * appears.
    */
   missing: Set<string>;
   /** Stores a manifest under its digest (and `tag`, when given); resolves to the digest. */
@@ -70,7 +72,8 @@ export async function startFakeUpstream(): Promise<FakeUpstream> {
   const blobs = new Map<string, Map<string, Buffer>>();
   const redirects = new Set<string>();
   const tampered = new Map<string, Buffer>();
-  const tokens = new Map<string, string>();
+  /** Issued tokens: their scope and whether they grant pull (decided at issue time). */
+  const tokens = new Map<string, { scope: string; granted: boolean }>();
   const state = {
     requests: [] as SeenRequest[],
     tokenRequests: [] as SeenRequest[],
@@ -86,7 +89,8 @@ export async function startFakeUpstream(): Promise<FakeUpstream> {
     state.tokenRequests.push(record(req));
     const scope = new URL(req.url ?? "/", "http://x").searchParams.get("scope") ?? "";
     const token = `tok-${state.tokenRequests.length}`;
-    tokens.set(token, scope);
+    const image = /^repository:(.+):pull$/.exec(scope)?.[1];
+    tokens.set(token, { scope, granted: image !== undefined && !missing.has(image) });
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ token, expires_in: 300 }));
   });
@@ -126,8 +130,9 @@ export async function startFakeUpstream(): Promise<FakeUpstream> {
     }
     const scope = `repository:${image}:pull`;
     const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "");
-    const valid = bearer !== null && tokens.get(bearer[1]!) === scope;
-    if (missing.has(image) && valid) {
+    const issued = bearer ? tokens.get(bearer[1]!) : undefined;
+    const valid = issued?.scope === scope;
+    if (valid && (!issued.granted || missing.has(image))) {
       return send(
         res,
         method,

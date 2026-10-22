@@ -2,14 +2,17 @@ import { UnrecoverableError, Worker, type ConnectionOptions } from "bullmq";
 import {
   createAssetService,
   createRepoService,
+  dockerStorageBytes,
   evictCaches,
   RegistryError,
+  rollupUsage,
   runAllCleanups,
   runRepoCleanup,
+  toRepo,
   type CleanupDeps,
   type StoreSet,
 } from "@weaver/core";
-import type { Db } from "@weaver/db";
+import { repository, type Db } from "@weaver/db";
 import { runDockerGc } from "@weaver/docker/gc";
 import { sweepLoginSessions } from "@weaver/npm";
 import {
@@ -17,6 +20,7 @@ import {
   MAINTENANCE_QUEUE,
   scheduleDailyCleanup,
   scheduleHourlyEviction,
+  scheduleHourlyStatsRollup,
   scheduleNpmLoginSweep,
   scheduleRepeating,
   type MaintenanceJobData,
@@ -83,13 +87,22 @@ export async function processMaintenanceJob(deps: WorkerDeps, data: MaintenanceJ
       return runDockerGc({ db: deps.db, stores: deps.stores, now });
     case "npm:login-sweep":
       return sweepLoginSessions(deps.db, now);
+    case "stats:rollup":
+      return rollupUsage(
+        {
+          db: deps.db,
+          repos: { list: async () => (await deps.db.select().from(repository).orderBy(repository.name)).map(toRepo) },
+          storageProbes: { docker: dockerStorageBytes(deps.db) },
+        },
+        now,
+      );
     default:
       throw new UnrecoverableError(`Unknown maintenance job kind ${JSON.stringify((data as { kind?: unknown }).kind)}`);
   }
 }
 
 /**
- * Upserts the `cleanup-daily`, `evict-hourly`, `npm-login-sweep` and `docker-gc-daily` schedulers (idempotent) and starts a worker that
+ * Upserts the `cleanup-daily`, `evict-hourly`, `npm-login-sweep`, `stats-hourly` and `docker-gc-daily` schedulers (idempotent) and starts a worker that
  * processes maintenance jobs one at a time.
  */
 export async function startWorker(deps: WorkerDeps): Promise<RunningWorker> {
@@ -98,6 +111,7 @@ export async function startWorker(deps: WorkerDeps): Promise<RunningWorker> {
     await scheduleDailyCleanup(queue);
     await scheduleHourlyEviction(queue);
     await scheduleNpmLoginSweep(queue);
+    await scheduleHourlyStatsRollup(queue);
     await scheduleDockerGc(queue);
   } finally {
     await queue.close();

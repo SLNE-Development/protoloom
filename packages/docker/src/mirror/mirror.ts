@@ -135,15 +135,16 @@ async function fetchUpstream(
 /**
  * Whether a final upstream 401 means the image is missing (or private to others): the upstream rejected a
  * token with `error="insufficient_scope"`, as Docker Hub does, or did so within the last 60 s. A fresh
- * rejection is remembered, so repeated lookups do not ask the token realm each time.
+ * rejection is remembered (and its token dropped), so repeated lookups do not ask the token realm each
+ * time; a 401 while the mark holds never extends it, so the image is looked up again after 60 s.
  */
 function isMissingImage(res: MirrorResponse, tokenSent: boolean, hub: HubAuth, upstream: UpstreamWithSecret, scope: string): boolean {
+  // Already marked: the challenge went unanswered, so this 401 says nothing new and must not extend the mark.
+  if (hub.isMissing(upstream, scope)) return true;
   const challenge = res.headers.get("www-authenticate") ?? "";
-  if (tokenSent && /\berror\s*=\s*"?insufficient_scope"?/i.test(challenge)) {
-    hub.markMissing(upstream, scope);
-    return true;
-  }
-  return hub.isMissing(upstream, scope);
+  if (!tokenSent || !/\berror\s*=\s*"?insufficient_scope"?/i.test(challenge)) return false;
+  hub.markMissing(upstream, scope);
+  return true;
 }
 
 /** The `/v2` response headers of a mirror answer: the content headers of the asset or the upstream, never its challenge. */

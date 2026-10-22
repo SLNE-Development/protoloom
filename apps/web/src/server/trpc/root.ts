@@ -9,6 +9,7 @@ import { mavenRouter } from "./routers/maven";
 import { policiesRouter } from "./routers/policies";
 import { repositoriesRouter } from "./routers/repositories";
 import { settingsRouter } from "./routers/settings";
+import { statsRouter } from "./routers/stats";
 import { usersRouter } from "./routers/users";
 import { versionsRouter } from "./routers/versions";
 
@@ -24,6 +25,7 @@ export const appRouter = router({
   invites: invitesRouter,
   users: usersRouter,
   settings: settingsRouter,
+  stats: statsRouter,
   audit: auditRouter,
 });
 
