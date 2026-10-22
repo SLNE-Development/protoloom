@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mirrorSubject, parseMavenPath } from "./path.js";
+import { mirrorSubjects, parseMavenPath } from "./path.js";
 
 describe("parseMavenPath", () => {
   it("parses a release jar", () => {
@@ -89,13 +89,35 @@ describe("parseMavenPath", () => {
   );
 });
 
-describe("mirrorSubject", () => {
+describe("mirrorSubjects", () => {
+  const s = (p: string) => mirrorSubjects(parseMavenPath(p).target!);
   it("maps targets to rule subjects", () => {
-    const s = (p: string) => mirrorSubject(parseMavenPath(p).target!);
-    expect(s("r/org/example/lib/1.2.0/lib-1.2.0.jar")).toBe("org.example:lib");
-    expect(s("r/org/example/lib/maven-metadata.xml")).toBe("org.example:lib");
-    expect(s("r/org/example/lib/1.0-SNAPSHOT/maven-metadata.xml")).toBe("org.example:lib");
-    expect(s("r/archetype-catalog.xml")).toBe("archetype-catalog.xml");
-    expect(s("r/org/example/")).toBe("org.example.");
+    expect(s("r/org/example/lib/1.2.0/lib-1.2.0.jar")).toEqual(["org.example:lib"]);
+    expect(s("r/archetype-catalog.xml")).toEqual(["archetype-catalog.xml"]);
+    expect(s("r/org/example/")).toEqual(["org.example."]);
+  });
+  it("returns artifact and group readings for metadata", () => {
+    expect(s("r/org/example/lib/maven-metadata.xml")).toEqual(["org.example:lib", "org.example.lib:*"]);
+    expect(s("r/org/apache/maven/plugins/maven-metadata.xml")).toEqual([
+      "org.apache.maven:plugins",
+      "org.apache.maven.plugins:*",
+    ]);
+  });
+  it("handles version-level metadata", () => {
+    expect(s("r/org/example/lib/1.0-SNAPSHOT/maven-metadata.xml")).toContain("org.example:lib");
+    expect(s("r/group/artifact/1.0/maven-metadata.xml")).toContain("group:artifact");
+  });
+});
+
+describe("hardening", () => {
+  it("does not take a longer version's file as an extension", () => {
+    const t = parseMavenPath("r/g/lib/1.0/lib-1.0.1.jar").target!;
+    expect(t.type).toBe("other");
+    const ok = parseMavenPath("r/g/lib/1.0/lib-1.0.jar").target!;
+    expect(ok).toMatchObject({ type: "file", extension: "jar", classifier: null });
+    expect(parseMavenPath("r/g/lib/1.0/lib-1.0x.jar").target!.type).toBe("other");
+  });
+  it.each(["%01", "%1f", "%7f", "a%0ab"])("rejects control character %s", (seg) => {
+    expect(() => parseMavenPath(`r/a/${seg}`)).toThrowError(expect.objectContaining({ code: "invalid_request" }));
   });
 });

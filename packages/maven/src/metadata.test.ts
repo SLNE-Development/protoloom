@@ -133,6 +133,25 @@ describe("parseMetadata", () => {
   });
 });
 
+describe("hardening", () => {
+  it("rejects a billion-laughs DOCTYPE", () => {
+    const xml = `<?xml version="1.0"?>
+<!DOCTYPE metadata [<!ENTITY a "AAAAAAAAAA"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;"><!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">]>
+<metadata><groupId>&c;</groupId><artifactId>x</artifactId><versioning><versions><version>1.0</version></versions></versioning></metadata>`;
+    expect(parseMetadata(xml)).toBeNull();
+  });
+
+  it("omits lastUpdated when empty", () => {
+    expect(renderArtifactMetadata({ ...artifact, lastUpdated: "" })).not.toContain("lastUpdated");
+    expect(renderSnapshotMetadata({ ...snapshot, lastUpdated: "", snapshotVersions: [{ classifier: null, extension: "jar", value: "v", updated: "" }] })).not.toMatch(/lastUpdated|updated/);
+  });
+
+  it("returns null for a non-numeric buildNumber", () => {
+    const xml = renderSnapshotMetadata(snapshot).replace("<buildNumber>3<", "<buildNumber>abc<");
+    expect(parseMetadata(xml)).toBeNull();
+  });
+});
+
 describe("mergeArtifactMetadata", () => {
   it("unions and recomputes", () => {
     const merged = mergeArtifactMetadata([

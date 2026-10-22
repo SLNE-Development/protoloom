@@ -44,7 +44,7 @@ function invalid(message: string): never {
   throw new RegistryError("invalid_request", message);
 }
 
-/** Decodes one path segment and rejects traversal, separators and NUL bytes. */
+/** Decodes one path segment and rejects traversal, separators and control characters. */
 function decodeSegment(raw: string): string {
   let decoded: string;
   try {
@@ -53,7 +53,8 @@ function decodeSegment(raw: string): string {
     return invalid("Malformed percent-encoding in path");
   }
   if (decoded === "" || decoded === "." || decoded === "..") return invalid("Invalid path segment");
-  if (decoded.includes("/") || decoded.includes("\\") || decoded.includes("\u0000")) return invalid("Invalid character in path segment");
+  // eslint-disable-next-line no-control-regex -- control characters are exactly what is rejected
+  if (decoded.includes("/") || decoded.includes("\\") || /[\u0000-\u001f\u007f]/.test(decoded)) return invalid("Invalid character in path segment");
   return decoded;
 }
 
@@ -82,6 +83,8 @@ function parseRemainder(rest: string): { classifier: string | null; extension: s
     if (classifier === "") return null;
   }
   if (!tail.startsWith(".") || tail.length < 2) return null;
+  // `lib-1.0.1.jar` in the `1.0` directory belongs to version 1.0.1, not extension `1.jar`.
+  if (classifier === null && /^\.\d/.test(tail)) return null;
   return { classifier, extension: tail.slice(1) };
 }
 
@@ -111,7 +114,7 @@ function classify(segs: string[]): MavenPath {
       }
     }
     const prefix = `${artifactId}-${version}`;
-    if (remainder === null && name.startsWith(prefix)) remainder = name.slice(prefix.length);
+    if (remainder === null && name.startsWith(prefix) && /^[-.]/.test(name.slice(prefix.length))) remainder = name.slice(prefix.length);
 
     const parsed = remainder === null ? null : parseRemainder(remainder);
     if (parsed) {
@@ -153,15 +156,25 @@ export function parseMavenPath(rest: string): { repo: string; target: MavenPath 
 }
 
 /**
- * Rule subject used to match mirror rules: `groupId:artifactId` for files and artifact or
- * snapshot metadata, otherwise the path with `/` replaced by `.`.
+ * Rule subjects used to match mirror rules. Files yield `groupId:artifactId`. A metadata path
+ * is ambiguous (artifact, snapshot or group-level), so it yields every plausible reading:
+ * `groupId:artifactId` (with a trailing version directory dropped) and the group-level
+ * `<full.group.path>:*`. Other paths yield the path with `/` replaced by `.`.
+ * A mirror request passes the rules if ANY returned candidate passes.
  */
-export function mirrorSubject(p: MavenPath): string {
-  if (p.type === "file") return `${p.groupId}:${p.artifactId}`;
+export function mirrorSubjects(p: MavenPath): string[] {
+  if (p.type === "file") return [`${p.groupId}:${p.artifactId}`];
   if (p.type === "metadata") {
     const parts = p.dir.split("/").filter(Boolean);
-    if (parts.length > 0 && parts[parts.length - 1]!.endsWith("-SNAPSHOT")) parts.pop();
-    if (parts.length >= 2) return `${parts.slice(0, -1).join(".")}:${parts[parts.length - 1]}`;
+    const out = new Set<string>();
+    const artifactReading = (ps: string[]) => {
+      if (ps.length >= 2) out.add(`${ps.slice(0, -1).join(".")}:${ps[ps.length - 1]}`);
+    };
+    artifactReading(parts);
+    const last = parts[parts.length - 1];
+    if (last !== undefined && (last.endsWith("-SNAPSHOT") || /^\d/.test(last))) artifactReading(parts.slice(0, -1));
+    if (parts.length > 0) out.add(`${parts.join(".")}:*`);
+    if (out.size > 0) return [...out];
   }
-  return p.path.replaceAll("/", ".");
+  return [p.path.replaceAll("/", ".")];
 }

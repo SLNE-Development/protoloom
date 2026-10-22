@@ -79,7 +79,8 @@ export function renderArtifactMetadata(m: ArtifactMetadata): string {
   if (versions.length > 0) lines.push(el(2, "latest", versions[versions.length - 1]!));
   if (releases.length > 0) lines.push(el(2, "release", releases[releases.length - 1]!));
   lines.push("    <versions>", ...versions.map((v) => el(3, "version", v)), "    </versions>");
-  lines.push(el(2, "lastUpdated", m.lastUpdated), "  </versioning>", "</metadata>");
+  if (m.lastUpdated !== "") lines.push(el(2, "lastUpdated", m.lastUpdated));
+  lines.push("  </versioning>", "</metadata>");
   return `${XML_DECLARATION}${lines.join("\n")}\n`;
 }
 
@@ -100,13 +101,14 @@ export function renderSnapshotMetadata(m: SnapshotMetadata): string {
       "    </snapshot>",
     );
   }
-  lines.push(el(2, "lastUpdated", m.lastUpdated));
+  if (m.lastUpdated !== "") lines.push(el(2, "lastUpdated", m.lastUpdated));
   if (m.snapshotVersions.length > 0) {
     lines.push("    <snapshotVersions>");
     for (const s of m.snapshotVersions) {
       lines.push("      <snapshotVersion>");
       if (s.classifier !== null) lines.push(el(4, "classifier", s.classifier));
-      lines.push(el(4, "extension", s.extension), el(4, "value", s.value), el(4, "updated", s.updated));
+      lines.push(el(4, "extension", s.extension), el(4, "value", s.value));
+      if (s.updated !== "") lines.push(el(4, "updated", s.updated));
       lines.push("      </snapshotVersion>");
     }
     lines.push("    </snapshotVersions>");
@@ -150,6 +152,9 @@ function list(v: unknown): unknown[] {
 
 /** Parses a `maven-metadata.xml` document; `null` when it is not valid Maven metadata. */
 export function parseMetadata(xml: string): ParsedMetadata | null {
+  // Upstream XML is untrusted: Maven metadata never needs a DOCTYPE, and refusing it rules out
+  // custom entity definitions (billion-laughs expansion).
+  if (/<!\s*(DOCTYPE|ENTITY)/i.test(xml)) return null;
   let root: Record<string, unknown> | undefined;
   try {
     root = obj(obj(parser.parse(xml))?.["metadata"]);
@@ -182,6 +187,7 @@ export function parseMetadata(xml: string): ParsedMetadata | null {
     const stamp = obj(versioning?.["snapshot"]);
     const timestamp = str(stamp?.["timestamp"]);
     const buildNumber = str(stamp?.["buildNumber"]);
+    if (buildNumber !== undefined && !/^\d+$/.test(buildNumber)) return null;
     const snapshotVersions: SnapshotVersionEntry[] = [];
     for (const raw of list(obj(versioning?.["snapshotVersions"])?.["snapshotVersion"])) {
       const s = obj(raw);
