@@ -30,6 +30,8 @@ export interface ProtoArchive {
   filename: string;
   /** How a mirror served the archive relative to its cache; null for a hosted repository. */
   cache: "hit" | "miss" | "bypass" | "stale" | null;
+  /** The served version's `component` row (hosted GETs), so the download counts on it. */
+  componentId?: string | null;
 }
 
 /**
@@ -147,7 +149,7 @@ export function createProtoService(deps: ProtoServiceDeps): ProtoService {
       return info && { body: null, size: info.sizeBytes, sha256: info.sha256, filename, cache: null };
     }
     const got = await registry.hosted.archive(repo, c, select);
-    return got && { body: streamOf(got.data), size: got.data.length, sha256: got.sha256, filename, cache: null };
+    return got && { body: streamOf(got.data), size: got.data.length, sha256: got.sha256, filename, cache: null, componentId: got.componentId };
   }
 
   return {
@@ -225,6 +227,7 @@ export function createProtoService(deps: ProtoServiceDeps): ProtoService {
           path: `${c.group}/${c.name}/${c.version}`,
           action: "download",
           ...(got.cache === null ? {} : { cache: got.cache }),
+          ...(got.componentId ? { componentId: got.componentId } : {}),
           bytes: got.size ?? 0,
           principal: p,
         });

@@ -9,6 +9,13 @@ import { ProtoArtifactList } from "./proto-artifact-list";
 import { ProtoGroupView } from "./proto-group-view";
 import { ProtoMirrorView } from "./proto-mirror-view";
 
+/**
+ * The package page link of each format (`BROWSE_LINKS`) and of a search hit (`packageHref`).
+ * They live in `./links` so client components can import them without this module's server
+ * imports; a format with a package page adds its builder there.
+ */
+export { BROWSE_LINKS, packageHref } from "./links";
+
 /** The browse view of a hosted proto repository: its artifacts with a `?q=` filter. */
 async function ProtoHostedView({ repo }: { repo: Repo }) {
   const artifacts = await api.browse.artifacts({ repository: repo.name });

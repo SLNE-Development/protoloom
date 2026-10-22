@@ -13,7 +13,8 @@ export const cacheResultEnum = pgEnum("cache_result", ["hit", "miss", "bypass", 
 export type StoreIdColumn = "local" | "s3";
 
 /**
- * A versioned unit of a non-proto format (a Maven GAV, an npm package version, a Docker tag).
+ * A versioned unit of any format (a Maven GAV, an npm package version, a Docker tag, a proto
+ * version kept beside its `proto_*` rows), the target of search and download counts.
  * `namespace` and `version` are empty strings when the format has none.
  */
 export const component = pgTable(
@@ -73,6 +74,7 @@ export const asset = pgTable(
   (t) => [
     unique("asset_repository_path_uq").on(t.repositoryId, t.path),
     index("asset_repository_origin_accessed_idx").on(t.repositoryId, t.origin, t.lastAccessedAt),
+    index("asset_component_idx").on(t.componentId),
   ],
 );
 

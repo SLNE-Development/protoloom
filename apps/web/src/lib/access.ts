@@ -22,13 +22,13 @@ export function loginPath(path: string): string {
 /**
  * Decides whether a visitor with `role` (`null` when anonymous) may open the app page at `path`
  * (pathname plus query). Anonymous visitors only get in when anonymous view is on, and then only
- * to the dashboard and the artifact browser; everyone else is sent to the login page. Admin pages
+ * to the dashboard, the artifact browser and package search; everyone else is sent to the login page. Admin pages
  * are for admins; other users go back to the dashboard.
  */
 export function decideAccess(input: { path: string; role: Role | null; anonymousView: boolean }): AccessDecision {
   const pathname = input.path.split(/[?#]/, 1)[0] ?? "/";
   if (input.role === null) {
-    const publicPage = isUnder(pathname, DASHBOARD_PATH) || isUnder(pathname, "/browse");
+    const publicPage = isUnder(pathname, DASHBOARD_PATH) || isUnder(pathname, "/browse") || isUnder(pathname, "/search");
     return input.anonymousView && publicPage ? { kind: "allow" } : { kind: "redirect", to: loginPath(input.path) };
   }
   if (isUnder(pathname, "/admin") && input.role !== "admin") return { kind: "redirect", to: DASHBOARD_PATH };

@@ -9,6 +9,7 @@ import { mavenRouter } from "./routers/maven";
 import { npmRouter } from "./routers/npm";
 import { policiesRouter } from "./routers/policies";
 import { repositoriesRouter } from "./routers/repositories";
+import { searchRouter } from "./routers/search";
 import { settingsRouter } from "./routers/settings";
 import { statsRouter } from "./routers/stats";
 import { usersRouter } from "./routers/users";
@@ -17,6 +18,7 @@ import { versionsRouter } from "./routers/versions";
 /** The tRPC API of the management UI. */
 export const appRouter = router({
   browse: browseRouter,
+  search: searchRouter,
   dashboard: dashboardRouter,
   maven: mavenRouter,
   npm: npmRouter,

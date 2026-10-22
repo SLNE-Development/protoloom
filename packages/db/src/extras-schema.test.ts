@@ -56,6 +56,12 @@ describe("extras schema", () => {
     expect(def).toContain("gin_trgm_ops");
   });
 
+  it("indexes asset.component_id for the per-component asset checks", async () => {
+    const { rows } = await testDb.db.$client.query("select indexdef from pg_indexes where indexname = 'asset_component_idx'");
+    expect(rows).toHaveLength(1);
+    expect((rows[0] as { indexdef: string }).indexdef).toContain("(component_id)");
+  });
+
   it("stats tables accept rows and apply defaults", async () => {
     await testDb.db.insert(usageDaily).values({
       day: "2026-10-21",
