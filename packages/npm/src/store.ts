@@ -134,7 +134,8 @@ export function createNpmStore(db: Db): NpmStore {
       const rows = await db
         .selectDistinct({ name: npmPackage.name })
         .from(npmPackage)
-        .where(and(inArray(npmPackage.repositoryId, repoIds), inArray(npmPackage.name, names)));
+        // One array parameter, so any number of names stays within the protocol's 65,535 bind parameters.
+        .where(and(inArray(npmPackage.repositoryId, repoIds), sql`${npmPackage.name} = ANY(${sql.param(names)}::text[])`));
       return new Set(rows.map((r) => r.name));
     },
   };

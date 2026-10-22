@@ -289,6 +289,31 @@ describe("npm audit", () => {
     expect(fake.hits.length).toBe(before);
   });
 
+  it("a compressed bulk audit that decodes beyond 16 MiB is a 413", async () => {
+    const bomb = gzipSync(Buffer.alloc(17 * 1024 * 1024, 0x20));
+    expect(bomb.length).toBeLessThan(1024 * 1024);
+    const before = fake.hits.length;
+    for (const repo of ["npm-group", "npm-rules"]) {
+      const res = await h.call("POST", `${repo}/-/npm/v1/security/advisories/bulk`, {
+        body: bomb,
+        headers: { "content-type": "application/json", "content-encoding": "gzip" },
+      });
+      expect(res.status).toBe(413);
+      expect(await res.json()).toHaveProperty("error");
+    }
+    expect(fake.hits.length).toBe(before);
+  });
+
+  it("a bulk audit naming more packages than SQL parameters allow is filtered in one query", async () => {
+    const body: Record<string, string[]> = { react: ["1.0.0"], "left-pad": ["1.3.0"] };
+    for (let i = 0; i < 70_000; i++) body[`pkg-${i}`] = ["1.0.0"];
+    const res = await h.call("POST", "npm-group/-/npm/v1/security/advisories/bulk", { body: JSON.stringify(body), headers: { "content-type": "application/json" } });
+    expect(res.status).toBe(200);
+    const forwarded = JSON.parse(fake.requests.at(-1)!.body.toString("utf8")) as Record<string, unknown>;
+    expect(forwarded).not.toHaveProperty("react");
+    expect(Object.keys(forwarded)).toHaveLength(70_001);
+  });
+
   it("a bulk audit body that cannot be filtered is refused", async () => {
     const bad = await h.call("POST", "npm-rules/-/npm/v1/security/advisories/bulk", { body: "not json", headers: { "content-type": "application/json" } });
     expect(bad.status).toBe(400);

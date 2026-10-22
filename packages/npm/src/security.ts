@@ -79,9 +79,14 @@ async function forwardBulk(
   if (coding === null) return npmError(415, "unsupported content-encoding");
   let parsed: unknown;
   try {
-    const text = coding === "gzip" ? gunzipSync(raw) : coding === "deflate" ? inflateSync(raw) : raw;
+    // Decoding stops at the cap, so a small compressed body cannot expand into gigabytes.
+    const limit = { maxOutputLength: MAX_AUDIT_BYTES };
+    const text = coding === "gzip" ? gunzipSync(raw, limit) : coding === "deflate" ? inflateSync(raw, limit) : raw;
     parsed = JSON.parse(text.toString("utf8"));
-  } catch {
+  } catch (error) {
+    if (error instanceof RangeError || (error as { code?: unknown } | null)?.code === "ERR_BUFFER_TOO_LARGE") {
+      return npmError(413, "request body too large");
+    }
     return npmError(400, "invalid audit body");
   }
   if (!isRecord(parsed)) return npmError(400, "invalid audit body");
