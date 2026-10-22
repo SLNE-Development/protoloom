@@ -8,3 +8,4 @@ export * from "./checksum.js";
 export * from "./generate.js";
 export * from "./hosted.js";
 export * from "./listing.js";
+export * from "./mirror.js";
