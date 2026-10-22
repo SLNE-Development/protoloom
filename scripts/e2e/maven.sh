@@ -19,7 +19,7 @@ E2E_PATH="dev/weaver/e2e"
 # The artifact the mirrors are read with: preloaded into the stand-in (local) or on Maven Central (real).
 if [ "$UPSTREAMS" = "local" ]; then
   UP_G=dev.weaver.e2e UP_A=upstream-lib UP_V=1.0.0
-  MIRROR_DOWN='status code: 502'
+  MIRROR_DOWN='(status code|HTTP Status): 502'
 else
   UP_G=org.apache.commons UP_A=commons-lang3 UP_V=3.17.0
   MIRROR_DOWN='Could not find artifact'
@@ -195,7 +195,7 @@ maven_get 200 "maven-hosted/$lib_dir/maven-lib-1.0.0.jar.sha512" "$TOKEN_READ"
 expect_body "$(sha512sum <"$jar" | cut -d' ' -f1)"
 
 step "redeploying maven-lib 1.0.0 is a conflict; 1.0.1 deploys"
-expect_fail 'status code: 409' deploy_as maven-lib 1.0.0 maven-hosted "$TOKEN_WRITE"
+expect_fail '(status code|HTTP Status): 409' deploy_as maven-lib 1.0.0 maven-hosted "$TOKEN_WRITE"
 run_logged "deploy maven-lib 1.0.1" deploy_as maven-lib 1.0.1 maven-hosted "$TOKEN_WRITE"
 
 step "mvn -C (strict checksums) gets maven-lib 1.0.0 from maven-hosted"
@@ -328,8 +328,8 @@ run_logged "deploy maven-lib 1.0.0 to maven-public" deploy_as maven-lib 1.0.0 ma
 maven_get 200 "maven-public/$lib_dir/maven-lib-1.0.0.pom"
 expect_contains '<artifactId>maven-lib</artifactId>' "$WORK/last.body"
 maven_get 403 "maven-hosted/$lib_dir/maven-lib-1.0.0.pom" "$TOKEN_NONE"
-expect_fail 'status code: 403' deploy_as maven-lib 1.0.2 maven-hosted "$TOKEN_READ"
-expect_fail 'status code: 405' deploy_as maven-lib 1.0.2 maven-group "$TOKEN_WRITE"
+expect_fail '(status code|HTTP Status): 403' deploy_as maven-lib 1.0.2 maven-hosted "$TOKEN_READ"
+expect_fail '(status code|HTTP Status): 405' deploy_as maven-lib 1.0.2 maven-group "$TOKEN_WRITE"
 
 # --- 9. storage --------------------------------------------------------------------------------------
 
