@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Repo } from "@weaver/core";
 import { dockerTag } from "@weaver/db";
 import { getManifestDetail, listImageTags, listImages } from "./browse.js";
-import { artifactTypeLabel, dockerSnippets } from "./client.js";
+import { artifactTypeLabel, dockerSnippets, isIndexMediaType } from "./client.js";
 import {
   descriptorOf,
   digestOf,
@@ -146,6 +146,30 @@ describe("docker browse queries", () => {
     expect(await getManifestDetail(reg.deps.db, repoId, "tool", `sha256:${"0".repeat(64)}`)).toBeNull();
     expect(await getManifestDetail(reg.deps.db, repoId, "other", tool.digest)).toBeNull();
   });
+
+  it("getManifestDetail marks buildx attestation children instead of showing unknown/unknown", async () => {
+    const amd = await platformImage("apps/built", 31, "amd64");
+    const att = await platformImage("apps/built", 32, "unknown");
+    const index = {
+      schemaVersion: 2,
+      mediaType: OCI_INDEX,
+      manifests: [
+        { ...descriptorOf(amd.bytes, OCI_MANIFEST), platform: { os: "linux", architecture: "amd64" } },
+        {
+          ...descriptorOf(att.bytes, OCI_MANIFEST),
+          platform: { os: "unknown", architecture: "unknown" },
+          annotations: { "vnd.docker.reference.type": "attestation-manifest", "vnd.docker.reference.digest": amd.digest },
+        },
+      ],
+    };
+    expect((await pushManifest(reg, "apps/built", "latest", index, key)).status).toBe(201);
+    const detail = (await getManifestDetail(reg.deps.db, repoId, "built", digestOf(Buffer.from(JSON.stringify(index)))))!;
+    expect(detail.platforms).toEqual([{ os: "linux", architecture: "amd64" }]);
+    expect(detail.refs.map((r) => [r.digest, r.platform ?? null, r.attestation ?? false])).toEqual([
+      [amd.digest, { os: "linux", architecture: "amd64" }, false],
+      [att.digest, null, true],
+    ]);
+  });
 });
 
 describe("dockerSnippets", () => {
@@ -168,6 +192,10 @@ describe("dockerSnippets", () => {
     const s = dockerSnippets("https://weaver.slne.dev", repo({ name: "hub", kind: "mirror", dockerRoot: true }), "nginx");
     expect(s.daemonJson).toBe('{"registry-mirrors":["https://weaver.slne.dev"]}');
     expect(s.pull).toBe("docker pull weaver.slne.dev/hub/nginx:latest");
+    // Docker needs the registry at the host root, so a path of the public URL is dropped.
+    expect(dockerSnippets("https://weaver.slne.dev/app/", repo({ name: "hub", kind: "mirror", dockerRoot: true })).daemonJson).toBe(
+      '{"registry-mirrors":["https://weaver.slne.dev"]}',
+    );
   });
 
   it("mirror: push null", () => {
@@ -182,5 +210,8 @@ describe("dockerSnippets", () => {
     expect(artifactTypeLabel("application/vnd.cyclonedx+json")).toBe("SBOM");
     expect(artifactTypeLabel("application/vnd.example.thing")).toBe("application/vnd.example.thing");
     expect(artifactTypeLabel(null)).toBe("image");
+    expect(isIndexMediaType("application/vnd.docker.distribution.manifest.list.v2+json")).toBe(true);
+    expect(isIndexMediaType(OCI_INDEX)).toBe(true);
+    expect(isIndexMediaType(OCI_MANIFEST)).toBe(false);
   });
 });

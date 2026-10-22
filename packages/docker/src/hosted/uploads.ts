@@ -7,7 +7,7 @@ import { requireAccess } from "../auth/authorize.js";
 import { DockerError } from "../errors.js";
 import { isDigest } from "../media-types.js";
 import { resolveTarget, type Target } from "../target.js";
-import { API_VERSION, findLinkedBlob, linkBlob, type BlobRef, type HostedCtx } from "./blobs.js";
+import { API_VERSION, blobUnknown, findLinkedBlob, linkBlob, type BlobRef, type HostedCtx } from "./blobs.js";
 import { maybeSweepUploads } from "../sweep.js";
 import { SpoolError, SpoolOffsetError, appendToSpool, createSpool, removeSpool, spoolPath } from "./spool.js";
 
@@ -174,7 +174,7 @@ async function finalize(ctx: HostedCtx, id: string, digest: string, size: number
     blob = { blobId: row!.id, store: row!.store, storageKey: row!.storageKey, size: row!.size, digest };
   }
 
-  await linkBlob(deps.db, target.repo.id, target.image, blob);
+  if (!(await linkBlob(deps.db, target.repo.id, target.image, blob))) throw blobUnknown(digest);
   await discard(ctx, id);
   await deps.usage({
     repositoryId: target.repo.id,
@@ -209,7 +209,8 @@ async function tryMount(ctx: HostedCtx, digest: string, from: string): Promise<R
   }
   const blob = await findLinkedBlob(deps.db, source.repo.id, source.image, digest);
   if (!blob || blob.store !== deps.stores.primary.id) return null;
-  await linkBlob(deps.db, target.repo.id, target.image, blob);
+  // A blob collected since the lookup cannot be mounted; the client then uploads it normally.
+  if (!(await linkBlob(deps.db, target.repo.id, target.image, blob))) return null;
   return created(target, digest);
 }
 
@@ -230,7 +231,8 @@ export async function startUpload(ctx: HostedCtx, req: Request): Promise<Respons
   const digest = params.get("digest");
   if (digest !== null && !isDigest(digest)) throw digestInvalid(digest);
 
-  await maybeSweepUploads(deps.db, ctx.opts.uploadDir);
+  // Fire and forget: the sweep never fails or delays an upload (it logs its own errors).
+  void maybeSweepUploads(deps.db, ctx.opts.uploadDir);
   const id = randomUUID();
   await createSpool(spoolPath(ctx.opts.uploadDir, id));
   await deps.db.insert(dockerUpload).values({ id, repositoryId: target.repo.id, image: target.image });

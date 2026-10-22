@@ -1,10 +1,12 @@
 import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { dockerBlob, dockerBlobLink, dockerUpload } from "@weaver/db";
+import { dockerBlob, dockerBlobLink, dockerManifest, dockerUpload } from "@weaver/db";
 import { DOCKER_GC_GRACE_MS, runDockerGc } from "./gc.js";
+import { findLinkedBlob, linkBlob } from "./hosted/blobs.js";
 import {
   descriptorOf,
   digestOf,
+  errorCodeOf,
   pushBlob,
   pushManifest,
   randomBlob,
@@ -21,11 +23,15 @@ const HOUR = 60 * 60 * 1000;
 describe("docker garbage collection", () => {
   let reg: DockerTestRegistry;
   let key: string;
+  let oneId: string;
+  let twoId: string;
+  /** Runs inside a manifest PUT's transaction at each step, when set by a test. */
+  let hook: ((step: "begin" | "inserted" | "resolved") => Promise<void>) | null = null;
 
   beforeAll(async () => {
-    reg = await startDockerTestRegistry();
-    await reg.createRepo({ name: "one", format: "docker", kind: "hosted" });
-    await reg.createRepo({ name: "two", format: "docker", kind: "hosted" });
+    reg = await startDockerTestRegistry({ dockerOptions: { onManifestPutStep: (step) => (hook ? hook(step) : Promise.resolve()) } });
+    oneId = (await reg.createRepo({ name: "one", format: "docker", kind: "hosted" })).id;
+    twoId = (await reg.createRepo({ name: "two", format: "docker", kind: "hosted" })).id;
     key = reg.tokenFor([
       { repo: "one", access: "write" },
       { repo: "two", access: "write" },
@@ -35,6 +41,7 @@ describe("docker garbage collection", () => {
     await reg?.stop();
   });
   beforeEach(async () => {
+    hook = null;
     await reg.deps.db.execute(sql`TRUNCATE docker_blob, docker_blob_link, docker_manifest, docker_manifest_ref, docker_tag, docker_upload CASCADE`);
   });
 
@@ -59,6 +66,32 @@ describe("docker garbage collection", () => {
 
   async function objectExists(storageKey: string): Promise<boolean> {
     return (await reg.deps.stores.primary.head(storageKey)) !== null;
+  }
+
+  /** Moves every link and blob past the grace period, as if they were uploaded 25 hours ago. */
+  async function ageEverything(): Promise<void> {
+    const old = new Date(Date.now() - DOCKER_GC_GRACE_MS - HOUR);
+    await reg.deps.db.update(dockerBlobLink).set({ createdAt: old });
+    await reg.deps.db.update(dockerBlob).set({ lastLinkedAt: old });
+  }
+
+  /** A signal and a gate: `wait` resolves once `open` is called. */
+  function gate() {
+    let open!: () => void;
+    const wait = new Promise<void>((r) => (open = r));
+    return { wait, open };
+  }
+
+  /** Makes the next manifest PUT pause at `at` until `release`; `reached` resolves once it got there. */
+  function pauseAt(at: "begin" | "inserted") {
+    const reached = gate();
+    const release = gate();
+    hook = async (step) => {
+      if (step !== at) return;
+      reached.open();
+      await release.wait;
+    };
+    return { reached: reached.wait, release: release.open };
   }
 
   it("deletes a blob whose only manifest was deleted", async () => {
@@ -155,5 +188,133 @@ describe("docker garbage collection", () => {
     const layer = (await blobRow(digest))!;
     expect(layer).toBeDefined();
     expect(await objectExists(layer.storageKey)).toBe(true);
+  });
+
+  it("a manifest PUT holding its transaction open keeps its blobs through a whole gc run", async () => {
+    const img = await image("one/hold", 6);
+    await ageEverything();
+    const pause = pauseAt("inserted");
+    const put = pushManifest(reg, "one/hold", "v1", img.manifest, key);
+    await pause.reached;
+
+    // The PUT's transaction holds the blob and link rows, so gc skips them instead of deleting them.
+    const result = await runDockerGc({ db: reg.deps.db, stores: reg.deps.stores });
+    expect(result).toMatchObject({ linksDeleted: 0, blobsDeleted: 0 });
+
+    pause.release();
+    expect((await put).status).toBe(201);
+    expect((await reg.call("GET", "one/hold/manifests/v1", { token: key })).status).toBe(200);
+    expect((await reg.call("GET", `one/hold/blobs/${digestOf(img.layer)}`, { token: key })).status).toBe(200);
+    // The manifest now references the refreshed links, so a later run keeps them too.
+    expect(await gc(later(25 * HOUR))).toMatchObject({ linksDeleted: 0, blobsDeleted: 0 });
+  });
+
+  it("a manifest PUT whose links gc deletes mid-push fails cleanly and stores nothing", async () => {
+    const img = await image("one/late", 7);
+    await ageEverything();
+    // The fast check outside the transaction passes; the PUT then waits at the start of its transaction.
+    const pause = pauseAt("begin");
+    const put = pushManifest(reg, "one/late", "v1", img.manifest, key);
+    await pause.reached;
+
+    let status = 0;
+    let code = "";
+    const result = await runDockerGc({
+      db: reg.deps.db,
+      stores: reg.deps.stores,
+      // The link step has committed; the PUT resumes and finishes before the blob step runs.
+      beforeBlobDelete: async () => {
+        pause.release();
+        const res = await put;
+        status = res.status;
+        code = await errorCodeOf(res);
+      },
+    });
+
+    expect(status).toBe(400);
+    expect(code).toBe("MANIFEST_BLOB_UNKNOWN");
+    expect(result).toMatchObject({ linksDeleted: 2, blobsDeleted: 2 });
+    expect(await reg.deps.db.select().from(dockerManifest)).toHaveLength(0);
+  });
+
+  it("a mount that links the blob between gc steps keeps it", async () => {
+    const img = await image("one/src", 8);
+    const digest = digestOf(img.layer);
+    await ageEverything();
+    // The mount looked the blob up in its source before gc started.
+    const ref = (await findLinkedBlob(reg.deps.db, oneId, "src", digest))!;
+
+    const result = await runDockerGc({
+      db: reg.deps.db,
+      stores: reg.deps.stores,
+      beforeBlobDelete: async () => {
+        expect(await linkBlob(reg.deps.db, twoId, "dst", ref)).toBe(true);
+      },
+    });
+
+    expect(result).toMatchObject({ linksDeleted: 2, blobsDeleted: 1 });
+    expect((await reg.call("GET", `two/dst/blobs/${digest}`, { token: key })).status).toBe(200);
+  });
+
+  it("a blob row locked by a concurrent link on another connection is skipped by the blob step", async () => {
+    const img = await image("one/locked", 9);
+    const digest = digestOf(img.layer);
+    await ageEverything();
+    const locked = gate();
+    const release = gate();
+    let holder: Promise<void> | null = null;
+
+    const result = await runDockerGc({
+      db: reg.deps.db,
+      stores: reg.deps.stores,
+      // A second connection holds the blob row the way linkBlob does while the blob step runs.
+      beforeBlobDelete: async () => {
+        holder = reg.deps.db.transaction(async (tx) => {
+          await tx.update(dockerBlob).set({ lastLinkedAt: sql`now()` }).where(eq(dockerBlob.digest, digest));
+          locked.open();
+          await release.wait;
+        });
+        await locked.wait;
+      },
+    });
+    release.open();
+    await holder;
+
+    expect(result).toMatchObject({ linksDeleted: 2, blobsDeleted: 1 });
+    expect(await blobRow(digest)).toBeDefined();
+  });
+
+  it("a mount whose blob gc already deleted falls back to an upload", async () => {
+    const img = await image("one/gone", 10);
+    const digest = digestOf(img.layer);
+    await ageEverything();
+    const ref = (await findLinkedBlob(reg.deps.db, oneId, "gone", digest))!;
+    expect(await runDockerGc({ db: reg.deps.db, stores: reg.deps.stores })).toMatchObject({ blobsDeleted: 2 });
+
+    expect(await linkBlob(reg.deps.db, twoId, "dst", ref)).toBe(false);
+    const res = await reg.call("POST", `two/dst/blobs/uploads/?mount=${encodeURIComponent(digest)}&from=one/gone`, { token: key });
+    expect(res.status).toBe(202);
+  });
+
+  it("a HEAD by a pusher refreshes the link it relies on", async () => {
+    const img = await image("one/head", 11);
+    await ageEverything();
+    expect((await reg.call("HEAD", `one/head/blobs/${digestOf(img.layer)}`, { token: key })).status).toBe(200);
+
+    const result = await runDockerGc({ db: reg.deps.db, stores: reg.deps.stores });
+    expect(result).toMatchObject({ linksDeleted: 1, blobsDeleted: 1 });
+    expect(await blobRow(digestOf(img.layer))).toBeDefined();
+  });
+
+  it("a second concurrent run is skipped", async () => {
+    let inner: Awaited<ReturnType<typeof runDockerGc>> | null = null;
+    await runDockerGc({
+      db: reg.deps.db,
+      stores: reg.deps.stores,
+      beforeBlobDelete: async () => {
+        inner = await runDockerGc({ db: reg.deps.db, stores: reg.deps.stores });
+      },
+    });
+    expect(inner).toEqual({ linksDeleted: 0, blobsDeleted: 0, bytesFreed: 0, uploadsDeleted: 0, skipped: true });
   });
 });

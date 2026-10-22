@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { DockerHostedConfig } from "@weaver/core";
-import { dockerBlobLink, dockerManifest, dockerManifestRef, dockerTag, type Db } from "@weaver/db";
+import { dockerBlob, dockerBlobLink, dockerManifest, dockerManifestRef, dockerTag, type Db, type Tx } from "@weaver/db";
 import { DockerError } from "../errors.js";
 import { parseManifest, type Descriptor, type ParsedManifest, type Platform } from "../manifest-parse.js";
 import { isDigest } from "../media-types.js";
@@ -122,10 +122,12 @@ async function platformFromConfig(ctx: HostedCtx, config: Descriptor): Promise<P
   }
 }
 
-/** What a validated manifest contributes to its row: platforms and the total size of what it references. */
+/** What a validated manifest contributes to its row: platforms, total size and the blobs that must stay linked. */
 interface Derived {
   platforms: Platform[];
   totalSize: number;
+  /** Digests of the config and non-foreign layers, which must be linked in the image (empty for an index). */
+  required: string[];
 }
 
 /**
@@ -151,6 +153,7 @@ async function validateReferences(ctx: HostedCtx, parsed: ParsedManifest): Promi
     return {
       platforms: parsed.manifests.flatMap((d) => (d.platform && isRealPlatform(d.platform) ? [d.platform] : [])),
       totalSize: digests.reduce((sum, d) => sum + found.get(d)!, 0),
+      required: [],
     };
   }
 
@@ -168,6 +171,7 @@ async function validateReferences(ctx: HostedCtx, parsed: ParsedManifest): Promi
   return {
     platforms: platform && isRealPlatform(platform) ? [platform] : [],
     totalSize: parsed.layers.reduce((sum, d) => sum + d.size, config.size),
+    required,
   };
 }
 
@@ -186,6 +190,37 @@ function refRowsOf(manifestId: string, parsed: ParsedManifest): Array<typeof doc
   return rows;
 }
 
+/** The `400 MANIFEST_BLOB_UNKNOWN` error for `digest`. */
+function blobUnknownInManifest(digest: string | undefined): DockerError {
+  return new DockerError(400, "MANIFEST_BLOB_UNKNOWN", "manifest references an unknown blob", { digest: digest ?? null });
+}
+
+/**
+ * Inside the manifest write transaction: stamps the blobs and links of `required` (lock order blob rows, then
+ * links, each sorted, the same as `linkBlob`, so concurrent pushes cannot deadlock), so garbage collection
+ * neither deletes them before the transaction commits nor counts them as stale afterwards. A link or blob
+ * collected since the fast check outside the transaction is `400 MANIFEST_BLOB_UNKNOWN`.
+ */
+async function touchRequired(tx: Tx, repoId: string, image: string, required: string[]): Promise<void> {
+  if (required.length === 0) return;
+  const linkWhere = and(eq(dockerBlobLink.repositoryId, repoId), eq(dockerBlobLink.image, image), inArray(dockerBlobLink.digest, required));
+  const links = await tx.select({ digest: dockerBlobLink.digest, blobId: dockerBlobLink.blobId }).from(dockerBlobLink).where(linkWhere);
+  const missingLink = required.find((d) => !links.some((l) => l.digest === d));
+  if (missingLink) throw blobUnknownInManifest(missingLink);
+
+  const blobIds = [...new Set(links.map((l) => l.blobId))].sort();
+  await tx.select({ id: dockerBlob.id }).from(dockerBlob).where(inArray(dockerBlob.id, blobIds)).orderBy(asc(dockerBlob.id)).for("update");
+  const blobs = await tx.update(dockerBlob).set({ lastLinkedAt: sql`now()` }).where(inArray(dockerBlob.id, blobIds)).returning({ id: dockerBlob.id });
+  if (blobs.length < blobIds.length) {
+    const gone = links.find((l) => !blobs.some((b) => b.id === l.blobId));
+    throw blobUnknownInManifest(gone?.digest);
+  }
+
+  await tx.select({ digest: dockerBlobLink.digest }).from(dockerBlobLink).where(linkWhere).orderBy(asc(dockerBlobLink.digest)).for("update");
+  const touched = await tx.update(dockerBlobLink).set({ createdAt: sql`now()` }).where(linkWhere).returning({ digest: dockerBlobLink.digest });
+  if (touched.length < required.length) throw blobUnknownInManifest(required.find((d) => !touched.some((t) => t.digest === d)));
+}
+
 /** Whether `err` (or an error it wraps) is a Postgres foreign key violation (`23503`). */
 function isForeignKeyViolation(err: unknown): boolean {
   for (let e: unknown = err; e instanceof Error; e = e.cause) {
@@ -202,7 +237,7 @@ function effectiveArtifactType(parsed: ParsedManifest): string | null {
 /**
  * `PUT .../manifests/<reference>`: stores the exact pushed bytes (at most 4 MiB, `413 SIZE_INVALID`) under their
  * sha256 digest after validating shape and references; a digest reference must match (`400 DIGEST_INVALID`).
- * Row, refs and tag are written in one transaction; on a `tagImmutable` repository moving an existing tag to
+ * Row, refs and tag are written in one transaction that first refreshes the referenced blobs and links (so garbage collection keeps them); on a `tagImmutable` repository moving an existing tag to
  * another digest is `403 DENIED`. A concurrent DELETE of the same digest mid-transaction is retried once, then
  * answered `503 UNAVAILABLE`. Answers `201` with `Location`, `Docker-Content-Digest` and, for a manifest with a
  * subject, `OCI-Subject`.
@@ -228,6 +263,8 @@ export async function putManifest(ctx: HostedCtx, req: Request, reference: strin
       if (!byDigest) {
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`docker-tag:${repoId}:${image}:${reference}`}, 0))`);
       }
+      await ctx.opts.onManifestPutStep?.("begin");
+      await touchRequired(tx, repoId, image, derived.required);
       const [inserted] = await tx
         .insert(dockerManifest)
         .values({

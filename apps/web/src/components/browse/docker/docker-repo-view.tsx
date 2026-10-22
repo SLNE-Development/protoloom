@@ -110,7 +110,7 @@ export function DockerRepoView({ repo, url, overview }: DockerRepoViewProps) {
     <>
       {overview.kind === "mirror" && (
         <p className="rounded-md border bg-surface px-3 py-2 text-sm text-muted-foreground">
-          Content of this repository lives upstream; Weaver shows only what it stores.
+          Content of this repository lives upstream; Weaver shows only what it stores. Cached images aren&apos;t listed here.
         </p>
       )}
       {!(overview.kind === "mirror" && overview.cacheEnabled === false) &&

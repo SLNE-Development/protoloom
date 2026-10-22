@@ -4,7 +4,7 @@ import { isImageArtifactType } from "./client.js";
 import { listReferrers } from "./hosted/referrers.js";
 import type { Descriptor, Platform } from "./manifest-parse.js";
 
-export { artifactTypeLabel, dockerSnippets, isImageArtifactType, type DockerSnippets } from "./client.js";
+export { artifactTypeLabel, dockerSnippets, isImageArtifactType, isIndexMediaType, type DockerSnippets } from "./client.js";
 
 /** One image of a repository as the browse view lists it. */
 export interface ImageSummary {
@@ -40,8 +40,11 @@ export interface ManifestDetail {
   /** Config plus layers, or the sum of the children of an index. */
   totalSize: number;
   tags: string[];
-  /** The config and layers of an image, or the child manifests of an index (with their platform), in order. */
-  refs: Array<{ kind: "blob" | "manifest"; digest: string; mediaType: string; size: number; platform?: Platform }>;
+  /**
+   * The config and layers of an image, or the child manifests of an index (with their platform, or marked as a
+   * build attestation instead of the `unknown/unknown` platform), in order.
+   */
+  refs: Array<{ kind: "blob" | "manifest"; digest: string; mediaType: string; size: number; platform?: Platform; attestation?: true }>;
   /** Manifests whose `subject` is this one (signatures, SBOMs, attestations). */
   referrers: Descriptor[];
   createdAt: Date;
@@ -106,13 +109,25 @@ export async function listImageTags(db: Db, repoId: string, image: string): Prom
     .orderBy(desc(dockerTag.updatedAt), asc(dockerTag.tag));
 }
 
-/** The platform of each child of a stored index, by digest; empty when the content is not an index. */
-function childPlatforms(content: Buffer): Map<string, Platform> {
-  const out = new Map<string, Platform>();
+/** What an index says about one child: its platform, or that it is a build attestation (`unknown/unknown`). */
+interface ChildInfo {
+  platform?: Platform;
+  attestation?: true;
+}
+
+/** The platform (or attestation marker) of each child of a stored index, by digest; empty when it is not an index. */
+function childInfo(content: Buffer): Map<string, ChildInfo> {
+  const out = new Map<string, ChildInfo>();
   try {
-    const json = JSON.parse(content.toString("utf8")) as { manifests?: Array<{ digest?: unknown; platform?: Platform }> };
+    const json = JSON.parse(content.toString("utf8")) as {
+      manifests?: Array<{ digest?: unknown; platform?: Platform; annotations?: Record<string, string> }>;
+    };
     for (const m of json.manifests ?? []) {
-      if (typeof m.digest === "string" && m.platform && !out.has(m.digest)) out.set(m.digest, m.platform);
+      if (typeof m.digest !== "string" || out.has(m.digest)) continue;
+      const unknown = m.platform?.os === "unknown" && m.platform.architecture === "unknown";
+      // buildx stores provenance and SBOM attestations as index children with the platform unknown/unknown.
+      if (unknown || m.annotations?.["vnd.docker.reference.type"] === "attestation-manifest") out.set(m.digest, { attestation: true });
+      else if (m.platform) out.set(m.digest, { platform: m.platform });
     }
   } catch {
     // Stored manifests were validated on push; unreadable content just has no platforms.
@@ -136,7 +151,7 @@ export async function getManifestDetail(db: Db, repoId: string, image: string, d
     db.select({ tag: dockerTag.tag }).from(dockerTag).where(eq(dockerTag.manifestId, row.id)).orderBy(asc(dockerTag.tag)),
     listReferrers(db, repoId, image, digest, null),
   ]);
-  const platforms = childPlatforms(row.content);
+  const children = childInfo(row.content);
   return {
     digest: row.digest,
     mediaType: row.mediaType,
@@ -145,10 +160,7 @@ export async function getManifestDetail(db: Db, repoId: string, image: string, d
     size: row.size,
     totalSize: row.totalSize,
     tags: tags.map((t) => t.tag),
-    refs: refs.map((r) => {
-      const platform = r.kind === "manifest" ? platforms.get(r.digest) : undefined;
-      return platform ? { ...r, platform } : r;
-    }),
+    refs: refs.map((r) => (r.kind === "manifest" ? { ...r, ...children.get(r.digest) } : r)),
     referrers,
     createdAt: row.createdAt,
   };

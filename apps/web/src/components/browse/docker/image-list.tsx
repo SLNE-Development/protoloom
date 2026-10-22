@@ -16,7 +16,7 @@ import { DockerEmpty, dockerHref } from "./docker-repo-view";
 /** What an empty repository of each kind says. */
 const EMPTY_TEXT: Record<Kind, string> = {
   hosted: "Push an image with docker push to see it here.",
-  mirror: "Nothing from this mirror is stored here.",
+  mirror: "Images cached by this mirror aren't listed here; pull them through the mirror.",
   group: "Browse the members to see their images.",
 };
 

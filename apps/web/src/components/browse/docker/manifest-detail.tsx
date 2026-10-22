@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { artifactTypeLabel } from "@weaver/docker/client";
+import { artifactTypeLabel, isIndexMediaType } from "@weaver/docker/client";
 import { Badge } from "@weaver/ui/components/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@weaver/ui/components/table";
 import { CopyButton } from "@/components/copy-button";
@@ -22,7 +22,7 @@ export function ManifestDetail({ repository, image, digest }: { repository: stri
   if (query.isPending) return <p className="text-sm text-muted-foreground">Loading…</p>;
   const m = query.data;
   if (!m) return <DockerEmpty title="No such manifest">This image stores no manifest with that digest.</DockerEmpty>;
-  const isIndex = m.refs.some((r) => r.kind === "manifest");
+  const isIndex = isIndexMediaType(m.mediaType);
   return (
     <>
       <SectionTitle trailing={<CopyButton text={m.digest} label="Copy digest" toastText="Digest copied" size="icon-sm" />}>
@@ -71,7 +71,7 @@ export function ManifestDetail({ repository, image, digest }: { repository: stri
           <TableBody>
             {m.refs.map((r) => (
               <TableRow key={r.digest}>
-                <TableCell className="pl-4 font-mono text-xs">{r.kind === "manifest" ? (r.platform ? platformText(r.platform) : r.mediaType) : r.mediaType}</TableCell>
+                <TableCell className="pl-4 font-mono text-xs">{r.kind === "manifest" ? (r.attestation ? "build attestation" : r.platform ? platformText(r.platform) : r.mediaType) : r.mediaType}</TableCell>
                 <TableCell>
                   {r.kind === "manifest" ? (
                     <Link href={dockerHref(repository, image, r.digest)} className="hover:underline">

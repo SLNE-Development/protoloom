@@ -25,6 +25,17 @@ const LABELS: Record<string, string> = {
   "application/vnd.in-toto+json": "attestation",
 };
 
+/** Media types of multi-platform manifests: the OCI image index and the Docker manifest list. */
+const INDEX_MEDIA_TYPES: readonly string[] = [
+  "application/vnd.oci.image.index.v1+json",
+  "application/vnd.docker.distribution.manifest.list.v2+json",
+];
+
+/** Whether a manifest media type is an image index (or Docker manifest list). */
+export function isIndexMediaType(mediaType: string): boolean {
+  return INDEX_MEDIA_TYPES.includes(mediaType);
+}
+
 /** A readable label for an artifact type: "image" for container images, a known name, else the raw type. */
 export function artifactTypeLabel(type: string | null | undefined): string {
   if (isImageArtifactType(type)) return "image";
@@ -53,10 +64,13 @@ export function dockerSnippets(
   image?: string,
   tag?: string,
 ): DockerSnippets {
-  const base = publicUrl.replace(/\/+$/, "");
-  let host = base;
+  // Docker addresses a registry by host only (`/v2/` at the root), so any path of the public URL is dropped.
+  let host = publicUrl.replace(/\/+$/, "");
+  let origin = host;
   try {
-    host = new URL(base).host;
+    const url = new URL(publicUrl);
+    host = url.host;
+    origin = url.origin;
   } catch {
     // Not a URL: use it as the host.
   }
@@ -69,6 +83,6 @@ export function dockerSnippets(
     login: `docker login ${host}`,
     pull: `docker pull ${host}/${repo.name}/${name}${pullRef}`,
     push: repo.kind === "hosted" ? `docker tag ${name}${tagRef} ${pushTarget}\ndocker push ${pushTarget}` : null,
-    daemonJson: repo.kind === "mirror" && repo.dockerRoot ? JSON.stringify({ "registry-mirrors": [base] }) : null,
+    daemonJson: repo.kind === "mirror" && repo.dockerRoot ? JSON.stringify({ "registry-mirrors": [origin] }) : null,
   };
 }

@@ -18,6 +18,7 @@ export {
   deleteHostedBlob,
   findLinkedBlob,
   linkBlob,
+  touchLink,
   serveHostedBlob,
   type BlobRef,
   type HostedCtx,
