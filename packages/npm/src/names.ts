@@ -11,15 +11,31 @@ export interface PackageName {
 const MAX_NAME_LENGTH = 214;
 const NEW_NAME = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
 
-/** Parses a package name for reading; accepts any non-empty name of at most 214 characters, or null when it is not shaped like one. */
+/** Characters that never appear in a served name: whitespace, control characters, backslash and URL or percent metacharacters. */
+function hasForbiddenChar(value: string): boolean {
+  for (const ch of value) {
+    const code = ch.codePointAt(0)!;
+    if (code <= 0x20 || code === 0x7f || ch === "\\" || ch === "?" || ch === "#" || ch === "%") return true;
+  }
+  return false;
+}
+
+function safePart(part: string): boolean {
+  return part !== "" && part !== "." && part !== ".." && part !== "-";
+}
+
+/**
+ * Parses a package name for reading; accepts any non-empty name of at most 214 characters without path-like parts
+ * (`.`, `..`, `-`) or URL-hostile characters, and returns null otherwise.
+ */
 export function parsePackageName(full: string): PackageName | null {
-  if (full.length === 0 || full.length > MAX_NAME_LENGTH) return null;
+  if (full.length === 0 || full.length > MAX_NAME_LENGTH || hasForbiddenChar(full)) return null;
   if (full.startsWith("@")) {
     const parts = full.slice(1).split("/");
-    if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
-    return { full, scope: parts[0], bare: parts[1] };
+    if (parts.length !== 2 || !safePart(parts[0]!) || !safePart(parts[1]!)) return null;
+    return { full, scope: parts[0]!, bare: parts[1]! };
   }
-  if (full.includes("/")) return null;
+  if (!safePart(full)) return null;
   return { full, scope: "", bare: full };
 }
 
@@ -41,7 +57,8 @@ export function versionFromTarball(name: PackageName, file: string): string | nu
   return version.length > 0 ? version : null;
 }
 
-/** The package path used against an upstream registry, with the scope slash encoded (`@acme%2fui`). */
+/** The package path used against an upstream registry: parts URI-encoded, only `@` and the `%2f` scope separator literal. */
 export function upstreamPackagePath(name: PackageName): string {
-  return name.scope ? `@${name.scope}%2f${name.bare}` : name.bare;
+  if (!name.scope) return encodeURIComponent(name.bare);
+  return `@${encodeURIComponent(name.scope)}%2f${encodeURIComponent(name.bare)}`;
 }
