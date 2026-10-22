@@ -12,12 +12,13 @@ problem() {
   fail=1
 }
 
-# The old name may appear only in the upgrade notes, in the docs test that guards them, and in this script.
+# The old name may appear only in the upgrade notes, in the docs test that guards them, and in the self-tests that look for it.
 allowed_protoloom=(
   "apps/web/content/docs/self-host/compose.md"
   "apps/web/content/docs/self-host/coolify.md"
   "apps/web/src/lib/docs.test.ts"
   "scripts/e2e/repo.selftest.sh"
+  "scripts/e2e/workflows.selftest.sh"
 )
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue
