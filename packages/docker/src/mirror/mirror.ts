@@ -229,25 +229,41 @@ async function checkUpstreamDigest(res: MirrorResponse, digest: string): Promise
  * Serves a manifest through the mirror: by digest it is immutable, by tag metadata (revalidated after the
  * TTL). One fixed `Accept` list goes upstream, so a cached tag never depends on the asking client. Content
  * fetched by digest is verified against it; null when the upstream does not know the manifest.
+ *
+ * On a caching mirror a HEAD is fetched upstream as a GET and the body read into the cache: docker and
+ * containerd resolve tags with HEAD only, so a tag cached no other way could not be served once the
+ * upstream is down.
  */
 export async function mirrorManifest(ctx: MirrorCtx, req: Request, reference: string): Promise<Response | null> {
   const method = req.method === "HEAD" ? "HEAD" : "GET";
+  const caching = (ctx.target.repo.config as MirrorConfig).cache.enabled;
+  const upstreamMethod = method === "HEAD" && caching ? "GET" : method;
   const byDigest = isDigest(reference);
   const path = `v2/${upstreamImage(ctx.target.repo, ctx.target.image)}/manifests/${reference}`;
   if (byDigest && usesCache(ctx.target.repo)) await dropMismatch(ctx, path, reference);
-  const res = await fetchUpstream(ctx, path, byDigest ? "immutable" : "metadata", method, {
+  const res = await fetchUpstream(ctx, path, byDigest ? "immutable" : "metadata", upstreamMethod, {
     accept: MANIFEST_MEDIA_TYPES.join(", "),
   });
   if (!res) return null;
   if (byDigest) await checkUpstreamDigest(res, reference);
   const headers = contentHeaders(res, MANIFEST_MEDIA_TYPES[0]!);
   if (byDigest) headers.set("docker-content-digest", reference);
-  if (method === "HEAD") {
-    await release(res);
-    return new Response(null, { status: 200, headers });
-  }
   const named = headers.get("docker-content-digest");
   const expected = byDigest ? reference : named !== null && isDigest(named) ? named : null;
+  if (method === "HEAD") {
+    if (upstreamMethod === "GET" && !res.asset && res.body) {
+      // Reading the body to its end completes the cache write; cancelling it would abort that write.
+      const body = expected === null ? res.body : verified(ctx, res, path, expected);
+      try {
+        await body.pipeTo(new WritableStream());
+      } catch {
+        throw unavailable();
+      }
+    } else {
+      await release(res);
+    }
+    return new Response(null, { status: 200, headers });
+  }
   const body = res.asset || expected === null ? res.body : verified(ctx, res, path, expected);
   await recordDownload(ctx, `manifests/${reference}`, res, lengthOf(headers), body);
   return new Response(body, { status: 200, headers });
@@ -350,7 +366,30 @@ export function mirrorTags(ctx: MirrorCtx, req: Request): Promise<Response | nul
   return mirrorListing(ctx, req, "tags/list", ["n", "last"], "application/json", []);
 }
 
-/** Serves the referrers of `digest` through the mirror (metadata); null when the upstream answers 404, so clients fall back to the tag schema. */
-export function mirrorReferrers(ctx: MirrorCtx, req: Request, digest: string): Promise<Response | null> {
-  return mirrorListing(ctx, req, `referrers/${digest}`, ["artifactType"], "application/vnd.oci.image.index.v1+json", ["oci-filters-applied"]);
+/** The media type of an OCI image index, as referrers answers use it. */
+const OCI_INDEX = "application/vnd.oci.image.index.v1+json";
+
+/** Whether `err` only says the upstream could not serve the request (unreachable, failing or rate limiting). */
+function isUpstreamFailure(err: unknown): boolean {
+  if (err instanceof RegistryError) return err.code === "upstream_unavailable";
+  return err instanceof DockerError && (err.code === "UNAVAILABLE" || err.code === "TOOMANYREQUESTS");
+}
+
+/**
+ * Serves the referrers of `digest` through the mirror (metadata); null when the upstream answers 404, so
+ * clients fall back to the tag schema. When a caching mirror's upstream cannot answer and no listing is
+ * cached, the answer is an empty index: docker asks for referrers while pulling, and a 502 there would fail
+ * a pull that the cache can serve.
+ */
+export async function mirrorReferrers(ctx: MirrorCtx, req: Request, digest: string): Promise<Response | null> {
+  try {
+    return await mirrorListing(ctx, req, `referrers/${digest}`, ["artifactType"], OCI_INDEX, ["oci-filters-applied"]);
+  } catch (err) {
+    if (!usesCache(ctx.target.repo) || !isUpstreamFailure(err)) throw err;
+    console.warn(`weaver:docker upstream of ${ctx.target.repo.name} cannot list referrers of ${digest}; answering an empty index`);
+    return new Response(JSON.stringify({ schemaVersion: 2, mediaType: OCI_INDEX, manifests: [] }), {
+      status: 200,
+      headers: { ...API_VERSION, "content-type": OCI_INDEX },
+    });
+  }
 }

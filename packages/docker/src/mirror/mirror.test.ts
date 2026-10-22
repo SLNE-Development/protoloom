@@ -322,6 +322,51 @@ describe("docker mirrors", () => {
     expect(tagHead.headers.get("content-type")).toBe(OCI_INDEX);
   });
 
+  it("a HEAD of a tag on a caching mirror caches the manifest, so the tag resolves while the upstream fails", async () => {
+    // docker and containerd resolve a tag with HEAD only and fetch the manifest by digest afterwards.
+    const body = manifestOf(Buffer.from('{"architecture":"amd64","os":"linux"}'), randomBlob(15, 10));
+    const digest = fake.addManifest("library/headonly", "1", body, OCI_MANIFEST);
+    const first = await reg.call("HEAD", "hubc/headonly/manifests/1");
+    expect(first.status).toBe(200);
+    expect(first.headers.get("docker-content-digest")).toBe(digest);
+    expect(first.headers.get("content-length")).toBe(String(body.length));
+    expect(await first.text()).toBe("");
+    await reg.deps.mirror.drain();
+    expect(await assetRows("hubc", "v2/library/headonly/manifests/1")).toHaveLength(1);
+
+    fake.rateLimited.add("library/headonly");
+    try {
+      const down = await reg.call("HEAD", "hubc/headonly/manifests/1");
+      expect(down.status).toBe(200);
+      expect(down.headers.get("docker-content-digest")).toBe(digest);
+      expect(down.headers.get("content-type")).toBe(OCI_MANIFEST);
+      expect(await down.text()).toBe("");
+    } finally {
+      fake.rateLimited.delete("library/headonly");
+    }
+  });
+
+  it("referrers through a caching mirror whose upstream is unreachable are an empty index, not 502", async () => {
+    // docker (containerd image store) asks for referrers while pulling; a 502 there fails a pull the cache could serve.
+    const down = await reg.createRepo({
+      name: "hubdown",
+      format: "docker",
+      kind: "mirror",
+      visibility: "public",
+      upstreams: [{ url: "http://127.0.0.1:1", authType: "none" }],
+      config: { dockerHub: true, cache: { enabled: true } },
+    });
+    expect(down.name).toBe("hubdown");
+    const res = await reg.call("GET", `hubdown/nginx/referrers/sha256:${"a".repeat(64)}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe(OCI_INDEX);
+    expect(JSON.parse(await res.text())).toEqual({ schemaVersion: 2, mediaType: OCI_INDEX, manifests: [] });
+
+    const uncached = await reg.call("GET", `hub/locked/referrers/sha256:${"a".repeat(64)}`);
+    expect(uncached.status).toBe(502);
+    expect(await errorCodeOf(uncached)).toBe("UNAVAILABLE");
+  });
+
   it("an unknown upstream manifest is 404 MANIFEST_UNKNOWN and an unknown blob 404 BLOB_UNKNOWN", async () => {
     const m = await reg.call("GET", "hub/nginx/manifests/missing");
     expect(m.status).toBe(404);

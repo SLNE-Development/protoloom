@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { DockerHostedConfig } from "@weaver/core";
 import { dockerBlob, dockerBlobLink, dockerManifest, dockerManifestRef, dockerTag, type Db, type Tx } from "@weaver/db";
+import { syncImageComponents } from "../components.js";
 import { DockerError } from "../errors.js";
 import { parseManifest, type Descriptor, type ParsedManifest, type Platform } from "../manifest-parse.js";
 import { isDigest } from "../media-types.js";
@@ -333,6 +334,7 @@ export async function putManifest(ctx: HostedCtx, req: Request, reference: strin
           target: [dockerTag.repositoryId, dockerTag.image, dockerTag.tag],
           set: { manifestId, updatedAt: sql`now()` },
         });
+      await syncImageComponents(tx, repoId, image);
       return true;
     });
 
@@ -429,6 +431,7 @@ export async function deleteManifest(ctx: HostedCtx, reference: string): Promise
         .where(and(eq(dockerTag.repositoryId, target.repo.id), eq(dockerTag.image, target.image), eq(dockerTag.tag, reference)))
         .returning({ id: dockerTag.manifestId });
   if (removed.length === 0) throw manifestUnknown(reference);
+  await syncImageComponents(deps.db, target.repo.id, target.image);
   await deps.usage({
     repositoryId: target.repo.id,
     path: `${target.image}/manifests/${reference}`,
