@@ -1,7 +1,7 @@
 import { initTRPC, TRPCError, type TRPC_ERROR_CODE_KEY } from "@trpc/server";
 import superjson from "superjson";
 import { z, ZodError } from "zod";
-import { getSettings, RegistryError, type ErrorCode, type Principal, type Registry, type ServerSettings } from "@weaver/core";
+import { getSettings, RegistryError, type ErrorCode, type Principal, type Registry, type ServerSettings, type StoreSet } from "@weaver/core";
 import type { Db } from "@weaver/db";
 import { QueueUnavailableError, type CleanupQueue } from "@weaver/jobs";
 import type { Auth } from "../auth";
@@ -14,6 +14,8 @@ import { env } from "@/env";
 export interface TrpcContext {
   db: Db;
   registry: Registry;
+  /** The configured object stores. */
+  stores: StoreSet;
   auth: Auth;
   /** Who is calling: a signed-in user (session cookie), an API key, or anonymous. */
   principal: Principal;
@@ -34,7 +36,7 @@ export type UserPrincipal = Extract<Principal, { kind: "user" }>;
  */
 export async function createTrpcContext(
   opts: { headers: Headers },
-  deps: Pick<TrpcContext, "db" | "registry" | "auth"> = getServerContext(),
+  deps: Pick<TrpcContext, "db" | "registry" | "auth" | "stores"> = getServerContext(),
 ): Promise<TrpcContext> {
   let principal: Principal;
   try {
@@ -46,9 +48,10 @@ export async function createTrpcContext(
   return {
     db: deps.db,
     registry: deps.registry,
+    stores: deps.stores,
     auth: deps.auth,
     principal,
-    settings: await getSettings(deps.db),
+    settings: await getSettings(deps.db, { primaryStore: deps.stores.primary.id }),
     publicUrl: env.BETTER_AUTH_URL,
     cleanupQueue: getCleanupQueue,
   };

@@ -10,6 +10,7 @@ import { eq, sql } from "drizzle-orm";
 import {
   createRegistry,
   createStoreSetFromEnv,
+  type StoreSet,
   packArchive,
   type Principal,
   type ProtoFile,
@@ -51,6 +52,7 @@ let testDb: Awaited<ReturnType<typeof startTestDb>>;
 let db: Db;
 let auth: Auth;
 let registry: Registry;
+let stores: StoreSet;
 let blobDir: string;
 let valkey: StartedValkeyContainer;
 let liveQueue: CleanupQueue;
@@ -80,9 +82,10 @@ function contextFor(principal: Principal, overrides: Partial<TrpcContext> = {}):
   return {
     db,
     registry,
+    stores,
     auth,
     principal,
-    settings: { anonymousView: false },
+    settings: { anonymousView: false, defaultCacheStore: "local" },
     publicUrl: BASE,
     cleanupQueue: () => liveQueue,
     ...overrides,
@@ -93,7 +96,7 @@ function call(principal: Principal, overrides: Partial<TrpcContext> = {}) {
   return createCaller(contextFor(principal, overrides));
 }
 
-const anonymousViewOn = { settings: { anonymousView: true } };
+const anonymousViewOn = { settings: { anonymousView: true, defaultCacheStore: "local" as const } };
 
 async function createUser(role: string, name = `${role} user`) {
   const now = new Date();
@@ -138,7 +141,8 @@ beforeAll(async () => {
   db = testDb.db;
   auth = createAuth(db, authEnv);
   blobDir = await mkdtemp(join(tmpdir(), "weaver-trpc-"));
-  registry = createRegistry({ db, stores: createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir }) });
+  stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir });
+  registry = createRegistry({ db, stores });
   liveQueue = createQueue(producerConnection(valkey.getConnectionUrl()));
   deadQueue = createQueue(producerConnection("redis://127.0.0.1:1"), { onError: () => undefined });
 });
@@ -162,15 +166,15 @@ beforeEach(async () => {
 describe("createTrpcContext", () => {
   it("builds an anonymous context with the stored settings and the public URL", async () => {
     await call(admin()).settings.update({ anonymousView: true });
-    const ctx = await createTrpcContext({ headers: new Headers() }, { db, registry, auth });
+    const ctx = await createTrpcContext({ headers: new Headers() }, { db, registry, auth, stores });
     expect(ctx.principal).toEqual({ kind: "anonymous" });
-    expect(ctx.settings).toEqual({ anonymousView: true });
+    expect(ctx.settings).toEqual({ anonymousView: true, defaultCacheStore: "local" });
     expect(ctx.publicUrl).toBe(BASE);
     await call(admin()).settings.update({ anonymousView: false });
   });
 
   it("refuses invalid credentials with UNAUTHORIZED", async () => {
-    const context = createTrpcContext({ headers: new Headers({ authorization: "Bearer nope" }) }, { db, registry, auth });
+    const context = createTrpcContext({ headers: new Headers({ authorization: "Bearer nope" }) }, { db, registry, auth, stores });
     const error = await context.catch((e: unknown) => e);
     expect(error).toBeInstanceOf(TRPCError);
     expect((error as TRPCError).code).toBe("UNAUTHORIZED");
@@ -575,10 +579,19 @@ describe("users", () => {
 });
 
 describe("settings", () => {
+  it("exposes the storage options to admins and rejects an unconfigured cache store", async () => {
+    expect(await call(admin()).settings.storage()).toEqual({ primary: "local", configured: ["local"] });
+    expect(await codeOf(call(maintainer()).settings.storage())).toBe("FORBIDDEN");
+    expect(await codeOf(call(admin()).settings.update({ defaultCacheStore: "s3" }))).toBe("BAD_REQUEST");
+  });
+
   it("returns only the anonymous view flag to anyone and lets admins change it", async () => {
     expect(await call(anonymous).settings.get()).toEqual({ anonymousView: false });
     expect(await codeOf(call(maintainer()).settings.update({ anonymousView: true }))).toBe("FORBIDDEN");
-    expect(await call(admin()).settings.update({ anonymousView: true })).toEqual({ anonymousView: true });
+    expect(await call(admin()).settings.update({ anonymousView: true })).toEqual({
+      anonymousView: true,
+      defaultCacheStore: "local",
+    });
     await call(admin()).settings.update({ anonymousView: false });
   });
 });
