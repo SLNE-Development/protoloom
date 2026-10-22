@@ -2,7 +2,7 @@
 title: Docker and OCI
 description: Log in, push and pull images with docker and podman, mirror Docker Hub, use groups, push Helm charts and cosign signatures, and clean up storage.
 section: Clients
-order: 6
+order: 7
 ---
 
 Weaver is an OCI registry at `{{host}}`. Stock `docker`, `podman`, `buildx`, containerd, `helm`, `oras` and `cosign` work with it without any flag or patched config. Every image name starts with the name of a docker repository: `{{host}}/<repo>/<image>:<tag>`.
