@@ -2,13 +2,14 @@ import { createDockerHandler } from "@weaver/docker";
 import { getSettings, recordUsage, type FormatFactory, type FormatHandler } from "@weaver/core";
 import { createMavenHandler } from "@weaver/maven";
 import { createNpmHandler } from "@weaver/npm";
+import { createProtoHandler } from "@weaver/proto";
 import { env } from "@/env";
 import { handle } from "./http";
 import { getServerContext } from "./context";
 import { getPrincipal } from "./principal";
 
-/** The protocol mounts served outside `/api`. */
-export type FormatMount = "maven" | "npm" | "docker";
+/** The protocol mounts: Maven, npm and Docker outside `/api`, and the proto REST API at `/api/v1`. */
+export type FormatMount = "maven" | "npm" | "docker" | "proto";
 
 /**
  * Format factories by mount. A format plan replaces its `undefined` with one import and one map
@@ -18,6 +19,8 @@ export const FACTORIES: Record<FormatMount, FormatFactory | undefined> = {
   maven: createMavenHandler,
   npm: createNpmHandler,
   docker: createDockerHandler,
+  // The proto API also works with the server's hosted proto registry.
+  proto: (deps) => createProtoHandler({ ...deps, registry: getServerContext().registry }),
 };
 
 /** The 501 answer of a mount whose format is not installed. */
@@ -59,7 +62,7 @@ export function getFormatHandler(mount: FormatMount): FormatHandler {
 }
 
 /** URL path prefix of each mount. */
-const PREFIX: Record<FormatMount, string> = { maven: "/maven", npm: "/npm", docker: "/v2" };
+const PREFIX: Record<FormatMount, string> = { maven: "/maven", npm: "/npm", docker: "/v2", proto: "/api/v1" };
 
 /**
  * The raw path after the mount prefix, without a leading slash and with percent-encoding and a

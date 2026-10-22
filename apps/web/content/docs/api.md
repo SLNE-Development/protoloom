@@ -163,7 +163,7 @@ Newest version first. `404 not_found` when the artifact doesn't exist or you can
 GET /api/v1/repos/{repo}/artifacts/{group}/{name}/{version}
 ```
 
-Describes the newest build; for a snapshot that is the latest publish.
+Describes the newest build; for a snapshot that is the latest publish. Add `?build=<n>` to describe a specific build (`404 not_found` once it was deleted). Dependencies are `group:name:version` strings, like `coordinate`.
 
 ```json
 {
@@ -172,7 +172,7 @@ Describes the newest build; for a snapshot that is the latest publish.
   "buildNumber": 1,
   "sha256": "9f2c…e41a",
   "sizeBytes": 2318,
-  "dependencies": [{ "group": "dev.surf.common", "name": "common-types", "version": "2.0.0" }],
+  "dependencies": ["dev.surf.common:common-types:2.0.0"],
   "files": ["surf/economy/v1/money.proto", "surf/economy/v1/wallet.proto"],
   "publishedBy": "Ada",
   "downloadCount": 42,
@@ -239,7 +239,8 @@ Every error has the same body:
 | 400 | `invalid_request` | The request is malformed. The message says what is wrong; `details.issues` lists fields for body validation errors. |
 | 401 | `unauthorized` | Publishing or deleting without a key, or an invalid, expired or revoked key, or a banned owner. |
 | 403 | `forbidden` | Authenticated, but not allowed: no write access, a viewer deleting, or `force` without admin. |
-| 404 | `not_found` | The repository, artifact, version or a dependency doesn't exist, or you can't read it. |
+| 404 | `not_found` | The repository, artifact, version or a dependency doesn't exist, or you can't read it. Also any path that is not an API endpoint, and a mirror loop. |
+| 405 | `method_not_allowed` | Publishing or deleting through a group or a mirror, or a method the endpoint doesn't support. The `allow` header lists the supported ones. |
 | 409 | `immutable` | A release that already exists, in a repository without redeploy. |
 | 409 | `has_dependents` | Deleting or redeploying a version that others depend on. `details.dependents` lists them. |
 | 413 | `payload_too_large` | The body, the archive, a file, or the file count is over the limit. |
@@ -249,4 +250,4 @@ Every error has the same body:
 
 ### Mirror hops
 
-Weaver instances that mirror each other send an `x-weaver-hops` header with the requests they make upstream and raise it by one at every hop. An instance that receives more than 4 hops refuses to continue, so a loop between mirrors cannot run forever (see [Troubleshooting](/docs/troubleshooting#mirrors)). Clients never need to send this header.
+Weaver instances that mirror each other send an `x-weaver-hops` header with the requests they make upstream and raise it by one at every hop. An instance that receives more than 4 hops answers `404 not_found` with the message `Mirror loop detected` without doing any work, so a loop between mirrors cannot run forever (see [Troubleshooting](/docs/troubleshooting#mirrors)). Clients never need to send this header.
