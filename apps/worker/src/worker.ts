@@ -40,6 +40,10 @@ export async function processMaintenanceJob(deps: WorkerDeps, data: MaintenanceJ
       }
     case "evict:all":
       return evictCaches({ db: deps.db, assets: createAssetService({ db: deps.db, stores: deps.stores }), now });
+    case "docker:gc":
+      // The docker format registers its garbage collection later; until then the job does nothing.
+      console.log("weaver: docker:gc is not implemented yet; skipping");
+      return { skipped: true };
     default:
       throw new UnrecoverableError(`Unknown maintenance job kind ${JSON.stringify((data as { kind?: unknown }).kind)}`);
   }

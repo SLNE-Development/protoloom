@@ -40,6 +40,8 @@ export interface MirrorFetch {
   headers?: Record<string, string>;
   /** Links a cached asset to this component. */
   component?: ComponentRef;
+  /** Called before the first request to each upstream; a non-null value is sent as Authorization instead of the upstream row's credentials. */
+  authorize?: (upstream: UpstreamView & { secret: string | null }) => Promise<string | null>;
   /** Called on a 401 with WWW-Authenticate; returns an Authorization header value to retry once with, or null. */
   onChallenge?: (challenge: string, upstream: UpstreamView & { secret: string | null }) => Promise<string | null>;
 }
@@ -249,7 +251,7 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
   ): Promise<Response> {
     const send = (authorization: string | null) =>
       requestUpstream(fetchImpl, url, { method, headers: req.headers ?? {}, authorization, timeoutMs, signal });
-    const response = await send(upstreamAuthorization(upstream));
+    const response = await send((await req.authorize?.(upstream)) ?? upstreamAuthorization(upstream));
     const challenge = response.status === 401 ? response.headers.get("www-authenticate") : null;
     if (challenge === null || !req.onChallenge) return response;
     const authorization = await req.onChallenge(challenge, upstream);

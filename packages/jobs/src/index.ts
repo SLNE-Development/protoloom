@@ -19,7 +19,8 @@ export const EVICT_PATTERN = "17 * * * *";
 export type MaintenanceJobData =
   | { kind: "cleanup:all" }
   | { kind: "cleanup:repo"; repository: string }
-  | { kind: "evict:all" };
+  | { kind: "evict:all" }
+  | { kind: "docker:gc" };
 
 /** Return value of a finished cleanup job. */
 export interface CleanupJobResult {

@@ -145,6 +145,13 @@ describe("worker", () => {
     expect(await testDb.db.select().from(asset).where(eq(asset.repositoryId, repo!.id))).toHaveLength(0);
   });
 
+  it("completes a docker:gc job as a no-op until the docker format handles it", async () => {
+    await start();
+    const job = await queue.add("docker:gc", { kind: "docker:gc" });
+    const status = await waitForFinish(job.id!);
+    expect(status.state).toBe("completed");
+  });
+
   it("fails a job for an unknown repository at once instead of retrying it", { timeout: 60_000 }, async () => {
     await start();
     const jobId = await enqueueCleanup(queue, "nope");

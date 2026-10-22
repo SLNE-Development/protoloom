@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { FormatFactory } from "@weaver/core";
 import config from "../../next.config";
 import { config as proxyConfig } from "../proxy";
-import { getFormatHandler, mountRest } from "./formats";
+import { FACTORIES, getFormatHandler, mountRest } from "./formats";
+
+vi.mock("./context", () => ({
+  getServerContext: () => ({ secretKey: Buffer.alloc(32, 1), stores: {}, db: {}, repos: {}, assets: {}, mirror: {} }),
+}));
 
 const req = (path: string) => new Request(`http://localhost:3000${path}`);
 
@@ -23,6 +28,23 @@ describe("placeholder mounts", () => {
     const res = await getFormatHandler("maven")(req("/maven/x"), "x");
     expect(res.status).toBe(501);
     expect(await res.json()).toEqual({ error: { code: "not_implemented", message: "maven support is not installed" } });
+  });
+});
+
+describe("format deps", () => {
+  it("carry the secret key", () => {
+    let seen: Buffer | undefined;
+    const factory: FormatFactory = (deps) => {
+      seen = deps.secretKey;
+      return async () => new Response(null, { status: 204 });
+    };
+    FACTORIES.npm = factory;
+    try {
+      getFormatHandler("npm");
+    } finally {
+      FACTORIES.npm = undefined;
+    }
+    expect(seen?.length).toBe(32);
   });
 });
 

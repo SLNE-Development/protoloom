@@ -11,7 +11,7 @@ export type FormatMount = "maven" | "npm" | "docker";
  * Format factories by mount. A format plan replaces its `undefined` with one import and one map
  * entry; until then the mount answers 501.
  */
-const FACTORIES: Record<FormatMount, FormatFactory | undefined> = {
+export const FACTORIES: Record<FormatMount, FormatFactory | undefined> = {
   maven: undefined,
   npm: undefined,
   docker: undefined,
