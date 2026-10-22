@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { bigint, bigserial, index, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { createdAt, repository, updatedAt } from "./repository.js";
 
@@ -25,13 +26,20 @@ export const component = pgTable(
     namespace: text("namespace").notNull().default(""),
     name: text("name").notNull(),
     version: text("version").notNull().default(""),
+    /** Lower-cased `namespace name` with `:` and `/` as spaces; the target of trigram search. */
+    searchText: text("search_text").generatedAlwaysAs(
+      sql`btrim(lower(translate(namespace || ' ' || name, ':/', '  ')))`,
+    ),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     downloadCount: bigint("download_count", { mode: "number" }).notNull().default(0),
     lastDownloadedAt: timestamp("last_downloaded_at", { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [unique("component_coordinate_uq").on(t.repositoryId, t.namespace, t.name, t.version)],
+  (t) => [
+    unique("component_coordinate_uq").on(t.repositoryId, t.namespace, t.name, t.version),
+    index("component_search_text_trgm").using("gin", sql`search_text gin_trgm_ops`),
+  ],
 );
 
 /**

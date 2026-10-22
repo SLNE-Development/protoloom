@@ -105,7 +105,8 @@ function wholeVersionTargets(policy: PolicyRow, versions: VersionRow[], now: Dat
       return versions
         .filter((v) => (v.isSnapshot || policy.includeReleases) && (v.lastDownloadedAt ?? v.createdAt) < before)
         .map((v) => ({ v, reason: `not downloaded for ${policy.value} days` }));
-    case "keep_last_snapshot_builds":
+    default:
+      // keep_last_snapshot_builds plans builds, and the npm/docker kinds are not proto rules.
       return [];
   }
 }
