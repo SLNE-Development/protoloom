@@ -32,18 +32,6 @@ importers:
       '@next/env':
         specifier: 16.4.2
         version: 16.4.2
-      '@weaver/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-      '@weaver/db':
-        specifier: workspace:*
-        version: link:../../packages/db
-      '@weaver/jobs':
-        specifier: workspace:*
-        version: link:../../packages/jobs
-      '@weaver/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
       '@t3-oss/env-nextjs':
         specifier: 0.13.11
         version: 0.13.11(typescript@6.0.3)(zod@4.6.7)
@@ -59,6 +47,18 @@ importers:
       '@trpc/tanstack-react-query':
         specifier: 11.19.0
         version: 11.19.0(@tanstack/react-query@5.104.5(@types/react@19.3.0)(react@19.3.1))(@trpc/client@11.19.0(@trpc/server@11.19.0(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.19.0(typescript@6.0.3))(react@19.3.1)(typescript@6.0.3)
+      '@weaver/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@weaver/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@weaver/jobs':
+        specifier: workspace:*
+        version: link:../../packages/jobs
+      '@weaver/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       better-auth:
         specifier: 1.7.12
         version: 1.7.12(drizzle-kit@0.31.11)(drizzle-orm@0.45.4(@types/pg@8.23.1)(kysely@0.29.7)(pg@8.23.1))(next@16.4.2(@playwright/test@1.64.1)(@types/node@26.6.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(pg@8.23.1)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(vitest@5.0.5(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)))
@@ -132,9 +132,6 @@ importers:
       '@playwright/test':
         specifier: 1.64.1
         version: 1.64.1
-      '@weaver/config':
-        specifier: workspace:*
-        version: link:../../packages/config
       '@tailwindcss/postcss':
         specifier: 4.3.3
         version: 4.3.3
@@ -156,6 +153,9 @@ importers:
       '@types/react-dom':
         specifier: 19.3.0
         version: 19.3.0(@types/react@19.3.0)
+      '@weaver/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       cross-env:
         specifier: 10.1.0
         version: 10.1.0
@@ -177,6 +177,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@t3-oss/env-core':
+        specifier: 0.13.11
+        version: 0.13.11(typescript@6.0.3)(zod@4.6.7)
       '@weaver/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -186,9 +189,6 @@ importers:
       '@weaver/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs
-      '@t3-oss/env-core':
-        specifier: 0.13.11
-        version: 0.13.11(typescript@6.0.3)(zod@4.6.7)
       bullmq:
         specifier: 6.3.19
         version: 6.3.19(ioredis@6.0.0)(pg@8.23.1)
@@ -199,15 +199,15 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
     devDependencies:
-      '@weaver/config':
-        specifier: workspace:*
-        version: link:../../packages/config
       '@testcontainers/valkey':
         specifier: 12.2.1
         version: 12.2.1
       '@types/node':
         specifier: 26.6.5
         version: 26.6.5
+      '@weaver/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       drizzle-orm:
         specifier: 0.45.4
         version: 0.45.4(@types/pg@8.23.1)(kysely@0.29.7)(pg@8.23.1)
@@ -226,15 +226,15 @@ importers:
 
   packages/cli:
     devDependencies:
+      '@types/node':
+        specifier: 26.6.5
+        version: 26.6.5
       '@weaver/config':
         specifier: workspace:*
         version: link:../config
       '@weaver/core':
         specifier: workspace:*
         version: link:../core
-      '@types/node':
-        specifier: 26.6.5
-        version: 26.6.5
       eslint:
         specifier: 10.13.0
         version: 10.13.0(jiti@2.7.0)
@@ -288,12 +288,12 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
     devDependencies:
-      '@weaver/config':
-        specifier: workspace:*
-        version: link:../config
       '@types/node':
         specifier: 26.6.5
         version: 26.6.5
+      '@weaver/config':
+        specifier: workspace:*
+        version: link:../config
       eslint:
         specifier: 10.13.0
         version: 10.13.0(jiti@2.7.0)
@@ -313,9 +313,6 @@ importers:
         specifier: 8.23.1
         version: 8.23.1
     devDependencies:
-      '@weaver/config':
-        specifier: workspace:*
-        version: link:../config
       '@testcontainers/postgresql':
         specifier: 12.2.1
         version: 12.2.1
@@ -325,6 +322,9 @@ importers:
       '@types/pg':
         specifier: 8.23.1
         version: 8.23.1
+      '@weaver/config':
+        specifier: workspace:*
+        version: link:../config
       drizzle-kit:
         specifier: 0.31.11
         version: 0.31.11
@@ -347,18 +347,52 @@ importers:
         specifier: 6.0.0
         version: 6.0.0
     devDependencies:
-      '@weaver/config':
-        specifier: workspace:*
-        version: link:../config
       '@testcontainers/valkey':
         specifier: 12.2.1
         version: 12.2.1
       '@types/node':
         specifier: 26.6.5
         version: 26.6.5
+      '@weaver/config':
+        specifier: workspace:*
+        version: link:../config
       eslint:
         specifier: 10.13.0
         version: 10.13.0(jiti@2.7.0)
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: 5.0.5
+        version: 5.0.5(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+
+  packages/npm:
+    dependencies:
+      '@weaver/core':
+        specifier: workspace:*
+        version: link:../core
+      '@weaver/db':
+        specifier: workspace:*
+        version: link:../db
+      drizzle-orm:
+        specifier: 0.45.4
+        version: 0.45.4(@types/pg@8.23.1)(kysely@0.29.7)(pg@8.23.1)
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: 26.6.5
+        version: 26.6.5
+      '@weaver/config':
+        specifier: workspace:*
+        version: link:../config
+      eslint:
+        specifier: 10.13.0
+        version: 10.13.0(jiti@2.7.0)
+      tar:
+        specifier: 7.5.22
+        version: 7.5.22
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -438,9 +472,6 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
     devDependencies:
-      '@weaver/config':
-        specifier: workspace:*
-        version: link:../config
       '@tailwindcss/postcss':
         specifier: 4.3.3
         version: 4.3.3
@@ -453,6 +484,9 @@ importers:
       '@types/react-dom':
         specifier: 19.3.0
         version: 19.3.0(@types/react@19.3.0)
+      '@weaver/config':
+        specifier: workspace:*
+        version: link:../config
       eslint:
         specifier: 10.13.0
         version: 10.13.0(jiti@2.7.0)
