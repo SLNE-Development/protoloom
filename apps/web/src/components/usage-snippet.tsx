@@ -1,11 +1,23 @@
-import { gradleSnippet, weaverJsonSnippet, type SnippetInput } from "@/lib/browse";
+import { env } from "@/env";
+import { gradleSnippet, weaverJsonSnippet } from "@/lib/browse";
 import { CodeBlock } from "./code-block";
 
 /**
- * How to consume a version: the Gradle plugin setup (`weaver("g:n:v")`) and a `weaver.json`
- * for the CLI. The URL is the public base URL from the environment.
+ * How to consume a version, or with no `coordinate` a whole repository: the Gradle plugin setup
+ * (`repositories("<repository>")`, `weaver("g:n:v")`) and a `weaver.json` for the CLI. The URL is
+ * the public base URL from the environment.
  */
-export function UsageSnippet({ stacked = false, ...input }: SnippetInput & { /** One column even on wide screens. */ stacked?: boolean }) {
+export function UsageSnippet({
+  repository,
+  coordinate,
+  stacked = false,
+}: {
+  repository: string;
+  coordinate?: string;
+  /** One column even on wide screens. */
+  stacked?: boolean;
+}) {
+  const input = { url: env.BETTER_AUTH_URL, repository, coordinate };
   return (
     <div className={stacked ? "grid gap-4" : "grid gap-4 lg:grid-cols-2"}>
       <div className="flex min-w-0 flex-col gap-2">

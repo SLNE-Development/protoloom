@@ -47,6 +47,16 @@ describe("usage snippets", () => {
     expect(snippet).toContain('weaver("dev.example:demo:1.0.0")');
   });
 
+  it("gradleSnippet for a group repository lists the group name", () => {
+    const snippet = gradleSnippet({ url: "https://protos.example.com", repository: "all" });
+    expect(snippet).toContain('repositories("all")');
+    // Without a coordinate the dependency is only a commented template.
+    expect(snippet).toContain('// weaver("group:name:version")');
+    const parsed = configSchema.safeParse(JSON.parse(weaverJsonSnippet({ url: "https://protos.example.com", repository: "all" })));
+    expect(parsed.success).toBe(true);
+    expect(parsed.data).toMatchObject({ repositories: ["all"], dependencies: [] });
+  });
+
   it("writes a weaver.json the CLI accepts", () => {
     const parsed = configSchema.safeParse(JSON.parse(weaverJsonSnippet(input)));
     expect(parsed.success).toBe(true);
