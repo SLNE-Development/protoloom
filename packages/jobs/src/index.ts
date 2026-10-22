@@ -15,12 +15,19 @@ export const EVICT_SCHEDULER_ID = "evict-hourly";
 /** Cron pattern of the hourly cache eviction: minute 17 of every hour. */
 export const EVICT_PATTERN = "17 * * * *";
 
+/** Id of the job scheduler that rolls usage events up into daily stats once an hour. */
+export const STATS_SCHEDULER_ID = "stats-hourly";
+
+/** Cron pattern of the hourly stats rollup: minute 41 of every hour. */
+export const STATS_ROLLUP_PATTERN = "41 * * * *";
+
 /** Payload of a maintenance job; the worker dispatches on `kind`. Later features extend the union. */
 export type MaintenanceJobData =
   | { kind: "cleanup:all" }
   | { kind: "cleanup:repo"; repository: string }
   | { kind: "evict:all" }
-  | { kind: "docker:gc" };
+  | { kind: "docker:gc" }
+  | { kind: "stats:rollup" };
 
 /** Return value of a finished cleanup job. */
 export interface CleanupJobResult {
@@ -220,4 +227,9 @@ export function scheduleDailyCleanup(queue: MaintenanceQueue): Promise<void> {
 /** Creates or updates the hourly cache-eviction scheduler; calling it again never adds a second one. */
 export function scheduleHourlyEviction(queue: MaintenanceQueue): Promise<void> {
   return scheduleRepeating(queue, EVICT_SCHEDULER_ID, EVICT_PATTERN, { kind: "evict:all" });
+}
+
+/** Creates or updates the hourly stats-rollup scheduler; calling it again never adds a second one. */
+export function scheduleHourlyStatsRollup(queue: MaintenanceQueue): Promise<void> {
+  return scheduleRepeating(queue, STATS_SCHEDULER_ID, STATS_ROLLUP_PATTERN, { kind: "stats:rollup" });
 }

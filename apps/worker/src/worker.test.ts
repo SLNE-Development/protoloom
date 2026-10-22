@@ -12,6 +12,8 @@ import {
   protoBuild as build,
   protoVersion as version,
   repository,
+  usageDaily,
+  usageEvent,
 } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
 import { createStoreSetFromEnv, putBuffer, type StoreSet } from "@weaver/core";
@@ -69,7 +71,7 @@ describe("worker", () => {
 
   beforeEach(async () => {
     await queue.obliterate({ force: true });
-    await testDb.db.execute(sql`TRUNCATE repository, audit_event CASCADE`);
+    await testDb.db.execute(sql`TRUNCATE repository, audit_event, usage_event CASCADE`);
   });
 
   afterEach(async () => {
@@ -108,13 +110,33 @@ describe("worker", () => {
     await start();
 
     const schedulers = await queue.getJobSchedulers();
-    expect(schedulers).toHaveLength(2);
+    expect(schedulers).toHaveLength(3);
     expect(schedulers).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: "cleanup-daily", pattern: "0 3 * * *" }),
         expect.objectContaining({ key: "evict-hourly", pattern: "17 * * * *" }),
       ]),
     );
+  });
+
+  it("startWorker upserts the stats-hourly scheduler with pattern 41 * * * *", async () => {
+    await start();
+
+    const schedulers = await queue.getJobSchedulers();
+    expect(schedulers).toEqual(expect.arrayContaining([expect.objectContaining({ key: "stats-hourly", pattern: "41 * * * *" })]));
+  });
+
+  it("a stats:rollup job completes and writes usage_daily", async () => {
+    const [repo] = await testDb.db.insert(repository).values({ name: "releases", format: "maven", kind: "hosted" }).returning();
+    await testDb.db.insert(usageEvent).values({ repositoryId: repo!.id, path: "a.jar", action: "download", bytes: 4 });
+
+    await start();
+    const job = await queue.add("stats:rollup", { kind: "stats:rollup" });
+    const status = await waitForFinish(job.id!);
+
+    expect(status.state).toBe("completed");
+    const rows = await testDb.db.select().from(usageDaily).where(eq(usageDaily.repositoryId, repo!.id));
+    expect(rows).toEqual([expect.objectContaining({ action: "download", count: 1, bytes: 4 })]);
   });
 
   it("runs an evict:all job and removes cache assets of mirrors with caching disabled", async () => {
