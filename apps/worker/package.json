@@ -16,6 +16,7 @@
     "@weaver/core": "workspace:*",
     "@weaver/db": "workspace:*",
     "@weaver/jobs": "workspace:*",
+    "@weaver/maven": "workspace:*",
     "@t3-oss/env-core": "0.13.11",
     "bullmq": "6.3.19",
     "ioredis": "6.0.0",

@@ -201,6 +201,9 @@ importers:
       '@weaver/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs
+      '@weaver/maven':
+        specifier: workspace:*
+        version: link:../../packages/maven
       bullmq:
         specifier: 6.3.19
         version: 6.3.19(ioredis@6.0.0)(pg@8.23.1)

@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { sql } from "drizzle-orm";
 import type { AssetRow, MavenHostedConfig, Repo } from "@weaver/core";
+import type { Tx } from "@weaver/db";
 import { checksumGeneratable, checksumText, digestOf } from "./checksum.js";
 import type { MavenContext } from "./context.js";
 import { compareStamps, hostedMetadataXml, snapshotFiles } from "./generate.js";
@@ -93,6 +95,37 @@ async function writeMetadata(ctx: MavenContext, repo: Repo, target: Extract<Mave
   return created();
 }
 
+/**
+ * Takes the transaction-scoped advisory lock of artifact `groupId:artifactId` in a repository.
+ * Publishing a file and cleaning up the artifact both hold it, so a cleanup never deletes a
+ * version that is being published to.
+ */
+export async function lockMavenArtifact(tx: Tx, repositoryId: string, groupId: string, artifactId: string): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`maven:${repositoryId}:${groupId}:${artifactId}`}))`);
+}
+
+/** Stores an artifact file and links it to its version's component while holding the artifact lock. */
+async function putFile(ctx: MavenContext, repo: Repo, target: MavenFile, req: Request): Promise<AssetRow> {
+  const { assets, db } = ctx.deps;
+  const staged = await assets.stage({ repo, body: bodyOf(req), origin: "hosted", contentLength: contentLengthOf(req), signal: req.signal });
+  let committed: Awaited<ReturnType<typeof assets.commit>>;
+  try {
+    committed = await db.transaction(async (tx) => {
+      await lockMavenArtifact(tx, repo.id, target.groupId, target.artifactId);
+      return assets.commit(tx, staged, {
+        path: target.path,
+        contentType: contentTypeFor(target.path),
+        component: { namespace: target.groupId, name: target.artifactId, version: target.version },
+      });
+    });
+  } catch (error) {
+    await assets.discard(staged);
+    throw error;
+  }
+  await committed.finish();
+  return committed.asset;
+}
+
 /** The reason a file may not be deployed to the repository, or null when it may. */
 async function rejectFile(ctx: MavenContext, repo: Repo, target: MavenFile): Promise<Response | null> {
   const config = hostedConfig(repo);
@@ -117,20 +150,22 @@ export async function writeHosted(ctx: MavenContext, repo: Repo, target: MavenPa
   if (target.type === "directory") return textResponse(400, "Cannot upload to a directory");
   if (target.type === "metadata") return writeMetadata(ctx, repo, target, req);
 
+  let row: AssetRow;
   if (target.type === "file") {
     const rejected = await rejectFile(ctx, repo, target);
     if (rejected) return rejected;
+    row = await putFile(ctx, repo, target, req);
+  } else {
+    row = await ctx.deps.assets.put({
+      repo,
+      path: target.path,
+      body: bodyOf(req),
+      contentType: contentTypeFor(target.path),
+      origin: "hosted",
+      contentLength: contentLengthOf(req),
+      signal: req.signal,
+    });
   }
-  const row = await ctx.deps.assets.put({
-    repo,
-    path: target.path,
-    body: bodyOf(req),
-    contentType: contentTypeFor(target.path),
-    origin: "hosted",
-    component: target.type === "file" ? { namespace: target.groupId, name: target.artifactId, version: target.version } : undefined,
-    contentLength: contentLengthOf(req),
-    signal: req.signal,
-  });
   if (counted(target)) {
     await ctx.deps.usage({ repositoryId: repo.id, assetId: row.id, path: row.path, action: "upload", bytes: row.size, principal: ctx.principal });
   }
