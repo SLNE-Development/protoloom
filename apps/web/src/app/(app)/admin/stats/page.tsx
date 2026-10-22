@@ -12,7 +12,7 @@ import { AdminPage } from "../_components/admin-page";
 
 export const metadata: Metadata = { title: "Usage" };
 
-/** Usage across all repositories: downloads over time, top packages, storage, mirror hit rates and the busiest API keys. Admins only; everyone else gets the not-found page. */
+/** Usage across all repositories: downloads over time, top packages, storage, mirror hit rates and the busiest API keys. Admins only: the app shell redirects other users to the dashboard, and the data call refuses them. */
 export default async function UsagePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const params = await searchParams;
   const days = parseDays(params.days);

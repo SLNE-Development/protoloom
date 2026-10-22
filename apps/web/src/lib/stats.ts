@@ -15,6 +15,11 @@ export function parseDays(raw: string | string[] | undefined): RangeDays {
   return RANGE_OPTIONS.find((option) => option.days === value)?.days ?? 30;
 }
 
+/** A `YYYY-MM-DD` UTC day as `Oct 21, 2026`, in UTC so the date never shifts with the viewer's time zone. */
+export function formatUtcDay(day: string): string {
+  return new Date(`${day}T00:00:00Z`).toLocaleDateString("en", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+}
+
 /** A hit rate (0..1) as a whole percent such as `50%`; a dash without any lookup. */
 export function formatPercent(rate: number | null): string {
   return rate === null ? "-" : `${Math.round(rate * 100)}%`;

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
-import { eq } from "drizzle-orm";
+import { eq, inArray, or } from "drizzle-orm";
 import { createRepoService, createStoreSetFromEnv, deriveSecretKey, rollupUsage } from "@weaver/core";
 import { apikey, auditEvent, createDb, repository, session, setting, storageSnapshot, usageEvent, user } from "@weaver/db";
 import { AUTH_SECRET, BASE_URL, STATE_FILE, USERS, serverEnv, sessionToken } from "./fixtures";
@@ -345,6 +345,10 @@ test.describe("usage statistics", () => {
       const [hosted] = await db.select({ id: repository.id }).from(repository).where(eq(repository.name, STATS_HOSTED));
       const [mirror] = await db.select({ id: repository.id }).from(repository).where(eq(repository.name, STATS_MIRROR));
 
+      // Reruns against the same database start from the same events.
+      await db
+        .delete(usageEvent)
+        .where(or(inArray(usageEvent.repositoryId, [hosted!.id, mirror!.id]), inArray(usageEvent.apiKeyId, [ADMIN_KEY.id, MAINTAINER_KEY.id])));
       const now = new Date();
       await db
         .insert(apikey)
@@ -405,8 +409,9 @@ test.describe("usage statistics", () => {
     await page.goto(`/browse/${STATS_MIRROR}`);
     await page.getByRole("link", { name: "Stats", exact: true }).click();
     await expect(page).toHaveURL(`/browse/${STATS_MIRROR}/stats`);
-    await expect(page.getByText("3.0 MiB")).toBeVisible();
-    await expect(page.getByText("50%")).toBeVisible();
+    await expect(page.getByRole("term").filter({ hasText: /^Cache$/ })).toBeVisible();
+    await expect(page.getByRole("definition").filter({ hasText: /^3\.0 MiB$/ })).toBeVisible();
+    await expect(page.getByRole("definition").filter({ hasText: /^50%$/ })).toBeVisible();
 
     await page.goto("/browse/upstream-protos/stats");
     await expect(page.getByText("Caching is off; nothing is stored for this mirror.")).toBeVisible();

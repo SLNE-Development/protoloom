@@ -6,7 +6,6 @@ type HitRate = RouterOutputs["stats"]["overview"]["hitRates"][number];
 
 /** Cache results per mirror over the range; the rate counts stale serves as hits. */
 export function HitRateTable({ rows }: { rows: HitRate[] }) {
-  if (rows.length === 0) return null;
   return (
     <section className="flex flex-col gap-2" aria-labelledby="hit-rate-heading" data-testid="hit-rate-table">
       <h2 id="hit-rate-heading" className="text-sm font-medium">
@@ -24,6 +23,13 @@ export function HitRateTable({ rows }: { rows: HitRate[] }) {
             </TableRow>
           </TableHeader>
           <TableBody>
+            {rows.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} className="pl-3 text-muted-foreground">
+                  No mirrors yet.
+                </TableCell>
+              </TableRow>
+            )}
             {rows.map((row) => (
               <TableRow key={row.repositoryId}>
                 <TableCell className="pl-3 font-mono text-xs">{row.repository}</TableCell>

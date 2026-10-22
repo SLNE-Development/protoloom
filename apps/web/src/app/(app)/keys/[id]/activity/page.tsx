@@ -10,7 +10,6 @@ import { parseDays } from "@/lib/stats";
 import { orNotFound } from "@/server/page-data";
 import { requireRole } from "@/server/session";
 import { api } from "@/trpc/server";
-import { formatTimestamp } from "../../../admin/_components/format";
 
 export const metadata: Metadata = { title: "Key activity" };
 
@@ -50,7 +49,7 @@ export default async function KeyActivityPage({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="pl-3">Time</TableHead>
+                <TableHead className="pl-3">Time (UTC)</TableHead>
                 <TableHead>Action</TableHead>
                 <TableHead>Repository</TableHead>
                 <TableHead>Package</TableHead>
@@ -68,7 +67,7 @@ export default async function KeyActivityPage({
               ) : (
                 activity.events.map((event) => (
                   <TableRow key={event.id} data-testid="key-event">
-                    <TableCell className="pl-3 font-mono text-xs">{formatTimestamp(event.at)}</TableCell>
+                    <TableCell className="pl-3 font-mono text-xs">{event.at.toISOString().slice(0, 19).replace("T", " ")}</TableCell>
                     <TableCell className="text-sm">{event.action}</TableCell>
                     <TableCell className="font-mono text-xs">{event.repository ?? "deleted"}</TableCell>
                     <TableCell className="font-mono text-xs">{event.label ?? "-"}</TableCell>

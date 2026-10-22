@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@weaver/ui/components/table";
-import { formatDate } from "@/lib/format";
+import { formatUtcDay } from "@/lib/stats";
 import type { RouterOutputs } from "@/trpc/client";
 
 type Token = RouterOutputs["stats"]["overview"]["tokens"][number];
@@ -43,7 +43,7 @@ export function TokenTable({ rows, days }: { rows: Token[]; days: number }) {
                   <TableCell className="text-right tabular-nums">{row.downloads.toLocaleString("en")}</TableCell>
                   <TableCell className="text-right tabular-nums">{row.uploads.toLocaleString("en")}</TableCell>
                   <TableCell className="text-right tabular-nums">{row.deletes.toLocaleString("en")}</TableCell>
-                  <TableCell className="pr-3 text-right text-sm">{formatDate(new Date(`${row.lastDay}T00:00:00Z`))}</TableCell>
+                  <TableCell className="pr-3 text-right text-sm">{formatUtcDay(row.lastDay)}</TableCell>
                 </TableRow>
               ))
             )}

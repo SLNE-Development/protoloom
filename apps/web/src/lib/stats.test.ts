@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatPercent, parseDays } from "./stats";
+import { formatPercent, formatUtcDay, parseDays } from "./stats";
 
 describe("parseDays", () => {
   it("accepts the offered lengths", () => {
@@ -26,5 +26,11 @@ describe("formatPercent", () => {
 
   it("shows a dash without lookups", () => {
     expect(formatPercent(null)).toBe("-");
+  });
+});
+
+describe("formatUtcDay", () => {
+  it("keeps the UTC calendar day", () => {
+    expect(formatUtcDay("2026-10-21")).toBe("Oct 21, 2026");
   });
 });
