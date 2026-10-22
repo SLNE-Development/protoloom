@@ -47,11 +47,21 @@ function randomToken(): string {
 }
 
 /**
- * The client address of a request: the first `x-forwarded-for` entry (set by the reverse proxy in front of Weaver),
+ * A user-agent header made safe to store and show: control (Cc), format (Cf) and bidi override/isolate characters
+ * removed, capped at `USER_AGENT_MAX`; null when nothing is left.
+ */
+export function sanitizeUserAgent(value: string | null): string | null {
+  const clean = (value ?? "").replace(/[\p{Cc}\p{Cf}\u202A-\u202E\u2066-\u2069]/gu, "").slice(0, USER_AGENT_MAX);
+  return clean || null;
+}
+
+/**
+ * The client address of a request: the rightmost `x-forwarded-for` entry (the one appended by the reverse proxy directly in front of Weaver; earlier
+ * entries are client-controlled),
  * else `remote` (the socket address, where the runtime exposes one), else null. At most 64 characters.
  */
 export function requestIp(headers: Headers, remote: string | null = null): string | null {
-  const first = headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  const first = headers.get("x-forwarded-for")?.split(",").at(-1)?.trim();
   const ip = first || remote?.trim() || null;
   return ip ? ip.slice(0, 64) : null;
 }
@@ -130,7 +140,7 @@ export async function startWebLogin(deps: FormatDeps, repo: Repo, req: Request):
     pollHash: hashPollSecret(secret),
     repositoryId: repo.id,
     requesterIp: ip,
-    requesterUserAgent: req.headers.get("user-agent")?.slice(0, USER_AGENT_MAX) || null,
+    requesterUserAgent: sanitizeUserAgent(req.headers.get("user-agent")),
     expiresAt: new Date(now.getTime() + LOGIN_SESSION_TTL_MS),
   });
   return npmJson({

@@ -10,6 +10,7 @@ import {
   MAX_PENDING_LOGINS,
   MAX_PENDING_LOGINS_PER_IP,
   requestIp,
+  sanitizeUserAgent,
   sweepLoginSessions,
 } from "./login.js";
 
@@ -122,7 +123,7 @@ describe("npm web login", () => {
   it("records the requesting client's address and user agent", async () => {
     const res = await h.call("POST", "npm-hosted/-/v1/login", {
       json: {},
-      headers: { "x-forwarded-for": "203.0.113.5, 10.0.0.1", "user-agent": "npm/10.8.0 node/v22.0.0 linux x64" },
+      headers: { "x-forwarded-for": "10.0.0.1, 203.0.113.5", "user-agent": "npm/10.8.0 node/v22.0.0 linux x64" },
     });
     const id = ((await res.json()) as { loginUrl: string }).loginUrl.split("/").pop()!;
     const [row] = await h.db.select().from(npmLoginSession).where(eq(npmLoginSession.id, id));
@@ -130,8 +131,25 @@ describe("npm web login", () => {
     expect(row!.requesterUserAgent).toBe("npm/10.8.0 node/v22.0.0 linux x64");
   });
 
-  it("requestIp takes the first x-forwarded-for entry", () => {
-    expect(requestIp(new Headers({ "x-forwarded-for": " 198.51.100.7 , 10.0.0.1" }))).toBe("198.51.100.7");
+  it("strips control and format characters from the stored user agent", async () => {
+    const res = await h.call("POST", "npm-hosted/-/v1/login", {
+      json: {},
+      headers: { "user-agent": "npm/10\u0007\u00AD node\u0085" },
+    });
+    const id = ((await res.json()) as { loginUrl: string }).loginUrl.split("/").pop()!;
+    const [row] = await h.db.select().from(npmLoginSession).where(eq(npmLoginSession.id, id));
+    expect(row!.requesterUserAgent).toBe("npm/10 node");
+  });
+
+  it("sanitizeUserAgent removes bidi overrides and isolates", () => {
+    expect(sanitizeUserAgent("npm/10\u202Egnp\u2066x\u2069\u200B")).toBe("npm/10gnpx");
+    expect(sanitizeUserAgent("\u202E")).toBeNull();
+    expect(sanitizeUserAgent(null)).toBeNull();
+  });
+
+  it("requestIp takes the rightmost x-forwarded-for entry", () => {
+    expect(requestIp(new Headers({ "x-forwarded-for": "10.0.0.1 , 198.51.100.7 " }))).toBe("198.51.100.7");
+    expect(requestIp(new Headers({ "x-forwarded-for": "6.6.6.6, 198.51.100.7" }))).toBe("198.51.100.7");
     expect(requestIp(new Headers())).toBeNull();
   });
 
