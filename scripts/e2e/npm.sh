@@ -418,6 +418,14 @@ npm_install_one() {
 }
 npm_install_one npm-mirror >"$WORK/mirror.log" 2>&1 || fail "install via npm-mirror: $(tail -n 20 "$WORK/mirror.log")"
 [ "$(asset_count npm-mirror)" = "0" ] || fail "npm-mirror (cache off) stored $(asset_count npm-mirror) assets"
+if [ "$UPSTREAMS" = "real" ]; then
+  step "rules: a package outside npm-mirror's allow list is 404 and never reaches registry.npmjs.org"
+  bypass="$(cache_events npm-mirror bypass)"
+  [ "$bypass" -ge 1 ] || fail "rules: the allowed ${UP_PKG} recorded no bypass on npm-mirror"
+  expect_status 404 GET "$(reg npm-mirror)left-pad" -H "authorization: Bearer ${TOKEN_READ}"
+  expect_status 404 GET "$(reg npm-mirror)left-pad/-/left-pad-1.3.0.tgz" -H "authorization: Bearer ${TOKEN_READ}"
+  [ "$(cache_events npm-mirror bypass)" = "$bypass" ] || fail "rules: left-pad reached the upstream of npm-mirror"
+fi
 for i in 1 2; do
   npm_install_one npm-cached >"$WORK/cached.log" 2>&1 || fail "install $i via npm-cached: $(tail -n 20 "$WORK/cached.log")"
 done

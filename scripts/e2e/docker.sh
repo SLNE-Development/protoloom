@@ -264,6 +264,12 @@ fi
 if [ "$UPSTREAMS" = "real" ]; then
   [ "$(manifest_digest hub-mirror/alpine 3.20.3 "$TOKEN_READ")" = "$(manifest_digest hub-mirror/library/alpine 3.20.3 "$TOKEN_READ")" ] ||
     fail "hub-mirror: alpine and library/alpine resolve to different digests"
+  step "rules: an image outside docker-mirror's allow list is 404 and never reaches Docker Hub"
+  bypass="$(cache_events docker-mirror bypass)"
+  [ "$bypass" -ge 1 ] || fail "rules: the allowed ${UP_IMAGE} recorded no bypass on docker-mirror"
+  expect_status 404 GET "${URL}/v2/docker-mirror/library/busybox/manifests/latest" -u "e2e:${TOKEN_READ}" -H "Accept: ${MANIFEST_ACCEPT}"
+  expect_status 404 GET "${URL}/v2/docker-mirror/busybox/manifests/latest" -u "e2e:${TOKEN_READ}" -H "Accept: ${MANIFEST_ACCEPT}"
+  [ "$(cache_events docker-mirror bypass)" = "$bypass" ] || fail "rules: busybox reached the upstream of docker-mirror"
 fi
 
 step "upstream down: docker-cached keeps serving, docker-mirror fails"

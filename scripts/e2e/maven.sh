@@ -108,6 +108,15 @@ run_logged "prewarm" prewarm "$M2_SEED" "$SETTINGS"
 M2_SEED_MIRROR="$(fresh_dir m2-seed-mirror)"
 WEAVER_MIRROR_URL="https://repo.maven.apache.org/maven2/" run_logged "prewarm (mirror)" prewarm "$M2_SEED_MIRROR" "$FIX/settings-mirror.xml"
 
+# With real upstreams the upstream artifact is on Maven Central as well: the seeds must not hold it (a
+# plugin may have pulled its pom in), and settings.xml's `central` becomes an empty directory, so every
+# build that uses settings.xml can only get it through Weaver.
+CENTRAL_ARGS=()
+if [ "$UPSTREAMS" = "real" ]; then
+  rm -rf "$M2_SEED/$(echo "$UP_G" | tr . /)/$UP_A/$UP_V" "$M2_SEED_MIRROR/$(echo "$UP_G" | tr . /)/$UP_A/$UP_V"
+  CENTRAL_ARGS=(-De2e.central="$(file_url "$(fresh_dir no-central)")")
+fi
+
 # Echoes a fresh local repository holding only the prewarmed plugins of <seed> (default $M2_SEED).
 fresh_m2() {
   local dir
@@ -121,7 +130,7 @@ mvn_as() {
   local token="$1"
   shift
   LAST_M2="$(fresh_m2)"
-  WEAVER_USER=e2e WEAVER_PASS="$token" "$MVN" -B -ntp -s "$SETTINGS" -Dmaven.repo.local="$LAST_M2" "$@"
+  WEAVER_USER=e2e WEAVER_PASS="$token" "$MVN" -B -ntp -s "$SETTINGS" -Dmaven.repo.local="$LAST_M2" "${CENTRAL_ARGS[@]}" "$@"
 }
 
 # Deploys fixture <name> as <version> to Weaver repository <repo> with <token>; extra mvn args follow.
@@ -297,6 +306,15 @@ step "maven-mirror (cache off) serves ${UP_COORD} and stores nothing"
 run_logged "get via maven-mirror" get_as "$UP_COORD" maven-mirror "$TOKEN_READ"
 [ -f "$LAST_M2/$up_jar" ] || fail "maven-mirror: $UP_A-$UP_V.jar is missing"
 [ "$(asset_count maven-mirror)" = "0" ] || fail "maven-mirror: has $(asset_count maven-mirror) assets, want 0"
+
+if [ "$UPSTREAMS" = "real" ]; then
+  step "rules: a path outside maven-mirror's allow list is 404 and never reaches Maven Central"
+  bypass="$(cache_events maven-mirror bypass)"
+  [ "$bypass" -ge 1 ] || fail "rules: the allowed ${UP_COORD} recorded no bypass on maven-mirror"
+  maven_get 404 "maven-mirror/org/example/nope/1.0.0/nope-1.0.0.jar" "$TOKEN_READ"
+  maven_get 404 "maven-mirror/org/example/nope/1.0.0/nope-1.0.0.pom" "$TOKEN_READ"
+  [ "$(cache_events maven-mirror bypass)" = "$bypass" ] || fail "rules: org.example:nope reached the upstream of maven-mirror"
+fi
 
 step "maven-cached (cache on) serves ${UP_COORD} twice, cached in s3"
 for _ in 1 2; do
