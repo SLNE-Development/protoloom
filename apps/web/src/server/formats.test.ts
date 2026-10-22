@@ -31,11 +31,11 @@ describe("mountRest", () => {
   });
 });
 
-describe("placeholder mounts", () => {
-  it("answers 501 not_implemented", async () => {
-    const res = await getFormatHandler("maven")(req("/maven/x"), "x");
-    expect(res.status).toBe(501);
-    expect(await res.json()).toEqual({ error: { code: "not_implemented", message: "maven support is not installed" } });
+describe("maven mount", () => {
+  it("maven mount is served by the maven handler", async () => {
+    const res = await getFormatHandler("maven")(req("/maven/does-not-exist/x"), "does-not-exist/x");
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toContain("text/plain");
   });
 });
 

@@ -1,5 +1,6 @@
 import { createDockerHandler } from "@weaver/docker";
 import { getSettings, recordUsage, type FormatFactory, type FormatHandler } from "@weaver/core";
+import { createMavenHandler } from "@weaver/maven";
 import { createNpmHandler } from "@weaver/npm";
 import { env } from "@/env";
 import { handle } from "./http";
@@ -14,7 +15,7 @@ export type FormatMount = "maven" | "npm" | "docker";
  * entry; until then the mount answers 501.
  */
 export const FACTORIES: Record<FormatMount, FormatFactory | undefined> = {
-  maven: undefined,
+  maven: createMavenHandler,
   npm: createNpmHandler,
   docker: createDockerHandler,
 };

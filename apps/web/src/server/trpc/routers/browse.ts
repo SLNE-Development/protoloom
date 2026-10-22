@@ -1,6 +1,6 @@
 import { and, asc, count, countDistinct, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { compareVersions, isValidGroup, isValidName, parseCoordinate, type Principal, type Repo } from "@weaver/core";
+import { compareVersions, isValidGroup, isValidName, parseCoordinate, type Format, type Kind, type Principal, type RepositoryConfig } from "@weaver/core";
 import { protoArtifact, protoVersion, repository, type Db } from "@weaver/db";
 import { browseProcedure, router } from "../init";
 import {
@@ -27,6 +27,22 @@ export interface SearchResult {
   group: string;
   name: string;
   latestVersion: string;
+}
+
+/** A repository as browsers see it: no config or upstreams, which only admins also receive. */
+export interface BrowseRepo {
+  name: string;
+  format: Format;
+  kind: Kind;
+  description: string | null;
+  visibility: "public" | "private";
+  dockerRoot: boolean;
+  /** Mirrors only: whether caching is on. */
+  cacheEnabled: boolean | null;
+  /** Admins only. */
+  id?: string;
+  /** Admins only. */
+  config?: RepositoryConfig;
 }
 
 /** One artifact of a repository as `browse.artifacts` lists it. */
@@ -145,12 +161,27 @@ export const browseRouter = router({
     }));
   }),
 
-  /** One repository the caller may browse, for the per-format browse views; `NOT_FOUND` when hidden or missing. */
-  repository: browseProcedure.input(z.object({ name: repositoryName })).query(async ({ ctx, input }): Promise<Repo> => {
+  /**
+   * One repository the caller may browse, for the per-format browse views; `NOT_FOUND` when hidden
+   * or missing. Admins get the full repository including its config; everyone else a reduced view
+   * without mirror rules or cache settings.
+   */
+  repository: browseProcedure.input(z.object({ name: repositoryName })).query(async ({ ctx, input }): Promise<BrowseRepo> => {
     await requireBrowsableRepository(ctx.db, ctx.principal, input.name);
     const repo = await ctx.repos.get(input.name);
     if (!repo) throw notFound(`Repository ${input.name} was not found`);
-    return repo;
+    const cache = (repo.config as { cache?: { enabled?: boolean } }).cache;
+    const reduced: BrowseRepo = {
+      name: repo.name,
+      format: repo.format,
+      kind: repo.kind,
+      description: repo.description,
+      visibility: repo.visibility,
+      dockerRoot: repo.dockerRoot,
+      cacheEnabled: repo.kind === "mirror" ? cache?.enabled === true : null,
+    };
+    const isAdmin = ctx.principal.kind === "user" && ctx.principal.role === "admin";
+    return isAdmin ? { ...reduced, id: repo.id, config: repo.config } : reduced;
   }),
 
   /**
