@@ -1,24 +1,36 @@
 import type { PathRules } from "./config.js";
 
-const compiled = new Map<string, RegExp>();
-
-/** The anchored regex of a glob pattern where `*` matches any run of characters (dots and slashes too). */
-function globRegex(pattern: string): RegExp {
-  let re = compiled.get(pattern);
-  if (!re) {
-    const body = pattern
-      .split("*")
-      .map((part) => part.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"))
-      .join(".*");
-    re = new RegExp(`^${body}$`, "s");
-    if (compiled.size > 1000) compiled.clear();
-    compiled.set(pattern, re);
+/**
+ * Whether `subject` matches `pattern` as a whole, where `*` matches any run of characters (dots and
+ * slashes too) and every other character matches itself. Greedy two-pointer matching that only
+ * backtracks to the most recent `*`: O(pattern × subject) in the worst case, never exponential, so
+ * client-controlled subjects cannot cause catastrophic backtracking.
+ */
+export function globMatches(pattern: string, subject: string): boolean {
+  let p = 0;
+  let s = 0;
+  let star = -1;
+  let resume = 0;
+  while (s < subject.length) {
+    if (p < pattern.length && pattern[p] !== "*" && pattern[p] === subject[s]) {
+      p++;
+      s++;
+    } else if (p < pattern.length && pattern[p] === "*") {
+      star = p++;
+      resume = s;
+    } else if (star >= 0) {
+      p = star + 1;
+      s = ++resume;
+    } else {
+      return false;
+    }
   }
-  return re;
+  while (p < pattern.length && pattern[p] === "*") p++;
+  return p === pattern.length;
 }
 
 /** Glob match where `*` matches any run of characters; empty allow = allow all; deny wins. */
 export function matchesRules(rules: PathRules, subject: string): boolean {
-  if (rules.deny.some((p) => globRegex(p).test(subject))) return false;
-  return rules.allow.length === 0 || rules.allow.some((p) => globRegex(p).test(subject));
+  if (rules.deny.some((p) => globMatches(p, subject))) return false;
+  return rules.allow.length === 0 || rules.allow.some((p) => globMatches(p, subject));
 }

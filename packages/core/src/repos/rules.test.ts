@@ -28,5 +28,19 @@ describe("matchesRules", () => {
     expect(matchesRules({ allow: ["org.apache"], deny: [] }, "org.apache.commons")).toBe(false);
     expect(matchesRules({ allow: ["a.c"], deny: [] }, "abc")).toBe(false);
     expect(matchesRules({ allow: ["a+(b)?"], deny: [] }, "a+(b)?")).toBe(true);
+    expect(matchesRules({ allow: ["**a**"], deny: [] }, "xax")).toBe(true);
+    expect(matchesRules({ allow: ["a*"], deny: [] }, "")).toBe(false);
+    expect(matchesRules({ allow: ["*"], deny: [] }, "")).toBe(true);
+    expect(matchesRules({ allow: ["a*b*c"], deny: [] }, "aXbYbZc")).toBe(true);
+    expect(matchesRules({ allow: ["a*b*c"], deny: [] }, "aXbYbZ")).toBe(false);
+  });
+
+  it("finishes fast on pathological patterns and subjects", () => {
+    const pattern = `${"a*".repeat(50)}b`;
+    const subject = "a".repeat(20_000);
+    const started = performance.now();
+    expect(matchesRules({ allow: [pattern], deny: [] }, subject)).toBe(false);
+    expect(matchesRules({ allow: [], deny: [pattern] }, `${subject}b`)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });

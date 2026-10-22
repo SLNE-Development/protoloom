@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { RegistryError } from "../errors.js";
-import type { StoreId } from "../storage/index.js";
+import { STORE_IDS, type StoreId } from "../storage/index.js";
 
 /** The package format a repository serves. */
 export type Format = "maven" | "npm" | "docker" | "proto";
@@ -101,7 +101,7 @@ const pattern = z.string().trim().min(1).max(500);
 
 const cacheSchema = z.strictObject({
   enabled: z.boolean().default(false),
-  store: z.enum(["local", "s3"]).nullable().default(null),
+  store: z.enum(STORE_IDS).nullable().default(null),
   metadataTtlSeconds: z.number().int().min(0).default(1800),
   maxAgeDays: z.number().int().positive().nullable().default(null),
   maxSizeBytes: z.number().int().positive().nullable().default(null),
@@ -160,6 +160,60 @@ export function parseRepositoryConfig(format: Format, kind: Kind, raw: unknown):
     throw new RegistryError("invalid_request", `Invalid ${format} ${kind} repository config: ${summary}`, { issues });
   }
   return result.data as RepositoryConfig;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Reads a stored config without failing: valid values are kept, unknown keys are dropped and
+ * invalid values fall back to their defaults (one level deep into `cache` and `rules`).
+ * Returns the config and whether anything had to be repaired.
+ */
+export function salvageRepositoryConfig(format: Format, kind: Kind, raw: unknown): { config: RepositoryConfig; repaired: boolean } {
+  const schema = schemaFor(format, kind);
+  const strict = schema.safeParse(raw ?? {});
+  if (strict.success) return { config: strict.data as RepositoryConfig, repaired: false };
+
+  const valid = (candidate: Record<string, unknown>) => schema.safeParse(candidate).success;
+  const source = isPlainObject(raw) ? raw : {};
+  const out: Record<string, unknown> = { ...(defaultRepositoryConfig(format, kind) as Record<string, unknown>) };
+  for (const key of Object.keys(out)) {
+    if (!(key in source)) continue;
+    const value = source[key];
+    const fallback = out[key];
+    if (isPlainObject(fallback) && isPlainObject(value)) {
+      const nested: Record<string, unknown> = { ...fallback };
+      for (const sub of Object.keys(nested)) {
+        if (sub in value && valid({ ...out, [key]: { ...nested, [sub]: value[sub] } })) nested[sub] = value[sub];
+      }
+      out[key] = nested;
+    } else if (valid({ ...out, [key]: value })) {
+      out[key] = value;
+    }
+  }
+  return { config: schema.parse(out) as RepositoryConfig, repaired: true };
+}
+
+/**
+ * Lenient read of a stored `repository.config` (see {@link salvageRepositoryConfig}); logs a warning
+ * naming the repository when the stored value had to be repaired. Writes use the strict
+ * {@link parseRepositoryConfig}.
+ */
+export function readRepositoryConfig<F extends Format, K extends Kind>(repo: {
+  name: string;
+  format: F;
+  kind: K;
+  config: unknown;
+}): ConfigOf<F, K>;
+export function readRepositoryConfig(repo: { name: string; format: Format; kind: Kind; config: unknown }): RepositoryConfig;
+export function readRepositoryConfig(repo: { name: string; format: Format; kind: Kind; config: unknown }): RepositoryConfig {
+  const { config, repaired } = salvageRepositoryConfig(repo.format, repo.kind, repo.config);
+  if (repaired) {
+    console.warn(`weaver: repository ${repo.name} has an invalid stored config; unknown keys and invalid values were replaced by defaults`);
+  }
+  return config;
 }
 
 /** The default config of a `format` `kind` repository. */

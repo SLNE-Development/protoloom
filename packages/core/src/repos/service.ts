@@ -6,7 +6,16 @@ import { decryptSecret, encryptSecret } from "../crypto.js";
 import { RegistryError } from "../errors.js";
 import { isAdmin, type Principal } from "../permissions.js";
 import type { StoreId, StoreSet } from "../storage/index.js";
-import { FORMATS, KINDS, parseRepositoryConfig, type Format, type Kind, type RepositoryConfig } from "./config.js";
+import {
+  FORMATS,
+  KINDS,
+  parseRepositoryConfig,
+  readRepositoryConfig,
+  type Format,
+  type Kind,
+  type MirrorConfig,
+  type RepositoryConfig,
+} from "./config.js";
 
 /** A repository with its parsed config. */
 export interface Repo {
@@ -74,7 +83,11 @@ export interface RepoService {
   create(actor: Principal, input: CreateRepoInput): Promise<Repo>;
   /** Changes a repository; `not_found` when it does not exist. */
   update(actor: Principal, name: string, patch: UpdateRepoInput): Promise<Repo>;
-  /** Deletes a repository with all its content (rows cascade) and the stored objects of its assets and proto builds. */
+  /**
+   * Deletes a repository with all its content: first the rows (content, upstreams, memberships and
+   * key permissions cascade) in one transaction, then, after commit, the stored objects of its
+   * assets and proto builds. Objects that cannot be deleted are left orphaned and logged.
+   */
   delete(actor: Principal, name: string): Promise<void>;
   /** The upstreams of a mirror in order, without secrets. */
   upstreams(repoId: string): Promise<UpstreamView[]>;
@@ -109,7 +122,7 @@ function toRepo(row: RepositoryRow): Repo {
     description: row.description,
     visibility: row.visibility,
     dockerRoot: row.dockerRoot,
-    config: parseRepositoryConfig(row.format, row.kind, row.config),
+    config: readRepositoryConfig(row),
   };
 }
 
@@ -195,7 +208,10 @@ export function createRepoService(deps: { db: Db; stores: StoreSet; secretKey: B
     if (!isAdmin(actor)) throw new RegistryError("forbidden", "Only admins can manage repositories");
   }
 
-  /** Replaces the upstreams of a mirror; an omitted secret keeps the one stored for the same URL. */
+  /**
+   * Replaces the upstreams of a mirror. An omitted secret keeps the stored one only for an upstream
+   * with the same URL, auth type and (for basic auth) username; otherwise it is dropped.
+   */
   async function writeUpstreams(tx: Tx, repoId: string, inputs: UpstreamInput[], existing: UpstreamRow[]): Promise<void> {
     if (!Array.isArray(inputs) || inputs.length === 0) throw invalid("A mirror needs at least one upstream");
     const unused = [...existing];
@@ -212,8 +228,10 @@ export function createRepoService(deps: { db: Db; stores: StoreSet; secretKey: B
 
       const username = typeof input.username === "string" && input.username.trim() !== "" ? input.username.trim() : null;
       if (authType === "basic" && username === null) throw invalid(`Upstream ${url} uses basic auth and needs a username`);
+      const sameCredentials =
+        previous !== null && previous.authType === authType && (authType !== "basic" || previous.username === username);
       let secret: string | null;
-      if (input.secret === undefined) secret = previous?.secret ?? null;
+      if (input.secret === undefined) secret = sameCredentials ? previous.secret : null;
       else if (input.secret === null || input.secret === "") secret = null;
       else if (typeof input.secret === "string") secret = encryptSecret(secretKey, input.secret);
       else throw invalid(`Invalid secret for upstream ${url}`);
@@ -246,15 +264,31 @@ export function createRepoService(deps: { db: Db; stores: StoreSet; secretKey: B
     }
   }
 
-  /** Rejects making a repository the docker root unless it is docker and no other repository (`id` excluded, null for a new one) is. */
-  async function checkDockerRoot(tx: Tx, row: { id: string | null; format: Format }, dockerRoot: boolean | undefined): Promise<void> {
+  /**
+   * Rejects making a repository the docker root unless it is a docker mirror and no other
+   * repository (`id` excluded, null for a new one) is the root.
+   */
+  async function checkDockerRoot(
+    tx: Tx,
+    row: { id: string | null; format: Format; kind: Kind },
+    dockerRoot: boolean | undefined,
+  ): Promise<void> {
     if (!dockerRoot) return;
-    if (row.format !== "docker") throw invalid("Only docker repositories can be the docker root");
+    if (row.format !== "docker" || row.kind !== "mirror") throw invalid("Only a docker mirror can be the docker root");
     const [other] = await tx
       .select({ id: repository.id })
       .from(repository)
       .where(and(eq(repository.dockerRoot, true), row.id === null ? undefined : ne(repository.id, row.id)));
     if (other) throw dockerRootTaken();
+  }
+
+  /** Rejects a mirror cache store that is not configured on this server. */
+  function checkCacheStore(kind: Kind, config: RepositoryConfig): void {
+    if (kind !== "mirror") return;
+    const store = (config as MirrorConfig).cache.store;
+    if (store !== null && !stores.configured().includes(store)) {
+      throw invalid(`Cache store ${store} is not configured`, { field: "config.cache.store" });
+    }
   }
 
   /** Runs `change` and maps unique violations of the name and docker-root constraints to `invalid_request`. */
@@ -303,11 +337,12 @@ export function createRepoService(deps: { db: Db; stores: StoreSet; secretKey: B
       checkVisibility(input.visibility);
       const description = checkDescription(input.description) ?? null;
       const config = parseRepositoryConfig(format, kind, input.config);
+      checkCacheStore(kind, config);
 
       const row = await guarded(name, () =>
         db.transaction(async (tx) => {
           if (await findRow(tx, name)) throw nameTaken(name);
-          await checkDockerRoot(tx, { id: null, format }, input.dockerRoot);
+          await checkDockerRoot(tx, { id: null, format, kind }, input.dockerRoot);
           const [created] = await tx
             .insert(repository)
             .values({
@@ -338,7 +373,8 @@ export function createRepoService(deps: { db: Db; stores: StoreSet; secretKey: B
       requireAdmin(actor);
       checkVisibility(patch.visibility);
       const description = checkDescription(patch.description);
-      const row = await db.transaction(async (tx) => {
+      // Guarded: two concurrent updates can both pass checkDockerRoot; the unique index decides.
+      const row = await guarded(name, () => db.transaction(async (tx) => {
         const current = await findRow(tx, name, true);
         if (!current) throw new RegistryError("not_found", `Repository ${name} was not found`);
         if (current.kind !== "mirror" && patch.upstreams !== undefined) throw invalid("Only mirrors have upstreams");
@@ -346,7 +382,8 @@ export function createRepoService(deps: { db: Db; stores: StoreSet; secretKey: B
         const config =
           patch.config === undefined
             ? undefined
-            : parseRepositoryConfig(current.format, current.kind, deepMerge(current.config, patch.config));
+            : parseRepositoryConfig(current.format, current.kind, deepMerge(readRepositoryConfig(current), patch.config));
+        if (config !== undefined) checkCacheStore(current.kind, config);
         await checkDockerRoot(tx, current, patch.dockerRoot);
 
         const values: Partial<typeof repository.$inferInsert> = {};
@@ -365,7 +402,7 @@ export function createRepoService(deps: { db: Db; stores: StoreSet; secretKey: B
         if (patch.members !== undefined) await writeMembers(tx, current, patch.members);
         await recordAudit(tx, { actor, action: "repository.update", target: name, details: auditDetails(patch) });
         return updated;
-      });
+      }));
       return toRepo(row);
     },
 

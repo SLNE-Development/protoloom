@@ -150,16 +150,74 @@ describe("repository service", () => {
     expect(await codeOf(repos.update(admin, "mi", { upstreams: [] }))).toBe("invalid_request");
   });
 
+  const dockerMirror = (name: string, extra: Partial<CreateRepoInput> = {}) =>
+    create({ name, format: "docker", kind: "mirror", upstreams: [upstream("https://registry-1.docker.io")], ...extra });
+
   it("only one docker root (second create fails with invalid_request)", async () => {
-    await create({ name: "hub", format: "docker", kind: "mirror", upstreams: [upstream("https://registry-1.docker.io")], dockerRoot: true });
+    await dockerMirror("hub", { dockerRoot: true });
     expect((await repos.dockerRoot())?.name).toBe("hub");
+    expect(await codeOf(dockerMirror("quay", { dockerRoot: true }))).toBe("invalid_request");
+    await dockerMirror("quay");
+    expect(await codeOf(repos.update(admin, "quay", { dockerRoot: true }))).toBe("invalid_request");
+    await repos.update(admin, "hub", { dockerRoot: false });
+    await repos.update(admin, "quay", { dockerRoot: true });
+    expect((await repos.dockerRoot())?.name).toBe("quay");
+  });
+
+  it("only a docker mirror can be the docker root", async () => {
     expect(await codeOf(create({ name: "local", format: "docker", kind: "hosted", dockerRoot: true }))).toBe("invalid_request");
+    expect(await codeOf(create({ name: "dgroup", format: "docker", kind: "group", dockerRoot: true }))).toBe("invalid_request");
+    expect(await codeOf(create({ name: "mvn", format: "maven", kind: "mirror", upstreams: [upstream()], dockerRoot: true }))).toBe(
+      "invalid_request",
+    );
     await create({ name: "local", format: "docker", kind: "hosted" });
     expect(await codeOf(repos.update(admin, "local", { dockerRoot: true }))).toBe("invalid_request");
-    expect(await codeOf(create({ name: "mvn", format: "maven", kind: "hosted", dockerRoot: true }))).toBe("invalid_request");
-    await repos.update(admin, "hub", { dockerRoot: false });
-    await repos.update(admin, "local", { dockerRoot: true });
-    expect((await repos.dockerRoot())?.name).toBe("local");
+    expect(await repos.dockerRoot()).toBeNull();
+  });
+
+  it("lets only one of two concurrent updates make a repository the docker root", async () => {
+    await dockerMirror("one");
+    await dockerMirror("two");
+    const results = await Promise.allSettled([
+      repos.update(admin, "one", { dockerRoot: true }),
+      repos.update(admin, "two", { dockerRoot: true }),
+    ]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    expect(rejected.map((r) => (r.reason as RegistryError).code)).toEqual(["invalid_request"]);
+    const roots = await testDb.db.select({ name: repository.name }).from(repository).where(eq(repository.dockerRoot, true));
+    expect(roots).toHaveLength(1);
+  });
+
+  it("rejects a cache store that is not configured", async () => {
+    const config = { cache: { enabled: true, store: "s3" } };
+    expect(await codeOf(create({ name: "mi", format: "npm", kind: "mirror", upstreams: [upstream()], config }))).toBe(
+      "invalid_request",
+    );
+    await create({ name: "mi", format: "npm", kind: "mirror", upstreams: [upstream()], config: { cache: { store: "local" } } });
+    expect(await codeOf(repos.update(admin, "mi", { config }))).toBe("invalid_request");
+    expect((await repos.get("mi"))!.config).toMatchObject({ cache: { store: "local" } });
+  });
+
+  it("reads a stale stored config leniently and repairs it on the next update", async () => {
+    const [row] = await testDb.db
+      .insert(repository)
+      .values({
+        name: "stale",
+        format: "maven",
+        kind: "mirror",
+        config: { legacy: true, offline: "yes", cache: { enabled: true, metadataTtlSeconds: -1, old: 1 } },
+      })
+      .returning();
+    const repo = await repos.getById(row!.id);
+    expect(repo!.config).toEqual({
+      cache: { enabled: true, store: null, metadataTtlSeconds: 1800, maxAgeDays: null, maxSizeBytes: null },
+      offline: false,
+      rules: { allow: [], deny: [] },
+    });
+    expect((await repos.list()).map((r) => r.name)).toEqual(["stale"]);
+    const updated = await repos.update(admin, "stale", { config: { offline: true } });
+    expect(updated.config).toMatchObject({ offline: true, cache: { enabled: true } });
   });
 
   it('docker repo named "library" is rejected', async () => {
@@ -296,11 +354,23 @@ describe("repository service", () => {
     const secrets = await repos.upstreamsWithSecrets(mirror.id);
     expect(secrets.map((u) => [u.url, u.username, u.secret])).toEqual([
       ["https://repo1.maven.org/maven2", null, null],
-      ["https://maven.corp.example", "alice", "pw1"],
+      ["https://maven.corp.example", "alice", null],
     ]);
+
+    // Same URL, auth type and username: the secret stays; any of them changing drops it.
     await repos.update(admin, "m", {
-      upstreams: [{ url: "https://maven.corp.example", authType: "basic", username: "alice", secret: null }],
+      upstreams: [{ url: "https://maven.corp.example", authType: "basic", username: "bob", secret: "pw2" }],
     });
+    await repos.update(admin, "m", { upstreams: [{ url: "https://maven.corp.example", authType: "basic", username: "bob" }] });
+    expect((await repos.upstreamsWithSecrets(mirror.id)).map((u) => u.secret)).toEqual(["pw2"]);
+    await repos.update(admin, "m", { upstreams: [{ url: "https://maven.corp.example/", authType: "basic", username: "bob" }] });
+    expect((await repos.upstreamsWithSecrets(mirror.id)).map((u) => u.secret)).toEqual([null]);
+    await repos.update(admin, "m", {
+      upstreams: [{ url: "https://maven.corp.example", authType: "bearer", secret: "tok" }],
+    });
+    await repos.update(admin, "m", { upstreams: [{ url: "https://maven.corp.example", authType: "bearer" }] });
+    expect((await repos.upstreamsWithSecrets(mirror.id)).map((u) => u.secret)).toEqual(["tok"]);
+    await repos.update(admin, "m", { upstreams: [{ url: "https://maven.corp.example", authType: "basic", username: "x" }] });
     expect((await repos.upstreamsWithSecrets(mirror.id)).map((u) => u.secret)).toEqual([null]);
   });
 
