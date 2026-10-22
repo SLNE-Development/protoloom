@@ -11,12 +11,14 @@ export interface StubUpstream {
   hits: string[];
   /** While true every request answers 503. */
   down: boolean;
+  /** Paths (without a leading slash) that answer this status with an empty body instead of their file. */
+  statuses: Map<string, number>;
   close(): Promise<void>;
 }
 
 /** Starts a stub upstream on a free local port serving `files`. */
 export async function startStubUpstream(files: Record<string, string | Buffer> = {}): Promise<StubUpstream> {
-  const stub = { files: new Map(Object.entries(files)), hits: [] as string[], down: false };
+  const stub = { files: new Map(Object.entries(files)), hits: [] as string[], down: false, statuses: new Map<string, number>() };
   const server: Server = createServer((req, res) => {
     const path = (req.url ?? "/").split("?")[0]!;
     stub.hits.push(path);
@@ -29,6 +31,11 @@ export async function startStubUpstream(files: Record<string, string | Buffer> =
       key = decodeURIComponent(path.slice(1));
     } catch {
       res.writeHead(400).end("bad path");
+      return;
+    }
+    const status = stub.statuses.get(key);
+    if (status !== undefined) {
+      res.writeHead(status, status === 401 ? { "www-authenticate": 'Basic realm="upstream"' } : {}).end();
       return;
     }
     const body = stub.files.get(key);
