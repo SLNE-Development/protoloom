@@ -16,3 +16,4 @@ export * from "./content/assets.js";
 export * from "./content/usage.js";
 export * from "./mirror/index.js";
 export * from "./formats.js";
+export * from "./search/index.js";

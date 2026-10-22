@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, max, sql } from "drizzle-orm";
 import { z } from "zod";
-import { protoArtifact, protoBuild, protoBuildFile, protoDeletedRelease, protoDependency, protoVersion } from "@weaver/db";
+import { component, protoArtifact, protoBuild, protoBuildFile, protoDeletedRelease, protoDependency, protoVersion } from "@weaver/db";
 import { recordAudit } from "../audit.js";
 import { extractArchive, sha256 } from "../archive.js";
 import {
@@ -186,7 +186,8 @@ async function resolveDependencies(
 /**
  * Publishes an archive: checks permissions and the manifest, validates the protos against the
  * resolved dependencies, stores the blob, then records the build in one transaction serialized
- * per version by an advisory lock. A redeploy replaces build 1 and drops the old blob afterwards.
+ * per version by an advisory lock, upserting the version's `component` row. A redeploy replaces
+ * build 1 and drops the old blob afterwards.
  */
 export async function publish(ctx: RegistryContext, p: Principal, input: PublishInput): Promise<PublishResult> {
   if (p.kind === "anonymous") throw new RegistryError("unauthorized", "Publishing requires an API key");
@@ -268,6 +269,14 @@ export async function publish(ctx: RegistryContext, p: Principal, input: Publish
         .onConflictDoUpdate({ target: [protoVersion.artifactId, protoVersion.version], set: { updatedAt: now } })
         .returning({ id: protoVersion.id });
       const versionId = ver!.id;
+      // The version's component makes it searchable and carries its download count.
+      await tx
+        .insert(component)
+        .values({ repositoryId: repo.id, namespace: c.group, name: c.name, version: c.version })
+        .onConflictDoUpdate({
+          target: [component.repositoryId, component.namespace, component.name, component.version],
+          set: { updatedAt: now },
+        });
 
       let buildNumber = 1;
       if (existing) {

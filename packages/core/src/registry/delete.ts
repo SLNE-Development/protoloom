@@ -1,5 +1,5 @@
 import { and, desc, eq, sql } from "drizzle-orm";
-import { protoArtifact, protoBuild, protoDeletedRelease, protoVersion } from "@weaver/db";
+import { component, protoArtifact, protoBuild, protoDeletedRelease, protoVersion } from "@weaver/db";
 import { recordAudit } from "../audit.js";
 import { formatCoordinate, type Coordinate } from "../coordinates.js";
 import { RegistryError } from "../errors.js";
@@ -20,6 +20,20 @@ export interface VersionTarget {
 /** Takes the transaction-scoped advisory lock that serializes every mutation of one version. */
 export async function lockVersion(tx: Queryable, repositoryName: string, c: Coordinate): Promise<void> {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${versionLockKey(repositoryName, c)}))`);
+}
+
+/** Deletes the `component` row of version `c` in the repository. */
+async function deleteComponent(tx: Queryable, repositoryId: string, c: Coordinate): Promise<void> {
+  await tx
+    .delete(component)
+    .where(
+      and(
+        eq(component.repositoryId, repositoryId),
+        eq(component.namespace, c.group),
+        eq(component.name, c.name),
+        eq(component.version, c.version),
+      ),
+    );
 }
 
 /** Finds a version in a repository by coordinate; null when it does not exist. */
@@ -50,8 +64,8 @@ export async function findVersionTarget(
 }
 
 /**
- * Deletes a version with all its builds, files and dependency edges, and the artifact row once
- * its last version is gone. Deleting a release records a {@link deletedRelease} tombstone with
+ * Deletes a version with all its builds, files, dependency edges and its `component` row, and the
+ * artifact row once its last version is gone. Deleting a release records a {@link deletedRelease} tombstone with
  * the deleted archive's sha256, so a repository without redeploy only accepts it back unchanged.
  * Returns the blobs of the deleted builds; the caller removes them with
  * {@link deleteBlobLogged} after the transaction commits.
@@ -74,6 +88,7 @@ export async function deleteVersionRows(tx: Queryable, target: VersionTarget): P
       });
   }
   await tx.delete(protoVersion).where(eq(protoVersion.id, target.versionId));
+  await deleteComponent(tx, target.repositoryId, target.coordinate);
   const [remaining] = await tx
     .select({ id: protoVersion.id })
     .from(protoVersion)
@@ -84,15 +99,26 @@ export async function deleteVersionRows(tx: Queryable, target: VersionTarget): P
 }
 
 /**
- * Deletes one build (with its files and dependency edges) of a version. Returns its blob
- * for removal after commit, or null when the build does not exist.
+ * Deletes one build (with its files and dependency edges) of a version, and the version's
+ * `component` row once no build remains. Returns its blob for removal after commit, or null when
+ * the build does not exist.
  */
 export async function deleteBuildRow(tx: Queryable, versionId: string, buildNumber: number): Promise<BlobRef | null> {
   const [deleted] = await tx
     .delete(protoBuild)
     .where(and(eq(protoBuild.versionId, versionId), eq(protoBuild.buildNumber, buildNumber)))
     .returning({ store: protoBuild.store, storageKey: protoBuild.storageKey });
-  return deleted ?? null;
+  if (!deleted) return null;
+  const [remaining] = await tx.select({ id: protoBuild.id }).from(protoBuild).where(eq(protoBuild.versionId, versionId)).limit(1);
+  if (!remaining) {
+    const [version] = await tx
+      .select({ repositoryId: protoArtifact.repositoryId, group: protoArtifact.group, name: protoArtifact.name, version: protoVersion.version })
+      .from(protoVersion)
+      .innerJoin(protoArtifact, eq(protoArtifact.id, protoVersion.artifactId))
+      .where(eq(protoVersion.id, versionId));
+    if (version) await deleteComponent(tx, version.repositoryId, version);
+  }
+  return deleted;
 }
 
 /**

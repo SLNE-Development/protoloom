@@ -1,5 +1,6 @@
 import { and, asc, eq, max, sql } from "drizzle-orm";
-import { protoArtifact, protoBuild, protoBuildFile, protoDependency, protoVersion, repository, user } from "@weaver/db";
+import { component, protoArtifact, protoBuild, protoBuildFile, protoDependency, protoVersion, repository, user } from "@weaver/db";
+import { recordUsage } from "../content/usage.js";
 import { compareVersions, formatCoordinate, type Coordinate } from "../coordinates.js";
 import { RegistryError } from "../errors.js";
 import { canAccess, canForce, type Principal } from "../permissions.js";
@@ -48,6 +49,8 @@ export interface HostedArchive {
   sha256: string;
   filename: string;
   buildId: string;
+  /** The version's `component` row, for usage records; null for builds published before components were kept. */
+  componentId: string | null;
 }
 
 /** Unchecked reads of one hosted proto repo; the caller has already authorised the read. */
@@ -138,7 +141,18 @@ export function createHostedReader(ctx: Pick<RegistryContext, "db" | "stores">):
         .update(protoBuild)
         .set({ downloadCount: sql`${protoBuild.downloadCount} + 1`, lastDownloadedAt: new Date() })
         .where(eq(protoBuild.id, served.id));
-      return { data, sha256: served.sha256, filename: `${c.name}-${c.version}.tar.gz`, buildId: served.id };
+      const [row] = await db
+        .select({ id: component.id })
+        .from(component)
+        .where(
+          and(
+            eq(component.repositoryId, repo.id),
+            eq(component.namespace, c.group),
+            eq(component.name, c.name),
+            eq(component.version, c.version),
+          ),
+        );
+      return { data, sha256: served.sha256, filename: `${c.name}-${c.version}.tar.gz`, buildId: served.id, componentId: row?.id ?? null };
     },
   };
 }
@@ -209,7 +223,8 @@ export async function getManifest(
 
 /**
  * Returns the archive of a version's newest build (or the build `select` names, `not_found` once
- * it is gone) and counts the download on that build.
+ * it is gone), counts the download on that build and records it with {@link recordUsage}, which
+ * also counts it on the version's component.
  */
 export async function download(
   ctx: RegistryContext,
@@ -222,6 +237,14 @@ export async function download(
   const repo = await readableRepository(ctx.repos, p, repositoryName, c.group);
   const archive = await hosted.archive(repo, c, select);
   if (!archive) throw missingBuild(c, select.buildNumber);
+  await recordUsage(ctx.db, {
+    repositoryId: repo.id,
+    componentId: archive.componentId,
+    path: `${c.group}/${c.name}/${c.version}`,
+    action: "download",
+    bytes: archive.data.length,
+    principal: p,
+  });
   return { data: archive.data, sha256: archive.sha256, filename: archive.filename };
 }
 
