@@ -7,7 +7,16 @@ import { forwardUpstream } from "./upstream.js";
 /** The answer of `GET -/v1/search`, as registry.npmjs.org sends it. */
 export interface SearchResult {
   objects: Array<{
-    package: { name: string; version: string; description?: string; keywords?: string[]; date: string; links: Record<string, string> };
+    package: {
+      name: string;
+      version: string;
+      description?: string;
+      keywords?: string[];
+      date: string;
+      links: Record<string, string>;
+      /** Always present (npm search fails without it); `username` is the packument maintainer's `name`. */
+      maintainers: Array<{ username: string; email?: string }>;
+    };
     score: { final: number; detail: { quality: number; popularity: number; maintenance: number } };
     searchScore: number;
   }>;
@@ -57,6 +66,16 @@ function linksOf(doc: Packument): Record<string, string> {
   return links;
 }
 
+/** The packument's `maintainers` (`{ name, email }`) in search form (`{ username, email }`); empty when it has none. */
+function maintainersOf(doc: Packument): SearchObject["package"]["maintainers"] {
+  const listed = (doc as Record<string, unknown>)["maintainers"];
+  if (!Array.isArray(listed)) return [];
+  return listed.flatMap((m) => {
+    if (!isRecord(m) || typeof m["name"] !== "string") return [];
+    return [typeof m["email"] === "string" ? { username: m["name"], email: m["email"] } : { username: m["name"] }];
+  });
+}
+
 /** A hosted packument as a search entry: its `latest` version (else the last listed), score and search score `1`. */
 function hostedObject(doc: Packument): SearchObject {
   const versions = Object.keys(doc.versions ?? {});
@@ -64,7 +83,7 @@ function hostedObject(doc: Packument): SearchObject {
   const version = typeof tagged === "string" ? tagged : (versions[versions.length - 1] ?? "");
   const time = doc.time ?? {};
   const date = time[version] ?? time["modified"] ?? new Date(0).toISOString();
-  const pkg: SearchObject["package"] = { name: doc.name, version, date, links: linksOf(doc) };
+  const pkg: SearchObject["package"] = { name: doc.name, version, date, links: linksOf(doc), maintainers: maintainersOf(doc) };
   if (typeof doc.description === "string") pkg.description = doc.description;
   const keywords = doc["keywords"];
   if (Array.isArray(keywords)) pkg.keywords = keywords.filter((k): k is string => typeof k === "string");

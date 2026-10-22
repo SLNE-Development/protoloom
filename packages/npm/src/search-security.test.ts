@@ -97,6 +97,16 @@ describe("npm search", () => {
     expect(react.searchScore).toBe(1);
   });
 
+  // npm search reads `package.maintainers` of every entry (`data.maintainers.map(...)`); without it npm 11 exits 1
+  // without printing a result or an error.
+  it("every hosted entry lists its maintainers, as npm search requires", async () => {
+    const body = (await (await h.call("GET", "npm-hosted/-/v1/search?text=react")).json()) as SearchResult;
+    expect(body.objects.length).toBeGreaterThan(0);
+    for (const o of body.objects) expect(o.package.maintainers).toEqual([]);
+    const group = (await (await h.call("GET", "npm-group-hosted/-/v1/search?text=react")).json()) as SearchResult;
+    for (const o of group.objects) expect(Array.isArray(o.package.maintainers)).toBe(true);
+  });
+
   it("exact name ranks first", async () => {
     expect(await names(await h.call("GET", "npm-hosted/-/v1/search?text=react"))).toEqual(["react", "@acme/widgets", "alpha", "zeta-react"]);
   });
