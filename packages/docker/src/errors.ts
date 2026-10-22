@@ -33,14 +33,17 @@ export class DockerError extends Error {
   }
 }
 
-/** Renders a {@link DockerError} as an OCI error response with the `registry/2.0` version header. */
+/**
+ * Renders a {@link DockerError} as an OCI error response with the `registry/2.0` version header.
+ * A `content-length` among the error's headers is dropped: the length is that of the JSON body.
+ */
 export function errorResponse(e: DockerError): Response {
+  const headers = new Headers(e.headers);
+  headers.delete("content-length");
+  headers.set("content-type", "application/json");
+  headers.set("docker-distribution-api-version", "registry/2.0");
   return new Response(JSON.stringify({ errors: [{ code: e.code, message: e.message, detail: e.detail ?? null }] }), {
     status: e.status,
-    headers: {
-      ...e.headers,
-      "content-type": "application/json",
-      "docker-distribution-api-version": "registry/2.0",
-    },
+    headers,
   });
 }
