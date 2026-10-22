@@ -59,6 +59,9 @@ importers:
       '@weaver/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs
+      '@weaver/npm':
+        specifier: workspace:*
+        version: link:../../packages/npm
       '@weaver/ui':
         specifier: workspace:*
         version: link:../../packages/ui
