@@ -49,8 +49,8 @@ function compareCandidates(a: NpmCandidate, b: NpmCandidate): number {
 /** Days-based rules use at least one day, so a misconfigured 0 never sweeps everything. */
 const cutoff = (now: Date, days: number) => new Date(now.getTime() - Math.max(1, days) * DAY_MS);
 
-/** Whether a policy scoped to `prefix` (a plain prefix of `@scope/`; null = everything) covers a package of `namespace`. */
-const inScope = (prefix: string | null, namespace: string) => prefix === null || (namespace === "" ? "" : `@${namespace}/`).startsWith(prefix);
+/** Whether a policy scoped to `prefix` (a plain prefix of the full package name, `@scope/name` or `name`; null = everything) covers `full`. */
+const inScope = (prefix: string | null, full: string) => prefix === null || full.startsWith(prefix);
 
 /** The hosted versions of one package that still have a packument entry, newest publish first (ties by semver). */
 async function loadVersions(q: DbOrTx, repoId: string, full: string, doc: Packument): Promise<VersionState[]> {
@@ -80,15 +80,16 @@ function planPackage(
   policies: CleanupPolicyRow[],
   now: Date,
 ): NpmCandidate[] {
-  const { namespace } = splitName(full);
   const protectedVersions = taggedVersions(doc);
+  // The newest version always stays, so a package never ends up empty.
+  if (versions[0]) protectedVersions.add(versions[0].version);
   const found = new Map<string, NpmCandidate>();
   const add = (v: VersionState, reason: string) => {
     if (protectedVersions.has(v.version) || found.has(v.version)) return;
     found.set(v.version, { repository: repo.name, pkg: full, version: v.version, reason });
   };
   for (const policy of policies) {
-    if (!inScope(policy.groupPrefix, namespace)) continue;
+    if (!inScope(policy.groupPrefix, full)) continue;
     switch (policy.kind) {
       case "keep_last_versions": {
         const keep = Math.max(1, policy.value);
@@ -229,8 +230,8 @@ function toCleanupCandidate(c: NpmCandidate): CleanupCandidate {
 /**
  * The npm cleanup of hosted repositories: `keep_last_versions` keeps the newest N versions of each
  * package (by publish time, ties by semver) and `delete_not_downloaded` deletes versions not
- * downloaded for N days. Versions any dist-tag points at are never deleted, so a package never
- * loses `latest` or its last version. `groupPrefix` is a plain prefix of `@scope/`. A deleted
+ * downloaded for N days. Versions any dist-tag points at, and the newest version, are never deleted, so a package
+ * never loses `latest` or ends up empty. `groupPrefix` is a plain prefix of the full package name. A deleted
  * version leaves its `time` entry as tombstone. Cache content of mirrors is never touched.
  */
 export const npmCleanup: FormatCleanup = {

@@ -113,6 +113,29 @@ describe("npm cleanup", () => {
     expect((await run()).map((c) => c.key)).toEqual(["npm:@acme/ui@1.0.0"]);
   });
 
+  it("groupPrefix matches the full package name, so a name prefix is in scope", async () => {
+    for (const v of ["1.0.0", "2.0.0"]) {
+      await publish("react-dom", v);
+      await publish("@acme/ui-kit", v);
+      await publish("other", v);
+    }
+    await policy("keep_last_versions", 1, "react-");
+    expect((await run()).map((c) => c.key)).toEqual(["npm:react-dom@1.0.0"]);
+    await h.db.delete(cleanupPolicy);
+    await policy("keep_last_versions", 1, "@acme/ui-");
+    expect((await run()).map((c) => c.key)).toEqual(["npm:@acme/ui-kit@1.0.0"]);
+  });
+
+  it("always keeps the newest version, even without dist-tags", async () => {
+    await publish("@acme/ui", "1.0.0");
+    await publish("@acme/ui", "2.0.0");
+    await h.db.execute(sql`UPDATE npm_package SET document = jsonb_set(document, '{dist-tags}', '{}'::jsonb)`);
+    await policy("delete_not_downloaded", 30);
+    const deleted = await run(new Date(Date.now() + 90 * DAY));
+    expect(deleted.map((c) => c.key)).toEqual(["npm:@acme/ui@1.0.0"]);
+    expect(Object.keys((await packument("@acme/ui")).versions)).toEqual(["2.0.0"]);
+  });
+
   it("dryRun deletes nothing", async () => {
     for (const v of ["1.0.0", "2.0.0", "3.0.0"]) await publish("@acme/ui", v);
     await policy("keep_last_versions", 1);
