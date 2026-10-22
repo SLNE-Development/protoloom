@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { decryptSecret, deriveSecretKey, type Principal, type Role } from "@weaver/core";
-import { apikey, npmLoginSession, repository, user, type Db } from "@weaver/db";
+import { apikey, auditEvent, npmLoginSession, repository, user, type Db } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
 import { hashPollSecret, LOGIN_SESSION_TTL_MS } from "@weaver/npm";
 import { createAuth, type Auth, type AuthEnv } from "./auth";
-import { approveCliLogin, defaultCliLoginForm, denyCliLogin, loadCliLogin } from "./cli-login";
+import { approveCliLogin, compareClients, defaultCliLoginForm, denyCliLogin, loadCliLogin } from "./cli-login";
 import { getPrincipal } from "./principal";
 
 const env: AuthEnv = {
@@ -57,9 +57,19 @@ async function createSession(ttlMs = LOGIN_SESSION_TTL_MS): Promise<string> {
     id,
     pollHash: hashPollSecret(randomUUID()),
     repositoryId: npmRepoId,
+    requesterIp: "203.0.113.5",
+    requesterUserAgent: "npm/10.8.0 node/v22.0.0",
     expiresAt: new Date(Date.now() + ttlMs),
   });
   return id;
+}
+
+/** The audit events with `action`, optionally only those on `target`. */
+function auditOf(action: string, target?: string) {
+  return db
+    .select()
+    .from(auditEvent)
+    .where(and(eq(auditEvent.action, action), target === undefined ? undefined : eq(auditEvent.target, target)));
 }
 
 /** The API keys owned by `userId`. */
@@ -89,6 +99,7 @@ describe("cli login", () => {
     const view = await loadCliLogin(db, id);
     expect(view.state).toBe("pending");
     if (view.state !== "pending") return;
+    expect(view.requester).toEqual({ ip: "203.0.113.5", userAgent: "npm/10.8.0 node/v22.0.0" });
     expect(view.repository).toEqual({ name: "npm-hosted", format: "npm", kind: "hosted" });
     expect(view.createdAt).toBeInstanceOf(Date);
     expect(view.expiresAt.getTime()).toBeGreaterThan(Date.now());
@@ -176,6 +187,60 @@ describe("cli login", () => {
     ]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect(await keysOf(owner.userId)).toHaveLength(1);
+    // Every key created for this user but no longer present was revoked with an audit entry.
+    const created = (await auditOf("key.create")).filter((e) => e.actorId === owner.userId).map((e) => e.target);
+    const revoked = (await auditOf("key.revoke")).filter((e) => e.actorId === owner.userId).map((e) => e.target);
+    const [kept] = await keysOf(owner.userId);
+    expect(revoked.sort()).toEqual(created.filter((k) => k !== kept!.id).sort());
+  });
+
+  it("the losing key of an approval race is revoked with an audit entry", async () => {
+    const owner = await createUser("maintainer");
+    const id = await createSession();
+    // Another tab answers the session between the pending check and the approval.
+    const racing = approveCliLogin({ db, auth, secretKey }, owner, id, writeInput, {
+      ip: "203.0.113.5",
+      beforeApprove: () => denyCliLogin(db, id),
+    });
+    expect(await codeOf(racing)).toBe("NOT_FOUND");
+    expect(await keysOf(owner.userId)).toEqual([]);
+    const [created] = (await auditOf("key.create")).filter((e) => e.actorId === owner.userId);
+    const revoked = await auditOf("key.revoke", created!.target);
+    expect(revoked).toHaveLength(1);
+    expect(revoked[0]!.details).toMatchObject({ session: id });
+  });
+
+  it("approval stores the issued key and records requester and approver", async () => {
+    const owner = await createUser("maintainer");
+    const id = await createSession();
+    await approveCliLogin({ db, auth, secretKey }, owner, id, writeInput, { ip: "198.51.100.9" });
+    const [row] = await db.select().from(npmLoginSession).where(eq(npmLoginSession.id, id));
+    const [key] = await keysOf(owner.userId);
+    expect(row!.apiKeyId).toBe(key!.id);
+    const [entry] = await auditOf("npm.login.approve", id);
+    expect(entry).toMatchObject({ actorType: "user", actorId: owner.userId });
+    expect(entry!.details).toEqual({
+      session: id,
+      repository: "npm-hosted",
+      keyId: key!.id,
+      requesterIp: "203.0.113.5",
+      requesterUserAgent: "npm/10.8.0 node/v22.0.0",
+      approverIp: "198.51.100.9",
+    });
+  });
+
+  it("compares the requesting and approving client addresses", () => {
+    expect(compareClients("203.0.113.5", "203.0.113.5")).toBe("same");
+    expect(compareClients("203.0.113.5", "198.51.100.9")).toBe("different");
+    expect(compareClients(null, "198.51.100.9")).toBe("unknown");
+    expect(compareClients("203.0.113.5", null)).toBe("unknown");
+  });
+
+  it("pre-fills read when the login came from another address", () => {
+    const d = new Date("2026-10-22T12:00:00Z");
+    expect(defaultCliLoginForm("npm-hosted", "admin", d, "hosted", "same").permissions[0]!.access).toBe("write");
+    expect(defaultCliLoginForm("npm-hosted", "admin", d, "hosted", "different").permissions[0]!.access).toBe("read");
+    expect(defaultCliLoginForm("npm-hosted", "admin", d, "hosted", "unknown").permissions[0]!.access).toBe("read");
   });
 
   it("deny marks the row denied", async () => {

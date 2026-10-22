@@ -1,6 +1,8 @@
 "use server";
 
+import { headers } from "next/headers";
 import { TRPCError } from "@trpc/server";
+import { requestIp } from "@weaver/npm";
 import { keyFormSchema, toCreateKeyInput, type KeyFormValues } from "@/lib/api-keys";
 import { issueKeyInput } from "@/server/api-keys";
 import { approveCliLogin, denyCliLogin } from "@/server/cli-login";
@@ -19,7 +21,8 @@ function plausibleId(id: unknown): id is string {
 
 /**
  * Approves the npm login session `id` with a new key built from the submitted form `values`, owned by
- * the signed-in user (the session cookie; server actions only accept same-origin POSTs). Rejects when
+ * the signed-in user (the session cookie; server actions only accept same-origin POSTs), recording the
+ * browser's client address as the approver's. Rejects when
  * nobody is signed in, the form is invalid, the user's role doesn't allow the access asked for, or the
  * session is no longer pending.
  */
@@ -33,7 +36,7 @@ export async function approveCliLoginAction(id: string, values: KeyFormValues): 
   if (!input.success) return { ok: false, error: input.error.issues[0]?.message ?? "Check the form" };
   const { db, auth, secretKey } = getServerContext();
   try {
-    await approveCliLogin({ db, auth, secretKey }, principal, id, input.data);
+    await approveCliLogin({ db, auth, secretKey }, principal, id, input.data, { ip: requestIp(await headers()) });
     return { ok: true };
   } catch (error) {
     if (error instanceof TRPCError) return { ok: false, error: error.message };

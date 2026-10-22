@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { CircleAlertIcon, TriangleAlertIcon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@weaver/ui/components/alert";
 import { AuthFrame } from "@/components/auth-frame";
 import { FormatBadge, KindLabel } from "@/app/(app)/repositories/_components/format-badge";
-import { defaultCliLoginForm, loadCliLogin } from "@/server/cli-login";
+import { requestIp } from "@weaver/npm";
+import { compareClients, defaultCliLoginForm, loadCliLogin, type ClientMatch } from "@/server/cli-login";
 import { getServerContext } from "@/server/context";
 import { requireRole } from "@/server/session";
 import { browsableRepositories } from "@/server/trpc/helpers";
@@ -13,9 +15,29 @@ export const metadata: Metadata = { title: "Authorize npm login", robots: { inde
 
 const dateFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "medium", timeZone: "UTC" });
 
+/** The warning above the form, stronger when the login came from another address than this browser's. */
+const WARNING: Record<ClientMatch, { destructive: boolean; title: string; text: string }> = {
+  same: {
+    destructive: false,
+    title: "Only continue if you just ran npm login yourself",
+    text: "Check that the repository, the start time and the requesting client match the command you ran. If someone sent you this link, deny it: whoever started the login receives the token.",
+  },
+  different: {
+    destructive: true,
+    title: "This login was started from a different address than yours",
+    text: "If you did not just run npm login on another machine you control, deny it: whoever started the login receives the token. Write access is not pre-selected.",
+  },
+  unknown: {
+    destructive: false,
+    title: "Only continue if you just ran npm login yourself",
+    text: "Weaver could not compare the requesting client's address with yours. If someone sent you this link, deny it: whoever started the login receives the token. Write access is not pre-selected.",
+  },
+};
+
 /**
  * The page `npm login` opens in the browser (signed-in only): shows which npm repository the login
- * targets and when the CLI started it, and lets the user create a token with chosen permissions for
+ * targets, when and from which address and user agent the CLI started it next to the browser's own
+ * address (with a stronger warning and read-only defaults when they differ), and lets the user create a token with chosen permissions for
  * the waiting CLI, or deny the login.
  */
 export default async function CliLoginPage({ params }: { params: Promise<{ id: string }> }) {
@@ -37,7 +59,10 @@ export default async function CliLoginPage({ params }: { params: Promise<{ id: s
   }
 
   const repositories = (await browsableRepositories(db, principal)).map(({ name, format, kind }) => ({ name, format, kind }));
-  const defaults = defaultCliLoginForm(view.repository.name, user.role, new Date(), view.repository.kind);
+  const approverIp = requestIp(await headers());
+  const clients = compareClients(view.requester.ip, approverIp);
+  const defaults = defaultCliLoginForm(view.repository.name, user.role, new Date(), view.repository.kind, clients);
+  const warning = WARNING[clients];
 
   return (
     <AuthFrame
@@ -70,14 +95,20 @@ export default async function CliLoginPage({ params }: { params: Promise<{ id: s
             {dateFormat.format(view.createdAt)} UTC
           </time>
         </dd>
+        <dt className="text-muted-foreground">Requested from</dt>
+        <dd className="break-words" data-testid="cli-login-requester">
+          <span className="font-mono">{view.requester.ip ?? "unknown address"}</span>{" "}
+          <span className="text-muted-foreground">({view.requester.userAgent ?? "no user agent"})</span>
+        </dd>
+        <dt className="text-muted-foreground">Your address</dt>
+        <dd className="font-mono" data-testid="cli-login-approver">
+          {approverIp ?? "unknown"}
+        </dd>
       </dl>
-      <Alert>
+      <Alert variant={warning.destructive ? "destructive" : "default"} data-testid="cli-login-warning" data-clients={clients}>
         <TriangleAlertIcon />
-        <AlertTitle>Only continue if you just ran npm login yourself</AlertTitle>
-        <AlertDescription>
-          Check that the repository and the start time match the command you ran. If someone sent you this link, deny it:
-          whoever started the login receives the token.
-        </AlertDescription>
+        <AlertTitle>{warning.title}</AlertTitle>
+        <AlertDescription>{warning.text}</AlertDescription>
       </Alert>
       <CliLoginForm id={id} defaults={defaults} repositories={repositories} role={user.role} />
     </AuthFrame>

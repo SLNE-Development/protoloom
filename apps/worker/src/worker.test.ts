@@ -8,6 +8,7 @@ import { asc, eq, sql } from "drizzle-orm";
 import {
   asset,
   cleanupPolicy,
+  npmLoginSession,
   protoArtifact as artifact,
   protoBuild as build,
   protoVersion as version,
@@ -103,16 +104,17 @@ describe("worker", () => {
     expect(remaining.map((r) => r.n)).toEqual([3, 4]);
   });
 
-  it("registers one daily cleanup and one hourly eviction scheduler when started twice", async () => {
+  it("registers the daily cleanup, hourly eviction and npm login sweep schedulers once when started twice", async () => {
     await start();
     await start();
 
     const schedulers = await queue.getJobSchedulers();
-    expect(schedulers).toHaveLength(2);
+    expect(schedulers).toHaveLength(3);
     expect(schedulers).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: "cleanup-daily", pattern: "0 3 * * *" }),
         expect.objectContaining({ key: "evict-hourly", pattern: "17 * * * *" }),
+        expect.objectContaining({ key: "npm-login-sweep", pattern: "*/5 * * * *" }),
       ]),
     );
   });
@@ -143,6 +145,24 @@ describe("worker", () => {
 
     expect(status).toEqual({ state: "completed", result: { repositories: 1, assetsDeleted: 1, bytesFreed: 3 }, failedReason: null });
     expect(await testDb.db.select().from(asset).where(eq(asset.repositoryId, repo!.id))).toHaveLength(0);
+  });
+
+  it("runs an npm:login-sweep job and deletes expired login sessions", async () => {
+    const [repo] = await testDb.db.insert(repository).values({ name: "npm", format: "npm", kind: "hosted" }).returning();
+    const session = (id: string, offsetMs: number) => ({
+      id,
+      pollHash: id.padEnd(64, "0"),
+      repositoryId: repo!.id,
+      expiresAt: new Date(Date.now() + offsetMs),
+    });
+    await testDb.db.insert(npmLoginSession).values([session("expired", -60_000), session("live", 600_000)]);
+
+    await start();
+    const job = await queue.add("npm:login-sweep", { kind: "npm:login-sweep" });
+    const status = await waitForFinish(job.id!);
+
+    expect(status).toEqual({ state: "completed", result: { sessions: 1, keys: 0 }, failedReason: null });
+    expect((await testDb.db.select({ id: npmLoginSession.id }).from(npmLoginSession)).map((r) => r.id)).toEqual(["live"]);
   });
 
   it("completes a docker:gc job as a no-op until the docker format handles it", async () => {

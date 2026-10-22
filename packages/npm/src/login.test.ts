@@ -1,9 +1,17 @@
+import { randomUUID } from "node:crypto";
 import { encryptSecret } from "@weaver/core";
-import { npmLoginSession, user } from "@weaver/db";
-import { eq } from "drizzle-orm";
+import { apikey, auditEvent, npmLoginSession, user } from "@weaver/db";
+import { and, eq, gt, like } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createHarness, type Harness } from "./test/harness.js";
-import { hashPollSecret, LOGIN_SESSION_TTL_MS } from "./login.js";
+import {
+  hashPollSecret,
+  LOGIN_SESSION_TTL_MS,
+  MAX_PENDING_LOGINS,
+  MAX_PENDING_LOGINS_PER_IP,
+  requestIp,
+  sweepLoginSessions,
+} from "./login.js";
 
 let h: Harness;
 
@@ -24,9 +32,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** Starts a web login on `npm-hosted` and returns the session id and the poll secret. */
-async function startLogin(): Promise<{ id: string; secret: string; loginUrl: string; doneUrl: string }> {
-  const res = await h.call("POST", "npm-hosted/-/v1/login", { json: { hostname: "laptop" } });
+/** Inserts a bare API key row owned by `userId` and returns its id. */
+async function insertKey(userId: string): Promise<string> {
+  const id = randomUUID();
+  const now = new Date();
+  await h.db.insert(apikey).values({ id, referenceId: userId, key: `hash-${id}`, createdAt: now, updatedAt: now });
+  return id;
+}
+
+/** Starts a web login on `npm-hosted` (optionally from `ip`) and returns the session id and the poll secret. */
+async function startLogin(ip?: string): Promise<{ id: string; secret: string; loginUrl: string; doneUrl: string }> {
+  const headers = ip ? { "x-forwarded-for": ip } : undefined;
+  const res = await h.call("POST", "npm-hosted/-/v1/login", { json: { hostname: "laptop" }, headers });
   expect(res.status).toBe(200);
   const body = (await res.json()) as { loginUrl: string; doneUrl: string };
   const id = body.loginUrl.split("/").pop()!;
@@ -102,12 +119,101 @@ describe("npm web login", () => {
     expect(await res.json()).toEqual({ error: "login session not found or expired" });
   });
 
-  it("starting a login deletes expired sessions", async () => {
+  it("records the requesting client's address and user agent", async () => {
+    const res = await h.call("POST", "npm-hosted/-/v1/login", {
+      json: {},
+      headers: { "x-forwarded-for": "203.0.113.5, 10.0.0.1", "user-agent": "npm/10.8.0 node/v22.0.0 linux x64" },
+    });
+    const id = ((await res.json()) as { loginUrl: string }).loginUrl.split("/").pop()!;
+    const [row] = await h.db.select().from(npmLoginSession).where(eq(npmLoginSession.id, id));
+    expect(row!.requesterIp).toBe("203.0.113.5");
+    expect(row!.requesterUserAgent).toBe("npm/10.8.0 node/v22.0.0 linux x64");
+  });
+
+  it("requestIp takes the first x-forwarded-for entry", () => {
+    expect(requestIp(new Headers({ "x-forwarded-for": " 198.51.100.7 , 10.0.0.1" }))).toBe("198.51.100.7");
+    expect(requestIp(new Headers())).toBeNull();
+  });
+
+  it("caps pending logins per client address", async () => {
+    for (let i = 0; i < MAX_PENDING_LOGINS_PER_IP; i++) await startLogin("192.0.2.77");
+    const res = await h.call("POST", "npm-hosted/-/v1/login", { json: {}, headers: { "x-forwarded-for": "192.0.2.77" } });
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({ error: "too many pending logins; try again later" });
+    expect(res.headers.get("retry-after")).toBe("60");
+    await startLogin("192.0.2.78");
+  });
+
+  it("caps pending logins globally", async () => {
+    const [repoRow] = await h.db.select({ id: npmLoginSession.repositoryId }).from(npmLoginSession).limit(1);
+    const live = await h.db.$count(npmLoginSession, gt(npmLoginSession.expiresAt, new Date()));
+    const fill = Array.from({ length: MAX_PENDING_LOGINS - live }, () => ({
+      id: `fill-${randomUUID()}`,
+      pollHash: hashPollSecret(randomUUID()),
+      repositoryId: repoRow!.id,
+      expiresAt: new Date(Date.now() + LOGIN_SESSION_TTL_MS),
+    }));
+    await h.db.insert(npmLoginSession).values(fill);
+    try {
+      const res = await h.call("POST", "npm-hosted/-/v1/login", { json: {} });
+      expect(res.status).toBe(429);
+    } finally {
+      await h.db.delete(npmLoginSession).where(like(npmLoginSession.id, "fill-%"));
+    }
+    expect((await h.call("POST", "npm-hosted/-/v1/login", { json: {} })).status).toBe(200);
+  });
+
+  it("starting a login leaves expired sessions to the sweep", async () => {
     const { id } = await startLogin();
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 11 * 60_000);
     await startLogin();
-    expect(await h.db.select().from(npmLoginSession).where(eq(npmLoginSession.id, id))).toEqual([]);
+    expect(await h.db.select().from(npmLoginSession).where(eq(npmLoginSession.id, id))).toHaveLength(1);
+  });
+
+  it("the sweep deletes expired sessions and keys nobody collected", async () => {
+    const now = new Date();
+    const keyId = await insertKey("user-writer");
+    const keep = await insertKey("user-writer");
+    const [repoRow] = await h.db.select({ id: npmLoginSession.repositoryId }).from(npmLoginSession).limit(1);
+    const row = (id: string, expiresAt: Date, extra: Partial<typeof npmLoginSession.$inferInsert> = {}) => ({
+      id,
+      pollHash: hashPollSecret(randomUUID()),
+      repositoryId: repoRow!.id,
+      expiresAt,
+      ...extra,
+    });
+    const approved = { status: "approved" as const, userId: "user-writer", tokenCiphertext: "x" };
+    await h.db.insert(npmLoginSession).values([
+      row("sweep-approved", new Date(now.getTime() - 1_000), { ...approved, apiKeyId: keyId }),
+      row("sweep-pending", new Date(now.getTime() - 1_000)),
+      row("sweep-live", new Date(now.getTime() + 60_000), { ...approved, apiKeyId: keep }),
+    ]);
+    const result = await sweepLoginSessions(h.db, now);
+    expect(result.keys).toBe(1);
+    expect(result.sessions).toBeGreaterThanOrEqual(2);
+    const left = (await h.db.select({ id: npmLoginSession.id }).from(npmLoginSession)).map((r) => r.id);
+    expect(left).toContain("sweep-live");
+    expect(left).not.toContain("sweep-approved");
+    expect(left).not.toContain("sweep-pending");
+    expect(await h.db.select().from(apikey).where(eq(apikey.id, keyId))).toEqual([]);
+    expect(await h.db.select().from(apikey).where(eq(apikey.id, keep))).toHaveLength(1);
+    const audit = await h.db.select().from(auditEvent).where(and(eq(auditEvent.action, "key.revoke"), eq(auditEvent.target, keyId)));
+    expect(audit).toHaveLength(1);
+    expect(audit[0]!.actorType).toBe("system");
+  });
+
+  it("polling an expired approved session deletes its key", async () => {
+    const { id, secret } = await startLogin();
+    const keyId = await insertKey("user-writer");
+    await h.db
+      .update(npmLoginSession)
+      .set({ status: "approved", userId: "user-writer", apiKeyId: keyId, tokenCiphertext: encryptSecret(h.deps.secretKey, "wv_tok") })
+      .where(eq(npmLoginSession.id, id));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 11 * 60_000);
+    expect((await poll(secret)).status).toBe(404);
+    expect(await h.db.select().from(apikey).where(eq(apikey.id, keyId))).toEqual([]);
   });
 
   it("poll secret is not stored in plain text", async () => {
@@ -143,5 +249,31 @@ describe("npm legacy login", () => {
     expect(session.status).toBe(401);
     const missing = await h.call("PUT", "npm-hosted/-/user/org.couchdb.user:writer", { json: { name: "writer" } });
     expect(missing.status).toBe(401);
+  });
+
+  it("legacy login rejects passwords with spaces or non-ASCII before resolving them", async () => {
+    const spy = vi.spyOn(h.deps, "principal");
+    try {
+      for (const password of ["tok writer", "tök", "tok\twriter", "tok\r\nx-evil: 1"]) {
+        const res = await h.call("PUT", "npm-hosted/-/user/org.couchdb.user:writer", { json: { name: "writer", password } });
+        expect(res.status).toBe(401);
+      }
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("legacy login answers 400 on bad JSON and 413 on a huge body", async () => {
+    const bad = await h.call("PUT", "npm-hosted/-/user/org.couchdb.user:writer", {
+      body: "{not json",
+      headers: { "content-type": "application/json" },
+    });
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toEqual({ error: "invalid JSON body" });
+    const huge = await h.call("PUT", "npm-hosted/-/user/org.couchdb.user:writer", {
+      json: { name: "writer", password: h.tokens.writer, pad: "x".repeat(70 * 1024) },
+    });
+    expect(huge.status).toBe(413);
   });
 });

@@ -1,5 +1,12 @@
 export { createNpmHandler } from "./handler.js";
-export { hashPollSecret, LOGIN_SESSION_TTL_MS } from "./login.js";
+export {
+  hashPollSecret,
+  LOGIN_SESSION_TTL_MS,
+  MAX_PENDING_LOGINS,
+  MAX_PENDING_LOGINS_PER_IP,
+  requestIp,
+  sweepLoginSessions,
+} from "./login.js";
 export { createNpmStore, formatRev, type NpmStore } from "./store.js";
 
 export type { PackageName } from "./names.js";

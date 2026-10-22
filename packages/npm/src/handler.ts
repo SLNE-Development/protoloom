@@ -87,7 +87,7 @@ export const createNpmHandler: FormatFactory = (deps) => {
       if (route.kind === "ping") return read ? npmJson({}) : methodNotAllowed("GET, HEAD");
       if (route.kind === "unsupported") return npmError(404, "not supported by Weaver");
       if (route.kind === "whoami") return read ? await handleWhoami(deps, req) : methodNotAllowed("GET, HEAD");
-      if (route.kind === "login") return method === "POST" ? await startWebLogin(deps, repo) : methodNotAllowed("POST");
+      if (route.kind === "login") return method === "POST" ? await startWebLogin(deps, repo, req) : methodNotAllowed("POST");
       if (route.kind === "loginDone") return read ? await pollWebLogin(deps, repo, route.secret) : methodNotAllowed("GET, HEAD");
       if (route.kind === "couchUser") return method === "PUT" ? await legacyLogin(deps, req, route.user) : methodNotAllowed("PUT");
       if (route.kind === "search") {
