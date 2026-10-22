@@ -10,6 +10,8 @@ export interface AccessEntry {
   /** The image name as the client sends it (e.g. `myrepo/app` or `library/nginx`). */
   name: string;
   actions: DockerAction[];
+  /** The id of the repository the name resolved to at issuance; absent when it resolved to none. */
+  repo?: string;
 }
 
 /** The claims of a Weaver docker bearer token. */
@@ -23,14 +25,15 @@ export interface DockerClaims {
   nbf: number;
   exp: number;
   jti: string;
-  /** Only the actions actually granted at issuance. */
+  /** One entry per requested name, holding only the actions actually granted at issuance (possibly none). */
   access: AccessEntry[];
   /** Who the token was issued to, for authorization and usage attribution. */
   wv: { kind: "anonymous" | "user" | "apikey"; userId?: string; keyId?: string; role?: Role };
 }
 
 const ACTIONS: readonly DockerAction[] = ["pull", "push", "delete"];
-const LEEWAY_SECONDS = 30;
+/** Clock skew tolerated on `nbf`; `exp` is enforced exactly. */
+const NBF_LEEWAY_SECONDS = 30;
 const HEADER = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
 
 /** Derives the 32-byte HS256 key for docker tokens from the server key (HKDF-SHA256, info "weaver-docker-token"). */
@@ -82,7 +85,7 @@ function isClaims(v: unknown): v is DockerClaims {
 
 /**
  * Verifies a token signed by {@link signToken}: returns its claims, or null when the signature is bad,
- * the audience differs, it expired or is not yet valid (each with a 30 s leeway).
+ * the header is not HS256, the audience differs, it expired (no leeway) or is not yet valid (30 s leeway).
  */
 export function verifyToken(key: Buffer, token: string, aud: string, now: Date): DockerClaims | null {
   if (!looksLikeJwt(token)) return null;
@@ -93,7 +96,7 @@ export function verifyToken(key: Buffer, token: string, aud: string, now: Date):
   const claims = parseJson(payload);
   if (!isClaims(claims) || claims.aud !== aud) return null;
   const t = Math.floor(now.getTime() / 1000);
-  if (t > claims.exp + LEEWAY_SECONDS || t < claims.nbf - LEEWAY_SECONDS) return null;
+  if (t > claims.exp || t < claims.nbf - NBF_LEEWAY_SECONDS) return null;
   return claims;
 }
 

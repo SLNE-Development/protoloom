@@ -69,7 +69,7 @@ function segment(value: string): string {
 }
 
 /**
- * Browse pages of public repositories: each repository, and each artifact and version that has a
+ * Browse pages of public proto repositories (the only format with a browse view so far): each repository, and each artifact and version that has a
  * published build, sorted by path. Private repositories never appear.
  */
 export async function listPublicBrowsePages(db: Db): Promise<BrowsePage[]> {
@@ -77,7 +77,8 @@ export async function listPublicBrowsePages(db: Db): Promise<BrowsePage[]> {
     db
       .select({ name: repository.name })
       .from(repository)
-      .where(eq(repository.visibility, "public"))
+      // Only formats with a browse view (`BROWSE_VIEWS`) have pages worth crawling; so far proto.
+      .where(and(eq(repository.visibility, "public"), eq(repository.format, "proto")))
       .orderBy(asc(repository.name)),
     db
       .select({

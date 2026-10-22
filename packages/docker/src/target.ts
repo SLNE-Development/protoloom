@@ -15,7 +15,7 @@ export interface Target {
  * otherwise the docker root mirror with the full name. Null when neither exists (`NAME_UNKNOWN`);
  * throws `NAME_INVALID` when only a repository name is given.
  */
-export async function resolveTarget(repos: RepoService, name: string): Promise<Target | null> {
+export async function resolveTarget(repos: Pick<RepoService, "get" | "dockerRoot">, name: string): Promise<Target | null> {
   const slash = name.indexOf("/");
   const first = slash < 0 ? name : name.slice(0, slash);
   const repo = await repos.get(first);

@@ -1,7 +1,7 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RegistryError, type FormatDeps, type FormatFactory, type FormatHandler } from "@weaver/core";
-import { anonymousDenial, challenge, identify, requireAccess, scopeFor } from "./auth/authorize.js";
+import { challenge, identify, requireAccess, scopeChallenge, scopeFor } from "./auth/authorize.js";
 import type { DockerAction } from "./auth/jwt.js";
 import { handleToken } from "./auth/token-endpoint.js";
 import { DockerError, errorResponse } from "./errors.js";
@@ -125,11 +125,11 @@ export function createDockerHandlerWith(deps: FormatDeps, opts: DockerOptions): 
     try {
       target = await resolveTarget(deps.repos, route.name);
     } catch (err) {
-      if (anonymous) throw anonymousDenial(deps, caller, scope);
+      if (anonymous) throw scopeChallenge(deps, caller, scope);
       throw err;
     }
     if (!target) {
-      if (anonymous) throw anonymousDenial(deps, caller, scope);
+      if (anonymous) throw scopeChallenge(deps, caller, scope);
       throw new DockerError(404, "NAME_UNKNOWN", "repository name not known to registry", { name: route.name });
     }
     requireAccess(deps, caller, target, action);

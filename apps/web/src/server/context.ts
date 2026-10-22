@@ -22,7 +22,7 @@ export interface ServerContext {
   /** The configured object stores; hosted writes go to `stores.primary`. */
   stores: StoreSet;
   auth: Auth;
-  /** The registry service over `db` and `stores`. */
+  /** The hosted proto registry over `db`, `stores` and `repos`. */
   registry: Registry;
   /** AES key for upstream credentials, derived once from `BETTER_AUTH_SECRET`. */
   secretKey: Buffer;
@@ -57,7 +57,7 @@ export function getServerContext(): ServerContext {
       db,
       stores,
       auth: createAuth(db),
-      registry: createRegistry({ db, stores }),
+      registry: createRegistry({ db, stores, repos }),
       secretKey,
       repos,
       assets,

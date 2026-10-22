@@ -1,6 +1,6 @@
 import { and, asc, count, countDistinct, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { compareVersions, isValidGroup, isValidName, parseCoordinate, type Principal } from "@weaver/core";
+import { compareVersions, isValidGroup, isValidName, parseCoordinate, type Principal, type Repo } from "@weaver/core";
 import { protoArtifact, protoVersion, repository, type Db } from "@weaver/db";
 import { browseProcedure, router } from "../init";
 import {
@@ -9,6 +9,7 @@ import {
   coordinateString,
   coordinateText,
   escapeLike,
+  notFound,
   repositoryName,
   requireBrowsableRepository,
   type RepositoryRow,
@@ -128,18 +129,28 @@ export async function searchArtifacts(
 
 /** Read-only browsing of repositories, artifacts, versions and files, scoped to what the caller may read. */
 export const browseRouter = router({
-  /** Repositories the caller may browse, by name, with artifact and version counts. */
+  /** Repositories the caller may browse, by name, with format, kind and (proto) artifact and version counts. */
   repositories: browseProcedure.query(async ({ ctx }) => {
     const repos = await browsableRepositories(ctx.db, ctx.principal);
     const counts = await countsByRepository(ctx.db, ctx.principal, repos);
     return repos.map((repo) => ({
       name: repo.name,
+      format: repo.format,
+      kind: repo.kind,
       description: repo.description,
       visibility: repo.visibility,
       artifactCount: counts.get(repo.id)?.artifactCount ?? 0,
       versionCount: counts.get(repo.id)?.versionCount ?? 0,
       createdAt: repo.createdAt,
     }));
+  }),
+
+  /** One repository the caller may browse, for the per-format browse views; `NOT_FOUND` when hidden or missing. */
+  repository: browseProcedure.input(z.object({ name: repositoryName })).query(async ({ ctx, input }): Promise<Repo> => {
+    await requireBrowsableRepository(ctx.db, ctx.principal, input.name);
+    const repo = await ctx.repos.get(input.name);
+    if (!repo) throw notFound(`Repository ${input.name} was not found`);
+    return repo;
   }),
 
   /**
@@ -153,11 +164,11 @@ export const browseRouter = router({
       return searchArtifacts(ctx.db, ctx.principal, repos, input.query, input.limit);
     }),
 
-  /** The artifacts of a repository, optionally filtered by a case-insensitive `search` on group or name. */
+  /** The artifacts of a proto repository (`BAD_REQUEST` for other formats), optionally filtered by a case-insensitive `search` on group or name. */
   artifacts: browseProcedure
     .input(z.object({ repository: repositoryName, search: z.string().trim().max(200).optional() }))
     .query(async ({ ctx, input }): Promise<ArtifactSummary[]> => {
-      const repo = await requireBrowsableRepository(ctx.db, ctx.principal, input.repository);
+      const repo = await requireBrowsableRepository(ctx.db, ctx.principal, input.repository, { format: "proto" });
       const pattern = input.search ? `%${escapeLike(input.search)}%` : null;
       const rows = await ctx.db
         .select({ id: protoArtifact.id, group: protoArtifact.group, name: protoArtifact.name })

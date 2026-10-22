@@ -105,11 +105,20 @@ export function firstFile(nodes: FileTreeNode[]): string | null {
   return null;
 }
 
+/** The artifacts whose `group:name` contains `q` (case-insensitive); all of them for an empty `q`. */
+export function filterArtifacts<T extends { group: string; name: string }>(artifacts: T[], q: string): T[] {
+  const needle = q.trim().toLowerCase();
+  if (needle === "") return artifacts;
+  return artifacts.filter((a) => `${a.group}:${a.name}`.toLowerCase().includes(needle));
+}
+
 /** Human-readable size in binary units. */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  if (bytes < 1024 ** 3) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  if (bytes < 1024 ** 4) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  return `${(bytes / 1024 ** 4).toFixed(1)} TiB`;
 }
 
 const RELATIVE = new Intl.RelativeTimeFormat("en", { numeric: "auto" });

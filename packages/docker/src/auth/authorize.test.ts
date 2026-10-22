@@ -107,10 +107,54 @@ describe("docker request authorization", () => {
     expect([401, 403, 405]).not.toContain(res.status);
   });
 
-  it("JWT for another image is denied", async () => {
+  it("JWT for another image → 401 insufficient_scope", async () => {
     const t = await tokenFrom("scope=repository:priv/app:pull,push", writeKey);
     const res = await bearer("GET", "priv/other/manifests/latest", t);
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toBe(
+      `${REALM},scope="repository:priv/other:pull",error="insufficient_scope"`,
+    );
+  });
+
+  it("an authenticated JWT that was refused an evaluated scope → 403 DENIED", async () => {
+    const other = reg.tokenFor([]);
+    const t = await tokenFrom("scope=repository:priv/app:pull", other);
+    const res = await bearer("GET", "priv/app/manifests/latest", t);
     expect(res.status).toBe(403);
+  });
+
+  it("claims are bound to the repository: a recreated repository does not inherit a token", async () => {
+    await reg.createRepo({ name: "ephemeral", format: "docker", kind: "hosted", visibility: "public" });
+    const t = await tokenFrom("scope=repository:ephemeral/app:pull");
+    expect((await bearer("GET", "ephemeral/app/manifests/latest", t)).status).not.toBe(401);
+    await reg.deps.repos.delete({ kind: "user", userId: "test-admin", role: "admin" }, "ephemeral");
+    await reg.createRepo({ name: "ephemeral", format: "docker", kind: "hosted" });
+    const res = await bearer("GET", "ephemeral/app/manifests/latest", t);
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toContain('error="insufficient_scope"');
+  });
+
+  it('alg "none" and "RS256" tokens are rejected with a plain 401', async () => {
+    const payload = Buffer.from(
+      JSON.stringify({
+        iss: "weaver",
+        aud: "weaver.test",
+        sub: "anonymous",
+        iat: Math.floor(Date.now() / 1000),
+        nbf: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 300,
+        jti: "x",
+        access: [{ type: "repository", name: "priv/app", actions: ["pull"] }],
+        wv: { kind: "anonymous" },
+      }),
+    ).toString("base64url");
+    for (const alg of ["none", "RS256"]) {
+      const header = Buffer.from(JSON.stringify({ alg, typ: "JWT" })).toString("base64url");
+      const sig = alg === "none" ? "" : Buffer.alloc(256, 7).toString("base64url");
+      const res = await bearer("GET", "priv/app/manifests/latest", `${header}.${payload}.${sig}`);
+      expect(res.status).toBe(401);
+      expect(res.headers.get("www-authenticate")).toBe(`${REALM},scope="repository:priv/app:pull"`);
+    }
   });
 
   it("push to mirror → 405 UNSUPPORTED", async () => {
@@ -172,7 +216,8 @@ describe("docker request authorization", () => {
   });
 
   it("claims alone authorize: a user JWT with pull passes", async () => {
-    const t = jwt([{ type: "repository", name: "priv/app", actions: ["pull"] }], new Date(), {
+    const priv = await reg.deps.repos.get("priv");
+    const t = jwt([{ type: "repository", name: "priv/app", actions: ["pull"], repo: priv!.id }], new Date(), {
       kind: "user",
       userId: "u1",
       role: "viewer",

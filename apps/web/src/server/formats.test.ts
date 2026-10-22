@@ -4,8 +4,16 @@ import config from "../../next.config";
 import { config as proxyConfig } from "../proxy";
 import { FACTORIES, getFormatHandler, mountRest } from "./formats";
 
+// A server context without a database: every repository lookup misses.
 vi.mock("./context", () => ({
-  getServerContext: () => ({ secretKey: Buffer.alloc(32, 1), stores: {}, db: {}, repos: {}, assets: {}, mirror: {} }),
+  getServerContext: () => ({
+    db: {},
+    stores: { primary: { id: "local" }, configured: () => ["local"] },
+    repos: { get: async () => null },
+    assets: {},
+    mirror: {},
+    secretKey: Buffer.alloc(32, 1),
+  }),
 }));
 
 const req = (path: string) => new Request(`http://localhost:3000${path}`);
@@ -31,20 +39,26 @@ describe("placeholder mounts", () => {
   });
 });
 
-describe("format deps", () => {
-  it("carry the secret key", () => {
+describe("npm mount", () => {
+  it("builds the real npm handler from deps carrying the secret key; a missing repo answers 404 JSON", async () => {
     let seen: Buffer | undefined;
+    const original = FACTORIES.npm!;
     const factory: FormatFactory = (deps) => {
       seen = deps.secretKey;
-      return async () => new Response(null, { status: 204 });
+      return original(deps);
     };
     FACTORIES.npm = factory;
+    let handler;
     try {
-      getFormatHandler("npm");
+      handler = getFormatHandler("npm");
     } finally {
-      FACTORIES.npm = undefined;
+      FACTORIES.npm = original;
     }
     expect(seen?.length).toBe(32);
+    const res = await handler(req("/npm/x/-/ping"), "x/-/ping");
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toBe("application/json");
+    expect(await res.json()).toEqual({ error: "not found" });
   });
 });
 

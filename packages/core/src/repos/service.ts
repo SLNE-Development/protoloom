@@ -71,6 +71,15 @@ export interface CreateRepoInput {
 /** What updating a repository takes; omitted fields are kept, `config` is deep-merged into the current config. */
 export type UpdateRepoInput = Partial<Omit<CreateRepoInput, "name" | "format" | "kind">>;
 
+/** Options of {@link RepoService.delete}. */
+export interface DeleteRepoOptions {
+  /**
+   * A read-only check, run with the repository row locked before anything is deleted; throw to
+   * refuse the delete. It must not write: its queries share the delete's transaction.
+   */
+  guard?: (tx: Tx, repo: Repo) => Promise<void>;
+}
+
 /** Repository management: reading repositories and, for admins, creating, changing and deleting them. Every mutation is audited. */
 export interface RepoService {
   /** Every repository, by name. */
@@ -87,8 +96,10 @@ export interface RepoService {
    * Deletes a repository with all its content: first the rows (content, upstreams, memberships and
    * key permissions cascade) in one transaction, then, after commit, the stored objects of its
    * assets and proto builds. Objects that cannot be deleted are left orphaned and logged.
+   * `opts.guard` runs inside that transaction with the row locked (no content can be added
+   * meanwhile) and refuses the delete by throwing.
    */
-  delete(actor: Principal, name: string): Promise<void>;
+  delete(actor: Principal, name: string, opts?: DeleteRepoOptions): Promise<void>;
   /** The upstreams of a mirror in order, without secrets. */
   upstreams(repoId: string): Promise<UpstreamView[]>;
   /** The upstreams of a mirror in order with decrypted secrets; for server-side use only. */
@@ -113,7 +124,8 @@ function invalid(message: string, details?: unknown): RegistryError {
   return new RegistryError("invalid_request", message, details);
 }
 
-function toRepo(row: RepositoryRow): Repo {
+/** A `repository` row as a {@link Repo}, its config read leniently with {@link readRepositoryConfig}. */
+export function toRepo(row: RepositoryRow): Repo {
   return {
     id: row.id,
     name: row.name,
@@ -406,11 +418,12 @@ export function createRepoService(deps: { db: Db; stores: StoreSet; secretKey: B
       return toRepo(row);
     },
 
-    async delete(actor, name) {
+    async delete(actor, name, opts) {
       requireAdmin(actor);
       const blobs = await db.transaction(async (tx) => {
         const current = await findRow(tx, name, true);
         if (!current) throw new RegistryError("not_found", `Repository ${name} was not found`);
+        if (opts?.guard) await opts.guard(tx, toRepo(current));
         const assets = await tx
           .select({ store: asset.store, storageKey: asset.storageKey })
           .from(asset)

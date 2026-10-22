@@ -7,26 +7,17 @@ import {
   type Repo,
 } from "@weaver/core";
 import type { MavenContext } from "./context.js";
+import { readGroup } from "./group.js";
 import { readHosted, writeHosted } from "./hosted.js";
+import { listDirectory } from "./listing.js";
+import { readMirror } from "./mirror.js";
 import { methodNotAllowed, textResponse, unauthorized } from "./http.js";
-import { parseMavenPath, type MavenPath } from "./path.js";
-
-/** A stub reader that serves one request for a repository. */
-type Reader = (ctx: MavenContext, repo: Repo, target: MavenPath) => Promise<Response>;
+import { parseMavenPath } from "./path.js";
 
 /** The 404 answer for everything that does not exist. */
 function notFound(): Response {
   return textResponse(404, "Not Found");
 }
-
-/** Serves a file through a mirror repository (implemented by the mirror task). */
-const readMirror: Reader = async () => notFound();
-
-/** Serves a file from the first matching member of a group (implemented by the group task). */
-const readGroup: Reader = async () => notFound();
-
-/** Renders a directory listing (implemented by the listing task). */
-const listDirectory: Reader = async () => notFound();
 
 /** Whether the principal may read the repository, directly or through a group. */
 function mayRead(principal: Principal, repo: Repo): boolean {
@@ -65,10 +56,10 @@ export const createMavenHandler: FormatFactory = (deps) => async (req, rest) => 
 
     if (!mayRead(principal, repo)) return denied(principal);
     const ctx: MavenContext = { deps, principal, method };
-    if (target.type === "directory") return await listDirectory(ctx, repo, target);
+    if (target.type === "directory") return await listDirectory(ctx, repo, target.path);
     if (repo.kind === "hosted") return (await readHosted(ctx, repo, target)) ?? notFound();
-    if (repo.kind === "mirror") return await readMirror(ctx, repo, target);
-    return await readGroup(ctx, repo, target);
+    if (repo.kind === "mirror") return (await readMirror(ctx, repo, target)) ?? notFound();
+    return (await readGroup(ctx, repo, target)) ?? notFound();
   } catch (err) {
     if (err instanceof RegistryError) return err.status === 401 ? unauthorized() : textResponse(err.status, err.message);
     console.error("weaver: maven request failed", err);

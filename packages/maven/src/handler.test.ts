@@ -87,12 +87,13 @@ describe("maven handler authorization", () => {
   });
 
   it("the releases/ directory form dispatches to the listing without a redirect", async () => {
-    for (const path of ["releases/", "releases/org/example/"]) {
-      const res = await fx.request("GET", path);
-      expect(res.headers.get("location")).toBeNull();
-      // 404 until the directory listing task replaces the stub reader.
-      expect(res.status).toBe(404);
-    }
+    const root = await fx.request("GET", "releases/");
+    expect(root.headers.get("location")).toBeNull();
+    expect(root.status).toBe(200);
+    expect(root.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    const empty = await fx.request("GET", "releases/org/example/");
+    expect(empty.headers.get("location")).toBeNull();
+    expect(empty.status).toBe(404);
   });
 
   it("group read token reads the group", async () => {
