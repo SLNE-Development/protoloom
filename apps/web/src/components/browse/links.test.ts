@@ -32,6 +32,11 @@ describe("package links", () => {
     expect(packageHref(hit({ format: "docker", name: "team/app" }))).toBe("/browse/repo?image=team%2Fapp");
   });
 
+  it("has no link for proto packages of mirrors or read through a group", () => {
+    expect(packageHref(hit({ format: "proto", kind: "mirror", namespace: "a", name: "b" }))).toBeNull();
+    expect(packageHref(hit({ format: "proto", via: "all", namespace: "a", name: "b" }))).toBeNull();
+  });
+
   it("links a package read through a group into the group", () => {
     expect(packageHref(hit({ repository: "member", via: "all", namespace: "org.x", name: "lib" }))).toBe("/browse/all?g=org.x&a=lib");
   });

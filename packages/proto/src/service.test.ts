@@ -365,6 +365,8 @@ describe("proto service", () => {
       action: "download",
       bytes: bytes.length,
       principal: reader,
+      // The hosted member's component, so the download counts on the package.
+      componentId: expect.any(String),
     });
 
     usage.mockClear();

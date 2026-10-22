@@ -25,7 +25,7 @@ describe("parseSearchQuery", () => {
   });
 
   it("rejects queries shorter than two characters after normalising", () => {
-    for (const raw of ["a", "  ", ":/", " b/"]) {
+    for (const raw of ["a", "  ", ":/", " b/", "@ @", "a b", "@a"]) {
       let error: unknown;
       try {
         parseSearchQuery(raw);
@@ -34,6 +34,17 @@ describe("parseSearchQuery", () => {
       }
       expect((error as RegistryError | undefined)?.code).toBe("invalid_request");
     }
+  });
+
+  it("collapses repeated whitespace", () => {
+    const parsed = parseSearchQuery("  org.x   ::  lib ");
+    expect(parsed.normalized).toBe("org.x lib");
+    expect(parsed.terms).toEqual(["org.x", "lib"]);
+  });
+
+  it("drops an alternative without a usable term", () => {
+    expect(parseSearchQuery("ab:1.0").altTerms).toEqual(["ab"]);
+    expect(parseSearchQuery("a:lib").altTerms).toBeNull();
   });
 
   it("keeps the first five terms", () => {

@@ -1,7 +1,7 @@
 import { and, eq, exists, inArray, like, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { asset, component, groupMember, type Db } from "@weaver/db";
 import { RegistryError } from "../errors.js";
-import { canAccess, type Principal } from "../permissions.js";
+import { canAccess, canReadThroughGroup, type Principal } from "../permissions.js";
 import type { Format, Kind } from "../repos/config.js";
 import type { Repo, RepoService } from "../repos/service.js";
 import { componentLabel } from "./labels.js";
@@ -9,6 +9,8 @@ import { parseSearchQuery, type ParsedSearch } from "./query.js";
 
 /** Most hits one search page returns. */
 export const SEARCH_LIMIT_MAX = 50;
+/** Most components one search matches before grouping them into packages. */
+export const SEARCH_MATCH_MAX = 5000;
 /** Largest offset a search accepts. */
 export const SEARCH_OFFSET_MAX = 1000;
 
@@ -91,7 +93,9 @@ function scopeOf(format: Format, namespace: string): string {
 function attribution(p: Principal, candidate: Candidate, namespace: string): string | null | undefined {
   const scope = scopeOf(candidate.repo.format, namespace);
   if (canAccess(p, candidate.repo, scope, "read")) return null;
-  return candidate.groups.find((g) => canAccess(p, g, scope, "read"))?.name;
+  // Read on a group grants what it serves; a proto key's group prefix on the group still narrows it.
+  const readsThrough = (g: Repo) => (candidate.repo.format === "proto" ? canAccess(p, g, scope, "read") : canReadThroughGroup(p, g));
+  return candidate.groups.find(readsThrough)?.name;
 }
 
 /**
@@ -120,7 +124,7 @@ export async function searchScope(
     if (repo.kind === "group" || (format !== undefined && repo.format !== format)) continue;
     const groups = (groupsOf.get(repo.id) ?? []).sort((a, b) => a.name.localeCompare(b.name));
     const sources = [repo, ...groups];
-    if (sources.some((r) => canAccess(p, r, "", "read"))) {
+    if (canAccess(p, repo, "", "read") || groups.some((g) => canReadThroughGroup(p, g))) {
       scope.full.push(repo.id);
     } else if (repo.format === "proto" && p.kind === "apikey") {
       // A key entry with a group prefix reads only below that prefix, on the repository or a group of it.
@@ -179,9 +183,16 @@ type PackageRow = {
  * the match is planned on its own and runs from the trigram index), then one row per package
  * (repository, namespace, name), ranked by exact `search_text` match, then prefix match, then
  * trigram similarity, then lifetime downloads, then label and repository name; `limit + 1` rows
- * from `offset`. Mirror components only count with at least one asset.
+ * from `offset`. Mirror components only count with at least one asset. At most `matchMax`
+ * (default {@link SEARCH_MATCH_MAX}) components are matched, so a broad query never scans or
+ * groups more than that.
  */
-export function buildSearchQuery(db: Db, parsed: ParsedSearch, scope: SearchScope, page: { limit: number; offset: number }): SQL {
+export function buildSearchQuery(
+  db: Db,
+  parsed: ParsedSearch,
+  scope: SearchScope,
+  page: { limit: number; offset: number; matchMax?: number },
+): SQL {
   const texts = [parsed.normalized, ...(parsed.altTerms ? [parsed.altTerms.join(" ")] : [])].map(storedText);
   const list = (values: string[]) => sql.join(values.map((v) => sql`${v}`), sql`, `);
   const prefixes = texts.map((t) => `${escapeLike(t)}%`);
@@ -205,6 +216,7 @@ export function buildSearchQuery(db: Db, parsed: ParsedSearch, scope: SearchScop
         ${component.createdAt} as created_at, ${component.updatedAt} as updated_at
       from ${component}
       where ${and(inScope(scope), matches, stored)}
+      limit ${page.matchMax ?? SEARCH_MATCH_MAX}
     )
     select repository_id::text as "repositoryId", namespace, name,
       (array_agg(version order by created_at desc, version desc))[1] as "latestVersion",

@@ -13,9 +13,17 @@ export interface ParsedSearch {
   normalized: string;
 }
 
-/** Normalises text like the generated `search_text` column: `btrim(lower(translate(text, ':/', '  ')))`. */
+/**
+ * Normalises text like the generated `search_text` column (`btrim(lower(translate(text, ':/', '  ')))`),
+ * with runs of whitespace collapsed to one space.
+ */
 export function normalizeSearchText(text: string): string {
-  return text.toLowerCase().replace(/[:/]/g, " ").trim();
+  return text.toLowerCase().replace(/[:/]/g, " ").trim().replace(/\s+/g, " ");
+}
+
+/** Whether a term has at least two characters as `search_text` stores it (npm scopes lose their `@`). */
+function isUsableTerm(term: string): boolean {
+  return (term.startsWith("@") ? term.slice(1) : term).length >= 2;
 }
 
 /** The normalised text split into at most {@link SEARCH_TERMS_MAX} terms. */
@@ -37,16 +45,19 @@ function withoutVersion(raw: string): string | null {
 
 /**
  * Parses a search query: normalises it like `search_text` and splits it into terms, plus the
- * alternative terms without a trailing version segment. Throws `invalid_request` when fewer than
- * two characters remain after normalising.
+ * alternative terms without a trailing version segment (null unless one of them has two stored
+ * characters). Throws `invalid_request` when fewer than two characters remain after normalising
+ * or no term has two characters as `search_text` stores it (`"@ @"`, `"a b"`).
  */
 export function parseSearchQuery(raw: string): ParsedSearch {
   const trimmed = raw.trim();
   const normalized = normalizeSearchText(trimmed);
-  if (normalized.length < 2) {
-    throw new RegistryError("invalid_request", "A search needs at least 2 characters");
+  const terms = termsOf(normalized);
+  // A query without a term of two stored characters would match (and scan) nearly everything.
+  if (normalized.length < 2 || !terms.some(isUsableTerm)) {
+    throw new RegistryError("invalid_request", "A search needs a term of at least 2 characters");
   }
   const stripped = withoutVersion(trimmed);
   const alt = stripped === null ? [] : termsOf(normalizeSearchText(stripped));
-  return { terms: termsOf(normalized), altTerms: alt.length > 0 ? alt : null, normalized };
+  return { terms, altTerms: alt.some(isUsableTerm) ? alt : null, normalized };
 }

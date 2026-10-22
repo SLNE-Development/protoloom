@@ -13,6 +13,7 @@ import { FormatBadge } from "@/app/(app)/repositories/_components/format-badge";
 import { packageHref } from "@/components/browse/links";
 import { Panel } from "@/components/browse-ui";
 import { searchHref } from "@/lib/search";
+import { repositoryHref } from "@/lib/browse";
 import { FORMAT_OPTIONS } from "@/lib/repository-settings";
 import { useTRPCClient } from "@/trpc/client";
 
@@ -48,8 +49,9 @@ function FormatChips({ q, format }: { q: string; format: Format | null }) {
 }
 
 /**
- * The results of `/search?q=&format=`: format chips, one row per package (format badge, label,
- * repository and "via <group>" when read through a group, latest version, downloads), and
+ * The results of `/search?q=&format=`: format chips, one row per package (format badge, label
+ * linking the package page when it has one, repository and "via <group>" linking their browse
+ * pages, latest version, downloads), and
  * "Load more" while more pages exist.
  */
 export function SearchResults({ q, format }: { q: string; format: Format | null }) {
@@ -97,23 +99,44 @@ export function SearchResults({ q, format }: { q: string; format: Format | null 
         <>
           <Panel>
             <ul className="divide-y" aria-label="Search results">
-              {hits.map((hit) => (
-                <li key={`${hit.repository}/${hit.via ?? ""}/${hit.label}`} data-format={hit.format}>
-                  <Link href={packageHref(hit)} className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/50">
+              {hits.map((hit) => {
+                const href = packageHref(hit);
+                const label = <span className="min-w-0 flex-1 truncate font-mono text-sm">{hit.label}</span>;
+                return (
+                  <li
+                    key={`${hit.repository}/${hit.via ?? ""}/${hit.namespace}/${hit.name}`}
+                    data-format={hit.format}
+                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/50"
+                  >
                     <FormatBadge format={hit.format} className="shrink-0" />
-                    <span className="min-w-0 flex-1 truncate font-mono text-sm">{hit.label}</span>
+                    {href ? (
+                      <Link href={href} className="min-w-0 flex-1 truncate font-mono text-sm hover:underline">
+                        {hit.label}
+                      </Link>
+                    ) : (
+                      label
+                    )}
                     <span className="hidden shrink-0 font-mono text-xs text-muted-foreground sm:inline">
-                      {hit.repository}
-                      {hit.via && <> via {hit.via}</>}
+                      <Link href={repositoryHref(hit.repository)} className="hover:underline">
+                        {hit.repository}
+                      </Link>
+                      {hit.via && (
+                        <>
+                          {" via "}
+                          <Link href={repositoryHref(hit.via)} className="hover:underline">
+                            {hit.via}
+                          </Link>
+                        </>
+                      )}
                     </span>
                     <span className="shrink-0 font-mono text-xs">{hit.latestVersion}</span>
                     <span className="flex w-16 shrink-0 items-center justify-end gap-1 font-mono text-xs text-muted-foreground tabular-nums">
                       <DownloadIcon className="size-3" aria-hidden />
                       <span aria-label="Downloads">{hit.downloads}</span>
                     </span>
-                  </Link>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           </Panel>
           {results.hasNextPage && (

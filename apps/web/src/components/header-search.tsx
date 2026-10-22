@@ -7,11 +7,18 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@weaver/ui/compone
 import { cn } from "@weaver/ui/lib/utils";
 import { searchHref } from "@/lib/search";
 
-/** The header's package search box: Enter opens `/search?q=` with the typed text. */
+/** The header's package search box, kept in step with `?q=`: Enter opens `/search?q=` with the typed text. */
 export function HeaderSearch({ className }: { className?: string }) {
   const router = useRouter();
   const params = useSearchParams();
-  const [value, setValue] = useState(params.get("q") ?? "");
+  const q = params.get("q") ?? "";
+  const [value, setValue] = useState(q);
+  // Follow the URL: a new `?q=` (back, forward, a link) replaces what the box shows.
+  const [shown, setShown] = useState(q);
+  if (shown !== q) {
+    setShown(q);
+    setValue(q);
+  }
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

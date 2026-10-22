@@ -12,7 +12,7 @@ import type { Format, Kind } from "../repos/config.js";
 import { createRepoService, type RepoService } from "../repos/service.js";
 import { createStoreSetFromEnv } from "../storage/index.js";
 import { parseSearchQuery } from "./query.js";
-import { buildSearchQuery, searchComponents, type SearchHit, type SearchOptions } from "./search.js";
+import { buildSearchQuery, SEARCH_MATCH_MAX, searchComponents, type SearchHit, type SearchOptions } from "./search.js";
 
 /** Fixed repository ids, so key principals can be built before the rows exist. */
 const ids = {
@@ -198,6 +198,8 @@ describe("searchComponents", () => {
 
   it("rejects bad options", async () => {
     await expect(search(admin, "x")).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(search(admin, "@ @")).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(search(admin, "a b")).rejects.toMatchObject({ code: "invalid_request" });
     await expect(search(admin, "lib", { limit: 51 })).rejects.toMatchObject({ code: "invalid_request" });
     await expect(search(admin, "lib", { offset: 1001 })).rejects.toMatchObject({ code: "invalid_request" });
   });
@@ -246,6 +248,20 @@ describe("searchComponents", () => {
       const { hits } = await search(key, "commons-lang3");
       expect(hits).toEqual([expect.objectContaining({ repository: "maven-hosted", via: null })]);
     });
+  });
+
+  it("caps the components one search matches", async () => {
+    const versions = Array.from({ length: SEARCH_MATCH_MAX + 100 }, (_, i) => ({ repositoryId: ids.mavenHosted, namespace: "org.cap", name: "capped", version: `1.${i}` }));
+    for (let i = 0; i < versions.length; i += 1000) await testDb.db.insert(component).values(versions.slice(i, i + 1000));
+    const { hits } = await search(admin, "capped");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.versionCount).toBe(SEARCH_MATCH_MAX);
+
+    const scope = { full: [ids.mavenHosted], prefixed: [], mirrors: [], names: { [ids.mavenHosted]: "maven-hosted" } };
+    const { rows } = await testDb.db.execute<{ versionCount: string }>(
+      buildSearchQuery(testDb.db, parseSearchQuery("capped"), scope, { limit: 20, offset: 0, matchMax: 2 }),
+    );
+    expect(rows.map((r) => Number(r.versionCount))).toEqual([2]);
   });
 
   it("uses the trigram index", async () => {

@@ -24,9 +24,11 @@ export const BROWSE_LINKS: Partial<Record<Format, (repo: string, namespace: stri
 /**
  * Where a search hit is browsed: its format's package page in the hit's repository, or in the
  * group (`via`) when the caller reads it only through that group; `/browse/<repo>` for a format
- * without a package page.
+ * without a package page. Null for a proto package of a mirror or read through a group: proto
+ * artifact pages only exist for hosted repositories the caller reads directly.
  */
-export function packageHref(hit: SearchHit): string {
+export function packageHref(hit: SearchHit): string | null {
+  if (hit.format === "proto" && (hit.via !== null || hit.kind !== "hosted")) return null;
   const repo = hit.via ?? hit.repository;
   const build = BROWSE_LINKS[hit.format];
   return build ? build(repo, hit.namespace, hit.name) : repositoryHref(repo);
