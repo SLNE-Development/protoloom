@@ -8,6 +8,9 @@
 # already run (packages/cli/dist, packages/db/dist and esbuild for the seed bundle). The seed
 # (apps/web/scripts/seed-smoke.mjs) is not part of the image; it is bundled here and copied into
 # the app container. Prints SMOKE OK on success.
+#
+# SMOKE_PROJECT (default weaver-smoke) names the compose project and the image tag, SMOKE_PORT
+# (default 3100) the host port, so several checkouts can run the smoke test side by side.
 set -euo pipefail
 
 # Git Bash on Windows would rewrite container paths such as /app/... into Windows paths.
@@ -16,7 +19,7 @@ export MSYS_NO_PATHCONV=1
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-PROJECT="weaver-smoke"
+PROJECT="${SMOKE_PROJECT:-weaver-smoke}"
 PORT="${SMOKE_PORT:-3100}"
 URL="http://localhost:${PORT}"
 WORK="$(mktemp -d)"
@@ -47,7 +50,7 @@ fail() { echo "SMOKE FAILED: $*" >&2; exit 1; }
 rand() { node -e "process.stdout.write(require('crypto').randomBytes(24).toString('hex'))"; }
 
 cat >"$ENV_FILE" <<ENV
-WEAVER_IMAGE=weaver:smoke
+WEAVER_IMAGE=weaver:${PROJECT}
 POSTGRES_PASSWORD=$(rand)
 BETTER_AUTH_SECRET=$(rand)
 BETTER_AUTH_URL=${URL}
@@ -67,7 +70,7 @@ for i in $(seq 1 90); do
   sleep 2
 done
 
-echo "==> 2. seed admin, 'releases' repository and API key"
+echo "==> 2. seed admin, hosted proto repository 'releases' and API key"
 # The seed is not in the image: bundle it into one file here and copy it into the running container.
 "$ROOT/apps/web/node_modules/.bin/esbuild" "$ROOT/apps/web/scripts/seed-smoke.mjs" --bundle --platform=node \
   --format=esm --target=node22 --log-level=warning --external:pg-native \

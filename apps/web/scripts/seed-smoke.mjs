@@ -3,7 +3,8 @@
 // Login is OAuth only, so no user can be created through the UI in a test stack. This script
 // creates, idempotently:
 //   - an admin user `smoke-admin` (directly in the database),
-//   - a private `releases` repository,
+//   - a private hosted proto repository `releases`, created through the core RepoService like the
+//     admin UI does,
 //   - an API key with write access to `releases`, created through Better Auth's server API with the
 //     same api-key plugin options and `pl_` prefix as the app (see src/server/auth.ts and the
 //     `keys.create` tRPC procedure), plus its permission row.
@@ -12,13 +13,15 @@
 // It is NOT part of the image. scripts/e2e-smoke.sh bundles it with esbuild into one file and
 // copies it into the running app container (docker cp), then runs it with plain node.
 // Guards: it runs only with WEAVER_SMOKE_SEED=1, and refuses a database that has any user
-// other than the smoke admin. Needs DATABASE_URL, BETTER_AUTH_SECRET and BETTER_AUTH_URL.
+// other than the smoke admin. Needs DATABASE_URL, BETTER_AUTH_SECRET, BETTER_AUTH_URL and the
+// app's storage settings (STORAGE_DRIVER and friends), which the app container has.
 import { randomUUID } from "node:crypto";
 import { apiKey } from "@better-auth/api-key";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { betterAuth } from "better-auth";
 import { eq, ne } from "drizzle-orm";
-import { account, apikey, apiKeyPermission, createDb, repository, session, user, verification } from "@weaver/db";
+import { createRepoService, createStoreSetFromEnv, deriveSecretKey } from "@weaver/core";
+import { account, apikey, createDb, repoPermission, session, user, verification } from "@weaver/db";
 
 const ADMIN_EMAIL = "smoke-admin@weaver.invalid";
 const REPOSITORY = "releases";
@@ -63,8 +66,23 @@ try {
     log(`reusing admin user ${admin.id}`);
   }
 
-  await db.insert(repository).values({ name: REPOSITORY }).onConflictDoNothing({ target: repository.name });
-  log(`repository ${REPOSITORY} is present`);
+  const repos = createRepoService({
+    db,
+    stores: createStoreSetFromEnv(process.env),
+    secretKey: deriveSecretKey(required("BETTER_AUTH_SECRET")),
+  });
+  let repo = await repos.get(REPOSITORY);
+  if (!repo) {
+    repo = await repos.create(
+      { kind: "user", userId: admin.id, role: "admin" },
+      { name: REPOSITORY, format: "proto", kind: "hosted", visibility: "private" },
+    );
+    log(`created repository ${REPOSITORY}`);
+  } else if (repo.format !== "proto" || repo.kind !== "hosted") {
+    throw new Error(`repository ${REPOSITORY} exists as ${repo.format} ${repo.kind}, not proto hosted`);
+  } else {
+    log(`reusing repository ${REPOSITORY}`);
+  }
 
   const auth = betterAuth({
     secret: required("BETTER_AUTH_SECRET"),
@@ -77,7 +95,7 @@ try {
   const created = await auth.api.createApiKey({
     body: { userId: admin.id, name: "smoke", prefix: API_KEY_PREFIX, expiresIn: null },
   });
-  await db.insert(apiKeyPermission).values({ apiKeyId: created.id, repository: REPOSITORY, groupPrefix: null, access: "write" });
+  await db.insert(repoPermission).values({ apiKeyId: created.id, repositoryId: repo.id, groupPrefix: null, access: "write" });
   log(`created API key ${created.id} with write access to ${REPOSITORY}`);
 
   process.stdout.write(`${created.key}\n`);
