@@ -94,11 +94,14 @@ describe("npm group", () => {
     const res = await h.call("GET", "npm-group/pkg/-/pkg-1.0.0.tgz", { token: h.tokens.reader });
     expect(res.status).toBe(200);
     expect(Buffer.from(await res.arrayBuffer()).equals(hostedTgz)).toBe(true);
-    expect(fake.hits.slice(before).filter((hit) => hit.endsWith(".tgz"))).toEqual([]);
+    expect(fake.hits.slice(before)).toEqual([]);
   });
 
   it("serves a version only a later member has from that member", async () => {
+    const before = fake.hits.length;
     const res = await h.call("GET", "npm-group/pkg/-/pkg-2.0.0.tgz", { token: h.tokens.reader });
+    // Only the tarball itself goes upstream: no member's packument is fetched to find it.
+    expect(fake.hits.slice(before)).toEqual(["/pkg/-/pkg-2.0.0.tgz"]);
     expect(res.status).toBe(200);
     expect(Buffer.from(await res.arrayBuffer()).equals(await fakeTarball("pkg", "2.0.0"))).toBe(true);
     const head = await h.call("HEAD", "npm-group/upstream-only/-/upstream-only-3.0.0.tgz", { token: h.tokens.reader });

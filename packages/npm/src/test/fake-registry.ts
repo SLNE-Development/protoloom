@@ -42,7 +42,7 @@ function splitPath(pathname: string): { name: string; rest: string[] } | null {
 
 /**
  * Starts a fake npm registry serving full and abbreviated packuments (chosen by Accept), tarballs at
- * `<name>/-/<bare>-<version>.tgz`, `GET /-/v1/search` and `POST /-/npm/v1/security/*` (audit). With `gzip`, JSON
+ * `<name>/-/<bare>-<version>.tgz`, `GET /-/v1/search` (paged by `size` and `from`) and `POST /-/npm/v1/security/*` (audit). With `gzip`, JSON
  * answers are gzip-encoded when the client accepts it.
  */
 export async function startFakeRegistry(
@@ -104,10 +104,12 @@ export async function startFakeRegistry(
     const { pathname, searchParams } = new URL(raw, "http://fake");
     if (pathname === "/-/v1/search") {
       const text = searchParams.get("text") ?? "";
-      const objects = [...byName.values()]
+      const size = Number(searchParams.get("size") ?? "20");
+      const from = Number(searchParams.get("from") ?? "0");
+      const all = [...byName.values()]
         .filter((p) => p.name.includes(text))
         .map((p) => ({ package: { name: p.name, version: p.tags["latest"] }, score: { final: 1 }, searchScore: 1 }));
-      return sendJson(req, res, 200, { objects, total: objects.length, time: new Date(0).toUTCString() });
+      return sendJson(req, res, 200, { objects: all.slice(from, from + size), total: all.length, time: new Date(0).toUTCString() });
     }
     if (pathname.startsWith("/-/npm/v1/security/")) {
       return req.method === "POST" ? sendJson(req, res, 200, {}) : sendJson(req, res, 405, { error: "method not allowed" });

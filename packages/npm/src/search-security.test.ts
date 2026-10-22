@@ -1,4 +1,4 @@
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHarness, type Harness } from "./test/harness.js";
 import { startFakeRegistry, type FakeRegistry } from "./test/fake-registry.js";
@@ -56,6 +56,12 @@ beforeAll(async () => {
   await h.createRepo({ name: "npm-group", format: "npm", kind: "group", visibility: "public", members: ["npm-hosted", "npm-mirror", "npm-second"] });
   await h.createRepo({ name: "npm-group-hosted", format: "npm", kind: "group", visibility: "public", members: ["npm-hosted"] });
   await h.createRepo({ name: "npm-group-down", format: "npm", kind: "group", visibility: "public", members: ["npm-hosted", "npm-down"] });
+  await h.createRepo({ name: "npm-hosted-b", format: "npm", kind: "hosted", visibility: "public" });
+  await h.createRepo({ name: "npm-group2", format: "npm", kind: "group", visibility: "public", members: ["npm-hosted", "npm-hosted-b", "npm-mirror"] });
+  await mirror("npm-rules", fake.url, { rules: { deny: ["react-dom"] } });
+  await mirror("npm-allow", fake.url, { rules: { allow: ["left-*", "react"] } });
+  await h.createRepo({ name: "npm-group-rules", format: "npm", kind: "group", visibility: "public", members: ["npm-hosted", "npm-rules"] });
+  await h.createRepo({ name: "npm-group-mirrors", format: "npm", kind: "group", visibility: "public", members: ["npm-mirror", "npm-second"] });
 
   await publish("npm-hosted", "react", "the real thing", ["ui"]);
   await publish("npm-hosted", "alpha", "helpers for React apps", []);
@@ -63,6 +69,8 @@ beforeAll(async () => {
   await publish("npm-hosted", "zeta-react", "z", []);
   await publish("npm-hosted", "unrelated", "nothing to see", ["misc"]);
   await publish("npm-private", "secret-react", "private", []);
+  await publish("npm-hosted-b", "react", "a shadow copy", []);
+  await publish("npm-hosted-b", "react-b-only", "b", []);
 }, 180_000);
 
 afterAll(async () => {
@@ -133,8 +141,39 @@ describe("npm search", () => {
     const body = (await res.json()) as SearchResult;
     expect(body.objects.map((o) => o.package.name)).toEqual(["react", "@acme/widgets", "alpha", "zeta-react", "react-dom"]);
     expect(body.objects[0]!.package.description).toBe("the real thing");
-    expect(body.total).toBe(4 + 2);
+    expect(body.total).toBe(4 + 2 - 1);
     expect(second.hits.length).toBe(before);
+  });
+
+  it("group search dedups hosted members, earlier member first, and counts each name once", async () => {
+    const before = fake.hits.length;
+    const res = await h.call("GET", "npm-group2/-/v1/search?text=react");
+    const body = (await res.json()) as SearchResult;
+    expect(body.objects.map((o) => o.package.name)).toEqual(["react", "@acme/widgets", "alpha", "react-b-only", "zeta-react", "react-dom"]);
+    expect(body.objects[0]!.package.description).toBe("the real thing");
+    expect(body.total).toBe(5 + 2 - 1);
+    expect(fake.hits.slice(before)).toEqual(["/-/v1/search?text=react&size=15&from=0"]);
+  });
+
+  it("group search pages across the hosted and upstream parts", async () => {
+    const page = async (from: number) => {
+      const before = fake.hits.length;
+      const got = await names(await h.call("GET", `npm-group2/-/v1/search?text=react&size=3&from=${from}`));
+      return { got, hits: fake.hits.slice(before) };
+    };
+    expect(await page(0)).toEqual({ got: ["react", "@acme/widgets", "alpha"], hits: ["/-/v1/search?text=react&size=1&from=0"] });
+    // The upstream "react" is dropped on every page, since a hosted member has the name.
+    expect(await page(3)).toEqual({ got: ["react-b-only", "zeta-react"], hits: ["/-/v1/search?text=react&size=1&from=0"] });
+    expect(await page(6)).toEqual({ got: ["react-dom"], hits: ["/-/v1/search?text=react&size=3&from=1"] });
+    expect(await names(await h.call("GET", "npm-group2/-/v1/search?text=react&size=2"))).toHaveLength(2);
+  });
+
+  it("mirror rules filter upstream search results", async () => {
+    expect(await names(await h.call("GET", "npm-rules/-/v1/search?text=react"))).toEqual(["react"]);
+    const allow = (await (await h.call("GET", "npm-allow/-/v1/search?text=e")).json()) as SearchResult;
+    expect(allow.objects.map((o) => o.package.name)).toEqual(["react", "left-pad"]);
+    expect(allow.total).toBe(2);
+    expect(await names(await h.call("GET", "npm-group-rules/-/v1/search?text=react"))).toEqual(["react", "@acme/widgets", "alpha", "zeta-react"]);
   });
 
   it("group search keeps hosted results when the mirror member is down", async () => {
@@ -199,11 +238,73 @@ describe("npm audit", () => {
 
   it("group audit goes to the first mirror member", async () => {
     const before = { fake: fake.hits.length, second: second.hits.length };
-    const res = await h.call("POST", "npm-group/-/npm/v1/security/audits/quick", { body: "{}", headers: { "content-type": "application/json" } });
+    const res = await h.call("POST", "npm-group-mirrors/-/npm/v1/security/audits/quick", {
+      body: "{}",
+      token: h.tokens.reader,
+      headers: { "content-type": "application/json", cookie: "a=b" },
+    });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({});
     expect(fake.hits.slice(before.fake)).toEqual(["/-/npm/v1/security/audits/quick"]);
     expect(second.hits.length).toBe(before.second);
+    const forwarded = fake.requests.at(-1)!;
+    expect(forwarded.headers.authorization).toBeUndefined();
+    expect(forwarded.headers.cookie).toBeUndefined();
+  });
+
+  it("group bulk audit keeps names served by hosted members out of the upstream request", async () => {
+    const body = { react: ["1.0.0"], "@acme/widgets": ["1.0.0"], "left-pad": ["1.3.0"] };
+    const res = await h.call("POST", "npm-group/-/npm/v1/security/advisories/bulk", {
+      body: gzipSync(Buffer.from(JSON.stringify(body))),
+      token: h.tokens.reader,
+      headers: { "content-type": "application/json", "content-encoding": "gzip" },
+    });
+    expect(res.status).toBe(200);
+    const forwarded = fake.requests.at(-1)!;
+    expect(forwarded.url).toBe("/-/npm/v1/security/advisories/bulk");
+    expect(forwarded.headers["content-encoding"]).toBe("gzip");
+    expect(forwarded.headers.authorization).toBeUndefined();
+    expect(JSON.parse(gunzipSync(forwarded.body).toString("utf8"))).toEqual({ "left-pad": ["1.3.0"] });
+  });
+
+  it("mirror bulk audit drops names its rules exclude", async () => {
+    const res = await h.call("POST", "npm-rules/-/npm/v1/security/advisories/bulk", {
+      body: JSON.stringify({ "react-dom": ["18.0.0"], "left-pad": ["1.3.0"] }),
+      headers: { "content-type": "application/json" },
+    });
+    expect(res.status).toBe(200);
+    const forwarded = fake.requests.at(-1)!;
+    expect(forwarded.headers["content-encoding"]).toBeUndefined();
+    expect(JSON.parse(forwarded.body.toString("utf8"))).toEqual({ "left-pad": ["1.3.0"] });
+
+    await h.call("POST", "npm-allow/-/npm/v1/security/advisories/bulk", { body: JSON.stringify({ "react-dom": ["18.0.0"], react: ["18.0.0"] }) });
+    expect(JSON.parse(fake.requests.at(-1)!.body.toString("utf8"))).toEqual({ react: ["18.0.0"] });
+  });
+
+  it("a bulk audit with nothing left to ask answers {} without the upstream", async () => {
+    const before = fake.hits.length;
+    const res = await h.call("POST", "npm-group/-/npm/v1/security/advisories/bulk", { body: JSON.stringify({ react: ["1.0.0"] }) });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({});
+    expect(fake.hits.length).toBe(before);
+  });
+
+  it("a bulk audit body that cannot be filtered is refused", async () => {
+    const bad = await h.call("POST", "npm-rules/-/npm/v1/security/advisories/bulk", { body: "not json", headers: { "content-type": "application/json" } });
+    expect(bad.status).toBe(400);
+    const encoded = await h.call("POST", "npm-group/-/npm/v1/security/advisories/bulk", { body: "x", headers: { "content-encoding": "br" } });
+    expect(encoded.status).toBe(415);
+  });
+
+  it("a quick audit through a group with hosted members fails instead of leaking names", async () => {
+    const before = fake.hits.length;
+    for (const path of ["audits/quick", "audits"]) {
+      const res = await h.call("POST", `npm-group/-/npm/v1/security/${path}`, { body: "{}", headers: { "content-type": "application/json" } });
+      expect(res.status).toBe(502);
+      expect(res.headers.get("www-authenticate")).toBeNull();
+      expect(await res.json()).toHaveProperty("error");
+    }
+    expect(fake.hits.length).toBe(before);
   });
 
   it("a group without a mirror member and an offline mirror give the hosted answer", async () => {

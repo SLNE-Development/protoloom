@@ -1,4 +1,4 @@
-import { discardBody, RegistryError, type FormatDeps, type Repo } from "@weaver/core";
+import { discardBody, matchesRules, RegistryError, type FormatDeps, type MirrorConfig, type Repo } from "@weaver/core";
 import { npmJson } from "./http.js";
 import type { Packument } from "./packument.js";
 import { createNpmStore } from "./store.js";
@@ -78,12 +78,23 @@ async function searchHosted(deps: FormatDeps, repoIds: string[], url: URL): Prom
   return { total: found.total, objects: found.documents.map(hostedObject) };
 }
 
-/** Forwards a search to a mirror's upstreams with the client's query string; null when offline or every upstream 404s. */
-function forwardSearch(deps: FormatDeps, mirror: Repo, url: URL): Promise<Response | null> {
-  return forwardUpstream(deps, mirror, "-/v1/search", { method: "GET", headers: new Headers({ accept: "application/json" }), search: url.search });
+/** Whether a mirror's allow/deny rules exclude anything (an empty allow list and no deny allows every name). */
+export function hasRules(mirror: Repo): boolean {
+  const { rules } = mirror.config as MirrorConfig;
+  return rules.allow.length > 0 || rules.deny.length > 0;
 }
 
-/** Reads an upstream search answer as JSON; null when it is too large, unreadable or not a search answer. */
+/** Whether a package name passes the mirror's allow/deny rules. */
+export function allowedBy(mirror: Repo, name: string): boolean {
+  return matchesRules((mirror.config as MirrorConfig).rules, name);
+}
+
+/** Forwards a search to a mirror's upstreams with the query `search`; null when offline or every upstream 404s. */
+function forwardSearch(deps: FormatDeps, mirror: Repo, search: string): Promise<Response | null> {
+  return forwardUpstream(deps, mirror, "-/v1/search", { method: "GET", headers: new Headers({ accept: "application/json" }), search });
+}
+
+/** Reads an upstream search answer as JSON (16 MiB cap); null when it is too large, unreadable or not a search answer. */
 async function readUpstreamResult(res: Response): Promise<{ total: number; objects: SearchObject[] } | null> {
   if (!res.body) return null;
   const reader = res.body.getReader();
@@ -108,6 +119,7 @@ async function readUpstreamResult(res: Response): Promise<{ total: number; objec
     const total = typeof parsed["total"] === "number" && Number.isFinite(parsed["total"]) ? parsed["total"] : objects.length;
     return { total, objects };
   } catch {
+    await reader.cancel().catch(() => undefined);
     return null;
   }
 }
@@ -118,46 +130,85 @@ function result(total: number, objects: SearchObject[]): Response {
   return npmJson(body);
 }
 
+/** The objects of an upstream answer that pass the mirror's rules, and `total` lowered by the ones dropped. */
+function applyRules(mirror: Repo, found: { total: number; objects: SearchObject[] }): { total: number; objects: SearchObject[] } {
+  const objects = found.objects.filter((o) => allowedBy(mirror, o.package.name));
+  return { total: Math.max(0, found.total - (found.objects.length - objects.length)), objects };
+}
+
 /**
- * Searches a group: the hosted members' results first (one query over all of them, paged by `size`/`from`), then
- * the upstream results of the first mirror member (the query passed through as is), deduplicated by package name;
- * `total` is the hosted total plus the upstream total. An unavailable or unusable upstream is skipped (logged).
+ * The upstream search of a group's mirror member with the page `size`/`from`, its answer filtered by the mirror's
+ * rules; null when the mirror is offline, answers 404 or anything but a readable 200, or is unavailable (logged).
+ */
+async function upstreamPage(
+  deps: FormatDeps,
+  group: Repo,
+  mirror: Repo,
+  url: URL,
+  size: number,
+  from: number,
+): Promise<{ total: number; objects: SearchObject[] } | null> {
+  const query = new URLSearchParams(url.search);
+  query.delete("size");
+  query.delete("from");
+  query.set("size", String(size));
+  query.set("from", String(from));
+  try {
+    const res = await forwardSearch(deps, mirror, query.toString());
+    if (res === null) return null;
+    if (res.status !== 200) {
+      await discardBody(res);
+      return null;
+    }
+    const found = await readUpstreamResult(res);
+    return found && applyRules(mirror, found);
+  } catch (err) {
+    if (!(err instanceof RegistryError && err.code === "upstream_unavailable")) throw err;
+    console.warn(`weaver: npm group ${group.name} search skipped member ${mirror.name}: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Searches a group as one list: the hosted members' packages first (each name once, from the earliest member), then
+ * the first mirror member's upstream results. A page `[from, from + size)` takes the hosted slice, then asks the
+ * upstream for the rest of the page at `from - hostedTotal` (at least 0); the upstream is asked for one result even
+ * when hosted results fill the page, so `total` covers it. Upstream results that a hosted member has by name, or that
+ * the mirror's rules exclude, are dropped and not counted. The page is cut to `size`. An unavailable upstream is
+ * skipped (logged).
  */
 async function searchGroup(deps: FormatDeps, group: Repo, url: URL): Promise<Response> {
+  const { size, from } = searchParams(url);
   const members = await deps.repos.members(group.id);
-  const hosted = await searchHosted(
-    deps,
-    members.filter((m) => m.kind === "hosted").map((m) => m.id),
-    url,
-  );
+  const hostedIds = members.filter((m) => m.kind === "hosted").map((m) => m.id);
+  const hosted = await searchHosted(deps, hostedIds, url);
   const mirror = members.find((m) => m.kind === "mirror");
-  let upstream: { total: number; objects: SearchObject[] } | null = null;
-  if (mirror) {
-    try {
-      const res = await forwardSearch(deps, mirror, url);
-      if (res !== null) {
-        if (res.status === 200) upstream = await readUpstreamResult(res);
-        else await discardBody(res);
-      }
-    } catch (err) {
-      if (!(err instanceof RegistryError && err.code === "upstream_unavailable")) throw err;
-      console.warn(`weaver: npm group ${group.name} search skipped member ${mirror.name}: ${err.message}`);
-    }
-  }
-  const seen = new Set(hosted.objects.map((o) => o.package.name));
+  const upstream = mirror
+    ? await upstreamPage(deps, group, mirror, url, Math.max(1, size - hosted.objects.length), Math.max(0, from - hosted.total))
+    : null;
+  let total = hosted.total;
   const objects = [...hosted.objects];
-  for (const o of upstream?.objects ?? []) {
-    if (seen.has(o.package.name)) continue;
-    seen.add(o.package.name);
-    objects.push(o);
+  if (upstream) {
+    const names = upstream.objects.map((o) => o.package.name);
+    const taken = await createNpmStore(deps.db).existing(hostedIds, names);
+    for (const o of hosted.objects) taken.add(o.package.name);
+    const kept: SearchObject[] = [];
+    for (const o of upstream.objects) {
+      if (taken.has(o.package.name)) continue;
+      taken.add(o.package.name);
+      kept.push(o);
+    }
+    total += Math.max(0, upstream.total - (upstream.objects.length - kept.length));
+    objects.push(...kept);
   }
-  return result(hosted.total + (upstream?.total ?? 0), objects);
+  return result(total, objects.slice(0, size));
 }
 
 /**
  * `GET -/v1/search?text=&size=&from=`: hosted repositories search their packages by name, description and keyword
  * (exact name first; size default 20, max 250); mirrors forward the query string upstream and pass the answer
- * through (an offline mirror or an upstream 404 finds nothing); groups combine both, see {@link searchGroup}.
+ * through (an offline mirror or an upstream 404 finds nothing); a mirror with allow/deny rules reads the answer
+ * (16 MiB cap, else 502) and drops the names its rules exclude; groups combine both, see {@link searchGroup}.
  */
 export async function handleSearch(deps: FormatDeps, repo: Repo, url: URL): Promise<Response> {
   if (repo.kind === "hosted") {
@@ -165,8 +216,14 @@ export async function handleSearch(deps: FormatDeps, repo: Repo, url: URL): Prom
     return result(found.total, found.objects);
   }
   if (repo.kind === "group") return searchGroup(deps, repo, url);
-  const res = await forwardSearch(deps, repo, url);
+  const res = await forwardSearch(deps, repo, url.search);
   if (res === null) return result(0, []);
+  if (hasRules(repo) && res.status === 200) {
+    const found = await readUpstreamResult(res);
+    if (!found) throw new RegistryError("upstream_unavailable", `the upstream of ${repo.name} sent an unusable search answer`);
+    const filtered = applyRules(repo, found);
+    return result(filtered.total, filtered.objects);
+  }
   const headers = new Headers(res.headers);
   if (!headers.has("content-type")) headers.set("content-type", "application/json");
   return new Response(res.body, { status: res.status, headers });

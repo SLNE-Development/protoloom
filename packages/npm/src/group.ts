@@ -1,7 +1,7 @@
 import { RegistryError, type FormatDeps, type Principal, type Repo } from "@weaver/core";
 import { npmError, npmJson } from "./http.js";
 import { serveTarball } from "./hosted.js";
-import { mirrorPackument, serveMirrorTarball } from "./mirror.js";
+import { mirrorPackument, mirrorTarball, streamMirrorTarball } from "./mirror.js";
 import type { PackageName } from "./names.js";
 import {
   ABBREVIATED_TYPE,
@@ -122,18 +122,13 @@ export async function groupPackument(
   return rewriteTarballs(out, base);
 }
 
-/** The file name a version's tarball is served under: the last segment of its tarball URL, else `<bare>-<version>.tgz`. */
-function tarballFileOf(name: PackageName, version: string, manifest: Partial<VersionManifest>): string {
-  const tarball = isRecord(manifest) && isRecord(manifest.dist) ? manifest.dist.tarball : undefined;
-  const fromUrl = typeof tarball === "string" ? (tarball.split(/[?#]/)[0]!.split("/").pop() ?? "") : "";
-  return fromUrl || `${name.bare}-${version}.tgz`;
-}
-
 /**
- * Serves the tarball from the first member (in order) whose packument contains the version, which is the member
- * whose manifest won the merge; null when no member has it. A version claimed by an earlier member is never served
- * from a later one. Members whose upstream is unavailable are skipped (logged); when no member has the tarball and
- * any failed, this throws `upstream_unavailable`. A GET records the download on the serving member as `principal`.
+ * Serves the tarball from the first member (in order) that has it, moving on when a member has none: hosted members
+ * are checked with one asset lookup, mirror members by asking for the tarball itself, so no member's packument is
+ * fetched. With the earlier member winning the merge, this is the member whose manifest won for the version in the
+ * usual case. null when no member has it. Members whose upstream is unavailable are skipped (logged); when no member
+ * has the tarball and any failed, this throws `upstream_unavailable`. A GET records the download on the serving
+ * member as `principal`.
  */
 export async function groupTarball(
   deps: FormatDeps,
@@ -143,32 +138,27 @@ export async function groupTarball(
   method: "GET" | "HEAD",
   principal: Principal,
 ): Promise<Response | null> {
-  const claimed = new Set<string>();
-  let winner: Repo | null = null;
+  let served: Response | null = null;
   const { failed } = await eachMember(
     deps,
     group,
-    (member) => memberPackument(deps, group, member, name, true),
-    (member, doc) => {
-      if (doc === null) return false;
-      for (const [version, manifest] of Object.entries(doc.versions)) {
-        if (claimed.has(version)) continue;
-        if (tarballFileOf(name, version, manifest) === file) {
-          winner = member;
-          return true;
-        }
+    async (member): Promise<Response | null> => {
+      if (member.kind === "mirror") {
+        const res = await mirrorTarball(deps, member, name, file, method);
+        return res && streamMirrorTarball(deps, member, principal, name, file, method, res);
       }
-      for (const version of Object.keys(doc.versions)) claimed.add(version);
-      return false;
+      const row = await deps.assets.find(member.id, `${name.full}/-/${file}`);
+      if (!row || row.origin !== "hosted") return null;
+      return serveTarball({ deps, store: createNpmStore(deps.db), repo: member, principal }, name, file, method);
+    },
+    (_member, res) => {
+      served = res;
+      return res !== null;
     },
   );
-  const member = winner as Repo | null;
-  if (member === null) {
-    if (failed) throw new RegistryError("upstream_unavailable", `no member of ${group.name} could answer for ${name.full}`);
-    return null;
-  }
-  if (member.kind === "mirror") return serveMirrorTarball(deps, member, principal, name, file, method);
-  return serveTarball({ deps, store: createNpmStore(deps.db), repo: member, principal }, name, file, method);
+  const res = served as Response | null;
+  if (res === null && failed) throw new RegistryError("upstream_unavailable", `no member of ${group.name} could answer for ${name.full}`);
+  return res;
 }
 
 /** Answers HEAD with the headers of `res` and no body. */
