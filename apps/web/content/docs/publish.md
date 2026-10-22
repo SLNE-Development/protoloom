@@ -96,6 +96,14 @@ Open **Browse**, then `releases`, then `dev.surf.protection`, then `protection-c
 weaver("dev.surf.protection:protection-contracts:1.0.0")
 ```
 
+## Dependency checks
+
+When you publish, the server checks that every dependency you declared exists. It looks only in hosted proto repositories your key can read, either directly or through a group: first the repository you publish to, then the others by resolution priority. See [Dependencies and resolution](/docs/resolution#resolution-when-publishing).
+
+Mirrors are never consulted. If a dependency is only available through a mirror, publish it into a hosted repository first.
+
+Publishing to a group or to a mirror is not possible: the server answers `405 method_not_allowed`. Publish to a hosted repository and let the group include it.
+
 ## Next steps
 
 - Publish snapshots to a separate repository with `snapshotRepository`: see [Gradle plugin](/docs/gradle).

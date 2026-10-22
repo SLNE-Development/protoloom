@@ -18,10 +18,14 @@ The server answers with every artifact in the tree, each with its repository, bu
 
 ## Where each artifact is found
 
-For every coordinate in the tree, the server looks in your repositories in the order you listed them. The first repository that has the exact version **and** that you can read wins.
+For every coordinate in the tree, the server looks in your repositories in the order you listed them. The first repository that has the exact version **and** that you can read wins. An entry can be a hosted, a mirror or a group repository.
 
+- A **hosted** repository answers from what was published to it.
+- A **mirror** asks its upstream Weaver instance. See [Repositories](/docs/admin/repositories#proto-mirrors-and-groups).
+- A **group** searches its members in the member order, and the first member that has the exact version wins. A group is one entry in your list, so the list order decides between a group and the entries around it.
 - Repositories you can't read are skipped, as if the artifact wasn't there.
-- Repository names that don't exist are ignored.
+- Names that don't exist, names of repositories of another format (such as Maven or npm) and names you can't read are ignored.
+- The repository reported for an artifact is the name you listed. An artifact found through the group `proto-all` is reported, and downloaded, as `proto-all`, not as the member that holds it.
 - A `-SNAPSHOT` version resolves to its newest build.
 
 If no repository has the coordinate, resolution fails with `404 not_found`, and `details.path` shows how it was reached:
@@ -93,9 +97,9 @@ The same check runs when you publish. If your files and your dependencies' files
 When you publish, the server resolves your declared dependencies too, but with a different repository order:
 
 1. The repository you publish to.
-2. Every other repository, by ascending **resolution priority** (lower wins), then by name.
+2. Every other hosted proto repository, by ascending **resolution priority** (lower wins), then by name.
 
-Only repositories your API key can read are used. An admin sets the priority per repository; the default is 100. See [Repositories](/docs/admin/repositories).
+Only hosted proto repositories your API key can read are used, directly or through a group. Mirrors are never consulted, because publishing never contacts an upstream. If a dependency only exists in a mirror, publish it into a hosted repository first. See [Publish your first artifact](/docs/publish#dependency-checks). An admin sets the priority per repository; the default is 100. See [Repositories](/docs/admin/repositories).
 
 ## Local modules in Gradle
 

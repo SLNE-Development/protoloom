@@ -224,6 +224,26 @@ class RemoteTest {
     }
 
     @Test
+    fun `fetchProtos surfaces a 502 message`() {
+        stub.resolveStatus = 502
+        stub.resolveResponse = """{"error":{"code":"upstream_unavailable","message":"Upstream of up-mirror did not answer"}}"""
+        writeBuild(
+            """
+            weaver {
+                repositories("up-mirror")
+            }
+            dependencies {
+                weaver("dev.example:a:1.0.0")
+            }
+            """,
+        )
+
+        val result = gradle("fetchProtos").buildAndFail()
+
+        assertTrue(result.output.contains("Upstream of up-mirror did not answer"), result.output)
+    }
+
+    @Test
     fun `a missing registry url names WEAVER_URL`() {
         writeBuild(
             """

@@ -31,6 +31,12 @@ Or run it once without installing: `npx @slne/weaver-cli fetch`.
 }
 ```
 
+An entry can also be a mirror or a group, which searches its members in order:
+
+```json title="weaver.json"
+{ "repositories": ["proto-all"] }
+```
+
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `url` | no | Server base URL. `WEAVER_URL` overrides it. One of the two must be set. |

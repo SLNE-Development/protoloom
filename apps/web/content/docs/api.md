@@ -74,6 +74,7 @@ Add `?force=true` to redeploy a release that other versions depend on. Only an a
 | 401 | `unauthorized` | No token, or an invalid one |
 | 403 | `forbidden` | The key can read but not write this group, or `force` without admin |
 | 404 | `not_found` | The repository doesn't exist or the key can't read it |
+| 405 | `method_not_allowed` | Publishing or deleting through a group or a mirror. Both are read only; use a hosted repository. |
 | 409 | `immutable` | The release exists and the repository doesn't allow redeploy |
 | 409 | `has_dependents` | Redeploying a release that other versions depend on |
 | 413 | `payload_too_large` | The body or archive is over the limits |
@@ -243,4 +244,9 @@ Every error has the same body:
 | 409 | `has_dependents` | Deleting or redeploying a version that others depend on. `details.dependents` lists them. |
 | 413 | `payload_too_large` | The body, the archive, a file, or the file count is over the limit. |
 | 422 | `validation_failed` | The protos don't compile, or the dependency graph can't be used. `details.issues` or `details.collisions` explain why. |
+| 502 | `upstream_unavailable` | A mirror's upstream did not answer, or answered with an error, and no cached copy exists. The message names the mirror, for example `Upstream of up-mirror did not answer`. |
 | 500 | `internal_error` | Something went wrong on the server. The response reveals nothing; check the server logs. |
+
+### Mirror hops
+
+Weaver instances that mirror each other send an `x-weaver-hops` header with the requests they make upstream and raise it by one at every hop. An instance that receives more than 4 hops refuses to continue, so a loop between mirrors cannot run forever (see [Troubleshooting](/docs/troubleshooting#mirrors)). Clients never need to send this header.
