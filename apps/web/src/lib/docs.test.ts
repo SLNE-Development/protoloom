@@ -27,6 +27,7 @@ const PLAN = [
   "/docs/validation",
   "/docs/gradle",
   "/docs/cli",
+  "/docs/docker",
   "/docs/api",
   "/docs/admin/repositories",
   "/docs/admin/users",

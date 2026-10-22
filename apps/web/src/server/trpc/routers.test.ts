@@ -26,6 +26,8 @@ import {
   auditEvent,
   cleanupPolicy,
   component,
+  dockerManifest,
+  dockerTag,
   invite,
   npmPackage,
   protoBuild as build,
@@ -863,6 +865,78 @@ describe("maven", () => {
     const mirror = await call(viewer()).maven.overview({ repository: "central" });
     expect(mirror).toEqual({ kind: "mirror", members: [], cacheEnabled: false, versionPolicy: null });
     expect(await call(viewer()).maven.overview({ repository: "releases" })).toMatchObject({ kind: "hosted", versionPolicy: "mixed" });
+  });
+});
+
+describe("docker", () => {
+  /** Stores an image manifest of `image` in `repo` directly, tagged `tag`; resolves to its digest. */
+  async function storeImage(repo: string, image: string, tag: string) {
+    const [row] = await db.select({ id: repository.id }).from(repository).where(eq(repository.name, repo));
+    const content = Buffer.from(JSON.stringify({ schemaVersion: 2, image, tag }));
+    const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+    const [manifest] = await db
+      .insert(dockerManifest)
+      .values({
+        repositoryId: row!.id,
+        image,
+        digest,
+        mediaType: "application/vnd.oci.image.manifest.v1+json",
+        artifactType: "application/vnd.oci.image.config.v1+json",
+        platforms: [{ os: "linux", architecture: "amd64" }],
+        size: content.length,
+        totalSize: 1000,
+        content,
+      })
+      .returning();
+    await db.insert(dockerTag).values({ repositoryId: row!.id, image, tag, manifestId: manifest!.id });
+    return digest;
+  }
+
+  beforeEach(async () => {
+    await call(admin()).repositories.create({ name: "images", format: "docker", kind: "hosted", visibility: "private" });
+    await call(admin()).repositories.create({ name: "pubimages", format: "docker", kind: "hosted", visibility: "public" });
+  });
+
+  it("docker.images is NOT_FOUND for a private repo and anonymous caller", async () => {
+    await storeImage("images", "web", "latest");
+    const anon = call(anonymous, anonymousViewOn);
+    expect(await codeOf(anon.docker.images({ repo: "images" }))).toBe("NOT_FOUND");
+    expect(await codeOf(anon.docker.tags({ repo: "images", image: "web" }))).toBe("NOT_FOUND");
+    expect(await codeOf(anon.docker.manifest({ repo: "images", image: "web", digest: `sha256:${"0".repeat(64)}` }))).toBe("NOT_FOUND");
+    expect(await codeOf(call(viewer()).docker.images({ repo: "shared" }))).toBe("BAD_REQUEST");
+  });
+
+  it("returns images for a reader", async () => {
+    const digest = await storeImage("images", "web", "latest");
+    await storeImage("images", "api", "1.0");
+    const images = await call(viewer()).docker.images({ repo: "images" });
+    expect(images.items.map((i) => i.image)).toEqual(["api", "web"]);
+    expect(images.next).toBeNull();
+    expect((await call(viewer()).docker.images({ repo: "images", query: "we" })).items.map((i) => i.image)).toEqual(["web"]);
+    const tags = await call(viewer()).docker.tags({ repo: "images", image: "web" });
+    expect(tags).toEqual([expect.objectContaining({ tag: "latest", digest, platforms: [{ os: "linux", architecture: "amd64" }] })]);
+    const detail = await call(viewer()).docker.manifest({ repo: "images", image: "web", digest });
+    expect(detail).toMatchObject({ digest, artifactType: null, tags: ["latest"] });
+    expect(await call(viewer()).docker.manifest({ repo: "images", image: "web", digest: `sha256:${"0".repeat(64)}` })).toBeNull();
+    await storeImage("pubimages", "open", "latest");
+    expect((await call(anonymous, anonymousViewOn).docker.images({ repo: "pubimages" })).items).toHaveLength(1);
+  });
+
+  it("overview lists browsable group members and exposes no mirror config", async () => {
+    await call(admin()).repositories.create({ name: "imggroup", format: "docker", kind: "group", visibility: "public", members: ["pubimages", "images"] });
+    await call(admin()).repositories.create({
+      name: "hub",
+      format: "docker",
+      kind: "mirror",
+      upstreams: [{ url: "https://registry-1.docker.io/", authType: "none" }],
+      config: { rules: { deny: ["secret/*"] } },
+    });
+    expect(await call(anonymous, anonymousViewOn).docker.overview({ repo: "imggroup" })).toEqual({ kind: "group", members: ["pubimages"], cacheEnabled: null });
+    expect((await call(viewer()).docker.overview({ repo: "imggroup" })).members).toEqual(["pubimages", "images"]);
+    const mirror = await call(viewer()).docker.overview({ repo: "hub" });
+    expect(mirror).toEqual({ kind: "mirror", members: [], cacheEnabled: false });
+    expect(JSON.stringify(mirror)).not.toContain("secret");
+    expect(await call(viewer()).docker.images({ repo: "imggroup" })).toEqual({ items: [], next: null });
   });
 });
 

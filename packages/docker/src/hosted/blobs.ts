@@ -2,7 +2,7 @@ import { Readable } from "node:stream";
 import { and, eq, sql } from "drizzle-orm";
 import type { FormatDeps, StoreId } from "@weaver/core";
 import { dockerBlob, dockerBlobLink, type Db } from "@weaver/db";
-import type { Caller } from "../auth/authorize.js";
+import { requireAccess, type Caller } from "../auth/authorize.js";
 import { DockerError } from "../errors.js";
 import type { DockerOptions } from "../handler.js";
 import type { Target } from "../target.js";
@@ -54,13 +54,53 @@ export async function findLinkedBlob(db: Db, repoId: string, image: string, dige
   return row ?? null;
 }
 
-/** Makes `blob` visible in repo/image and stamps the blob's `lastLinkedAt`; linking twice is a no-op. */
-export async function linkBlob(db: Db, repoId: string, image: string, blob: BlobRef): Promise<void> {
-  await db
-    .insert(dockerBlobLink)
-    .values({ repositoryId: repoId, image, blobId: blob.blobId, digest: blob.digest })
-    .onConflictDoNothing();
-  await db.update(dockerBlob).set({ lastLinkedAt: sql`now()` }).where(eq(dockerBlob.id, blob.blobId));
+/**
+ * Makes `blob` visible in repo/image, in one transaction: stamps the blob's `lastLinkedAt` first (locking its row,
+ * so garbage collection cannot delete it underneath), then inserts the link or refreshes its `createdAt`.
+ * Resolves to false, linking nothing, when the blob row is gone (collected meanwhile).
+ */
+export function linkBlob(db: Db, repoId: string, image: string, blob: BlobRef): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const touched = await tx
+      .update(dockerBlob)
+      .set({ lastLinkedAt: sql`now()` })
+      .where(eq(dockerBlob.id, blob.blobId))
+      .returning({ id: dockerBlob.id });
+    if (touched.length === 0) return false;
+    await tx
+      .insert(dockerBlobLink)
+      .values({ repositoryId: repoId, image, blobId: blob.blobId, digest: blob.digest })
+      .onConflictDoUpdate({
+        target: [dockerBlobLink.repositoryId, dockerBlobLink.image, dockerBlobLink.digest],
+        set: { createdAt: sql`now()` },
+      });
+    return true;
+  });
+}
+
+/**
+ * Refreshes an existing link of repo/image to `digest` (its `createdAt` and the blob's `lastLinkedAt`), so a
+ * client that skips an upload because the layer already exists can rely on it for the whole grace period.
+ * Blob row first, then link, the same lock order as {@link linkBlob}.
+ */
+export async function touchLink(db: Db, repoId: string, image: string, blob: BlobRef): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.update(dockerBlob).set({ lastLinkedAt: sql`now()` }).where(eq(dockerBlob.id, blob.blobId));
+    await tx
+      .update(dockerBlobLink)
+      .set({ createdAt: sql`now()` })
+      .where(and(eq(dockerBlobLink.repositoryId, repoId), eq(dockerBlobLink.image, image), eq(dockerBlobLink.digest, blob.digest)));
+  });
+}
+
+/** Whether the caller may push to the target, without raising the challenge `requireAccess` would. */
+function mayPush(ctx: HostedReadCtx): boolean {
+  try {
+    requireAccess(ctx.deps, ctx.caller, ctx.target, "push");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -85,7 +125,8 @@ export function parseRange(header: string | null, size: number): { start: number
 
 /**
  * Serves a blob linked in the target image: `GET` streams it from its object store (`206` for a
- * satisfiable `Range`, `416` otherwise) and records a download; `HEAD` answers headers only.
+ * satisfiable `Range`, `416` otherwise) and records a download; `HEAD` answers headers only and, for a caller
+ * who may push, refreshes the link (see {@link touchLink}).
  * An unlinked digest is `404 BLOB_UNKNOWN`, also when another repository holds it.
  */
 export async function serveHostedBlob(ctx: HostedReadCtx, req: Request, digest: string): Promise<Response> {
@@ -100,6 +141,8 @@ export async function serveHostedBlob(ctx: HostedReadCtx, req: Request, digest: 
     etag: `"${blob.digest}"`,
   };
   if (req.method === "HEAD") {
+    // `docker push` skips layers whose HEAD succeeds ("Layer already exists"); keep that link alive for the manifest PUT.
+    if (target.repo.kind === "hosted" && mayPush(ctx)) await touchLink(deps.db, target.repo.id, target.image, blob);
     return new Response(null, { status: 200, headers: { ...headers, "content-length": String(blob.size) } });
   }
 

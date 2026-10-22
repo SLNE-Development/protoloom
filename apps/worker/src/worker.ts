@@ -13,6 +13,7 @@ import {
   type StoreSet,
 } from "@weaver/core";
 import { repository, type Db } from "@weaver/db";
+import { runDockerGc } from "@weaver/docker/gc";
 import { sweepLoginSessions } from "@weaver/npm";
 import {
   createQueue,
@@ -21,9 +22,22 @@ import {
   scheduleHourlyEviction,
   scheduleHourlyStatsRollup,
   scheduleNpmLoginSweep,
+  scheduleRepeating,
   type MaintenanceJobData,
+  type MaintenanceQueue,
 } from "@weaver/jobs";
 import { cleanupRegistry } from "./cleanups.js";
+
+/** Id of the job scheduler that garbage-collects docker blobs and uploads once a day. */
+export const DOCKER_GC_SCHEDULER_ID = "docker-gc-daily";
+
+/** Cron pattern of the docker garbage collection: daily at 03:30, after the cleanup policies ran. */
+export const DOCKER_GC_PATTERN = "30 3 * * *";
+
+/** Creates or updates the daily docker garbage collection scheduler; calling it again never adds a second one. */
+export function scheduleDockerGc(queue: MaintenanceQueue): Promise<void> {
+  return scheduleRepeating(queue, DOCKER_GC_SCHEDULER_ID, DOCKER_GC_PATTERN, { kind: "docker:gc" });
+}
 
 /** What the worker needs: the database, the object stores, the upstream-credential key and the Valkey connection. */
 export interface WorkerDeps {
@@ -70,9 +84,7 @@ export async function processMaintenanceJob(deps: WorkerDeps, data: MaintenanceJ
     case "evict:all":
       return evictCaches({ db: deps.db, assets: createAssetService({ db: deps.db, stores: deps.stores }), now });
     case "docker:gc":
-      // The docker format registers its garbage collection later; until then the job does nothing.
-      console.log("weaver: docker:gc is not implemented yet; skipping");
-      return { skipped: true };
+      return runDockerGc({ db: deps.db, stores: deps.stores, now });
     case "npm:login-sweep":
       return sweepLoginSessions(deps.db, now);
     case "stats:rollup":
@@ -90,7 +102,7 @@ export async function processMaintenanceJob(deps: WorkerDeps, data: MaintenanceJ
 }
 
 /**
- * Upserts the `cleanup-daily`, `evict-hourly`, `npm-login-sweep` and `stats-hourly` schedulers (idempotent) and starts a worker that
+ * Upserts the `cleanup-daily`, `evict-hourly`, `npm-login-sweep`, `stats-hourly` and `docker-gc-daily` schedulers (idempotent) and starts a worker that
  * processes maintenance jobs one at a time.
  */
 export async function startWorker(deps: WorkerDeps): Promise<RunningWorker> {
@@ -100,6 +112,7 @@ export async function startWorker(deps: WorkerDeps): Promise<RunningWorker> {
     await scheduleHourlyEviction(queue);
     await scheduleNpmLoginSweep(queue);
     await scheduleHourlyStatsRollup(queue);
+    await scheduleDockerGc(queue);
   } finally {
     await queue.close();
   }

@@ -18,6 +18,7 @@ export {
   deleteHostedBlob,
   findLinkedBlob,
   linkBlob,
+  touchLink,
   serveHostedBlob,
   type BlobRef,
   type HostedCtx,
@@ -28,3 +29,5 @@ export { appendToSpool } from "./hosted/spool.js";
 export { createHubAuth, parseChallenge, type BearerChallenge, type HubAuth } from "./mirror/hub-auth.js";
 export { mirrorBlob, mirrorManifest, mirrorReferrers, mirrorTags, upstreamImage, type MirrorCtx } from "./mirror/mirror.js";
 export { fromGroup, type GroupCtx, type GroupOp } from "./group.js";
+export { DOCKER_GC_GRACE_MS, runDockerGc, type DockerGcDeps, type DockerGcResult } from "./gc.js";
+export { SWEEP_INTERVAL_MS, maybeSweepUploads, sweepUploads } from "./sweep.js";

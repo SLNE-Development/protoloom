@@ -204,6 +204,9 @@ importers:
       '@weaver/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@weaver/docker':
+        specifier: workspace:*
+        version: link:../../packages/docker
       '@weaver/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs

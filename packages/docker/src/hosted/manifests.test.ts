@@ -31,7 +31,7 @@ describe("hosted manifests", () => {
   let key: string;
   let repoId: string;
   /** Runs inside a manifest PUT's transaction at each step, when set by a test. */
-  let hook: ((step: "inserted" | "resolved") => Promise<void>) | null = null;
+  let hook: ((step: "begin" | "inserted" | "resolved") => Promise<void>) | null = null;
   beforeAll(async () => {
     reg = await startDockerTestRegistry({
       dockerOptions: { onManifestPutStep: (step) => (hook ? hook(step) : Promise.resolve()) },
@@ -315,7 +315,7 @@ describe("hosted manifests", () => {
   /** Deletes manifest `digest` of `image` from a separate connection, as a concurrent DELETE would. */
   function concurrentDelete(img: string, digest: string, at: "inserted" | "resolved") {
     let fired = false;
-    return async (step: "inserted" | "resolved") => {
+    return async (step: "begin" | "inserted" | "resolved") => {
       if (fired || step !== at) return;
       fired = true;
       await reg.deps.db

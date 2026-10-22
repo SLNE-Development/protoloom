@@ -15,6 +15,7 @@
   "dependencies": {
     "@weaver/core": "workspace:*",
     "@weaver/db": "workspace:*",
+    "@weaver/docker": "workspace:*",
     "@weaver/jobs": "workspace:*",
     "@weaver/maven": "workspace:*",
     "@weaver/npm": "workspace:*",
