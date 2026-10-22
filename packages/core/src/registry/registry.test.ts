@@ -16,7 +16,7 @@ import { createRepoService, type Repo, type RepoService } from "../repos/service
 import type { ServerSettings } from "../settings.js";
 import { createStoreSetFromEnv, getBuffer, type ObjectStore, type StoreSet } from "../storage/index.js";
 import { validateProtos } from "../validation.js";
-import { createRegistry, type Manifest, type Registry } from "./index.js";
+import { createRegistry, publishRepositoryOrder, type Manifest, type Registry } from "./index.js";
 import type { ProtoHostedConfig } from "../repos/config.js";
 
 const anonymous: Principal = { kind: "anonymous" };
@@ -780,10 +780,10 @@ describe("registry", () => {
         fetchImpl,
       });
 
-      const err = await expectError(
-        publishOrder(key("maintainer", [writeOn(target), readOn(mirror)], "key-target"), "target"),
-        "validation_failed",
-      );
+      const publisher = key("maintainer", [writeOn(target), readOn(mirror)], "key-target");
+      const order = await publishRepositoryOrder(testDb.db, repos, publisher, target);
+      expect(order.map((r) => r.name)).not.toContain("remote");
+      const err = await expectError(publishOrder(publisher, "target"), "validation_failed");
       expect(err.message).toBe("Dependency not found: acme:money:1.0.0");
       await engine.drain();
       expect(fetchImpl).toHaveBeenCalledTimes(0);

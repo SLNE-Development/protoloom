@@ -380,6 +380,31 @@ describe("POST resolve", () => {
     expect(res.status).toBe(404);
     expect((await errorOf(res)).code).toBe("not_found");
   });
+
+  it("hides artifacts of a private repository from callers that can't read it, like missing ones", async () => {
+    expect((await publish({ ...money, repo: "private" }, { token: keys.maintainer })).status).toBe(201);
+    const resolveAs = (token: string | undefined, dependency: string) =>
+      resolveRoute(
+        new Request(`${BASE}/api/v1/resolve`, {
+          method: "POST",
+          headers: headers(token),
+          body: JSON.stringify({ repositories: ["private"], dependencies: [dependency] }),
+        }),
+      );
+
+    const hidden = await resolveAs(undefined, "acme:money:1.0.0");
+    expect(hidden.status).toBe(404);
+    const hiddenError = await errorOf(hidden);
+    expect(hiddenError.code).toBe("not_found");
+    const missing = await resolveAs(undefined, "acme:absent:1.0.0");
+    expect(missing.status).toBe(404);
+    expect(hiddenError.message.replace("money", "X")).toBe((await errorOf(missing)).message.replace("absent", "X"));
+
+    const readable = await resolveAs(keys.reader, "acme:money:1.0.0");
+    expect(readable.status).toBe(200);
+    const body = (await readable.json()) as { artifacts: { repository: string; coordinate: string }[] };
+    expect(body.artifacts).toEqual([expect.objectContaining({ repository: "private", coordinate: "acme:money:1.0.0" })]);
+  });
 });
 
 describe("DELETE", () => {

@@ -3,8 +3,8 @@ import { protoArtifact, protoBuild, protoBuildFile, protoDependency, protoVersio
 import type { ProtoFile } from "../archive.js";
 import { formatCoordinate, type Coordinate } from "../coordinates.js";
 import { canAccess, canReadThroughGroup, type Principal } from "../permissions.js";
-import { readRepositoryConfig, type ProtoHostedConfig } from "../repos/config.js";
-import type { Repo, RepoService } from "../repos/service.js";
+import type { ProtoHostedConfig } from "../repos/config.js";
+import { toRepo, type Repo, type RepoService } from "../repos/service.js";
 import type { Lookup, ResolvedNode } from "../resolution.js";
 import type { StoreId, StoreSet } from "../storage/index.js";
 import type { validateProtos } from "../validation.js";
@@ -65,20 +65,6 @@ export async function findRepository(db: Queryable, name: string): Promise<Repos
   return row ?? null;
 }
 
-/** A hosted proto repository row as a {@link Repo}, its config read leniently. */
-function hostedRepo(row: RepositoryRow): Repo {
-  return {
-    id: row.id,
-    name: row.name,
-    format: row.format,
-    kind: row.kind,
-    description: row.description,
-    visibility: row.visibility,
-    dockerRoot: row.dockerRoot,
-    config: readRepositoryConfig(row),
-  };
-}
-
 /**
  * Whether the principal may read `repo` for at least one proto group by its own permissions: a
  * public repository, a user, or a key with an entry for it (whose group prefix the lookup then
@@ -110,7 +96,7 @@ export async function publishSources(db: Queryable, repos: RepoService, p: Princ
     .orderBy(asc(repository.name));
   // A stable sort keeps the name order within equal priorities. Sorting the leniently read config
   // (instead of casting the JSON in SQL) also ranks a damaged stored value at the default.
-  const others = rows.map(hostedRepo).sort((a, b) => hostedProtoConfig(a).resolutionPriority - hostedProtoConfig(b).resolutionPriority);
+  const others = rows.map(toRepo).sort((a, b) => hostedProtoConfig(a).resolutionPriority - hostedProtoConfig(b).resolutionPriority);
 
   const groupGranted = new Set<string>();
   const repositories: Repo[] = [];
