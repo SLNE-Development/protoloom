@@ -5,7 +5,7 @@ import { dockerBlobLink, dockerManifest, dockerManifestRef, dockerTag, type Db }
 import { DockerError } from "../errors.js";
 import { parseManifest, type Descriptor, type ParsedManifest, type Platform } from "../manifest-parse.js";
 import { isDigest } from "../media-types.js";
-import { API_VERSION, findLinkedBlob, type HostedCtx } from "./blobs.js";
+import { API_VERSION, findLinkedBlob, type HostedCtx, type HostedReadCtx } from "./blobs.js";
 
 /** The largest manifest body accepted, in bytes. */
 export const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
@@ -316,7 +316,7 @@ export async function putManifest(ctx: HostedCtx, req: Request, reference: strin
  * on the manifest and records a download.
  * Unknown → `404 MANIFEST_UNKNOWN`.
  */
-export async function serveManifest(ctx: HostedCtx, req: Request, reference: string): Promise<Response> {
+export async function serveManifest(ctx: HostedReadCtx, req: Request, reference: string): Promise<Response> {
   const { deps, target } = ctx;
   const manifest = await findManifest(deps.db, target.repo.id, target.image, reference);
   if (!manifest) throw manifestUnknown(reference);

@@ -27,10 +27,15 @@ import {
   cleanupPolicy,
   component,
   invite,
+  npmPackage,
   protoBuild as build,
   repoPermission,
   repository,
   session,
+  storageSnapshot,
+  usageDaily,
+  usageDailyToken,
+  usageEvent,
   user,
   type Db,
 } from "@weaver/db";
@@ -601,6 +606,122 @@ describe("browse by format", () => {
   });
 });
 
+describe("proto browse by kind", () => {
+  const upstreamUrl = "https://protos.example.com/api/v1";
+
+  /** Creates the public proto mirror `upstream-protos`, caching or not, and returns its id. */
+  async function createMirror(caching: boolean) {
+    await call(admin()).repositories.create({
+      name: "upstream-protos",
+      format: "proto",
+      kind: "mirror",
+      visibility: "public",
+      upstreams: [
+        { url: upstreamUrl, authType: "none" },
+        { url: "https://fallback.example.com/api/v1", authType: "none" },
+      ],
+      config: { cache: { enabled: caching }, rules: { deny: ["secret.*"] } },
+    });
+    const [row] = await db.select({ id: repository.id }).from(repository).where(eq(repository.name, "upstream-protos"));
+    return row!.id;
+  }
+
+  /** Inserts a cached asset of the mirror at `path`, linked to the component of `coordinate`. */
+  async function cached(
+    repoId: string,
+    path: string,
+    coordinate: string,
+    opts: { lastAccessedAt: Date | null; expiresAt?: Date | null; size?: number },
+  ) {
+    const [namespace, name, version] = coordinate.split(":") as [string, string, string];
+    const [comp] = await db.insert(component).values({ repositoryId: repoId, namespace, name, version }).onConflictDoNothing().returning();
+    await db.insert(asset).values({
+      repositoryId: repoId,
+      componentId: comp?.id ?? null,
+      path,
+      store: "local",
+      storageKey: `k/${randomUUID()}`,
+      size: opts.size ?? 100,
+      md5: "m",
+      sha1: "s1",
+      sha256: "s256",
+      sha512: "s512",
+      origin: "cache",
+      expiresAt: opts.expiresAt ?? null,
+      lastAccessedAt: opts.lastAccessedAt,
+    });
+  }
+
+  it("protoCache lists cached archives of a caching mirror", async () => {
+    const id = await createMirror(true);
+    await cached(id, "artifacts/acme/money/1.0.0/archive", "acme:money:1.0.0", { lastAccessedAt: new Date("2026-10-01T00:00:00Z"), size: 321 });
+    await cached(id, "artifacts/acme/money/1.1.0-SNAPSHOT/archive?build=2", "acme:money:1.1.0-SNAPSHOT", {
+      lastAccessedAt: new Date("2026-10-20T00:00:00Z"),
+      expiresAt: new Date("2026-10-20T00:30:00Z"),
+    });
+    // Manifests and version lists are cached too, but only archives are listed.
+    await cached(id, "artifacts/acme/money/1.0.0", "acme:money:1.0.0", { lastAccessedAt: new Date("2026-10-21T00:00:00Z"), expiresAt: new Date() });
+    await cached(id, "artifacts/acme/money", "acme:money:", { lastAccessedAt: new Date("2026-10-21T00:00:00Z"), expiresAt: new Date() });
+    await cached(id, "artifacts/acme/order/2.0.0/archive", "acme:order:2.0.0", { lastAccessedAt: null });
+
+    const listing = await call(viewer()).browse.protoCache({ repository: "upstream-protos" });
+    expect(listing).toEqual({
+      caching: true,
+      upstream: null,
+      items: [
+        { coordinate: "acme:money:1.1.0-SNAPSHOT", buildNumber: 2, size: 100, lastAccessedAt: new Date("2026-10-20T00:00:00Z"), cache: "metadata" },
+        { coordinate: "acme:money:1.0.0", buildNumber: null, size: 321, lastAccessedAt: new Date("2026-10-01T00:00:00Z"), cache: "immutable" },
+        { coordinate: "acme:order:2.0.0", buildNumber: null, size: 100, lastAccessedAt: null, cache: "immutable" },
+      ],
+    });
+    expect(JSON.stringify(listing)).not.toContain("secret.*");
+    expect(await codeOf(call(viewer()).browse.protoCache({ repository: "shared" }))).toBe("BAD_REQUEST");
+  });
+
+  it("protoCache reports caching false and the first upstream url when caching is off", async () => {
+    await createMirror(false);
+    expect(await call(admin()).browse.protoCache({ repository: "upstream-protos" })).toEqual({ caching: false, upstream: upstreamUrl, items: [] });
+    // Upstream URLs are admin-only, like the rest of the mirror config.
+    for (const caller of [call(viewer()), call(anonymous, anonymousViewOn)]) {
+      expect(await caller.browse.protoCache({ repository: "upstream-protos" })).toEqual({ caching: false, upstream: null, items: [] });
+    }
+  });
+
+  it("protoMembers returns members in group order", async () => {
+    await createMirror(false);
+    await call(admin()).repositories.create({
+      name: "all",
+      format: "proto",
+      kind: "group",
+      visibility: "public",
+      members: ["upstream-protos", "internal", "shared"],
+    });
+    expect(await call(viewer()).browse.protoMembers({ repository: "all" })).toEqual([
+      { name: "upstream-protos", kind: "mirror", visibility: "public" },
+      { name: "internal", kind: "hosted", visibility: "private" },
+      { name: "shared", kind: "hosted", visibility: "public" },
+    ]);
+    // Visitors only see the members they could browse themselves.
+    expect((await call(anonymous, anonymousViewOn).browse.protoMembers({ repository: "all" })).map((m) => m.name)).toEqual([
+      "upstream-protos",
+      "shared",
+    ]);
+    expect(await codeOf(call(viewer()).browse.protoMembers({ repository: "shared" }))).toBe("BAD_REQUEST");
+  });
+
+  it("browse.versions on a proto mirror is NOT_FOUND", async () => {
+    await createMirror(true);
+    await call(admin()).repositories.create({ name: "all", format: "proto", kind: "group", members: ["shared"] });
+    const caller = call(admin());
+    for (const repository of ["upstream-protos", "all"]) {
+      expect(await codeOf(caller.browse.versions({ repository, group: "acme", name: "money" }))).toBe("NOT_FOUND");
+      expect(await codeOf(caller.browse.artifacts({ repository }))).toBe("NOT_FOUND");
+      expect(await codeOf(caller.browse.version({ repository, coordinate: "acme:money:1.0.0" }))).toBe("NOT_FOUND");
+      expect(await codeOf(caller.browse.file({ repository, coordinate: "acme:money:1.0.0", path: "a.proto" }))).toBe("NOT_FOUND");
+    }
+  });
+});
+
 describe("maven", () => {
   /** Inserts a component with one asset per file name below its version directory. */
   async function deploy(repo: string, groupId: string, artifactId: string, version: string, files: string[]) {
@@ -1163,5 +1284,229 @@ describe("review follow-ups", () => {
       const full = Object.fromEntries((await call(viewer()).browse.repositories()).map((r) => [r.name, r]));
       expect(full.internal).toMatchObject({ artifactCount: 2, versionCount: 3 });
     });
+  });
+});
+
+describe("stats", () => {
+  const today = new Date().toISOString().slice(0, 10);
+
+  async function hosted(name: string, visibility: "public" | "private" = "private") {
+    await call(admin()).repositories.create({ name, format: "maven", kind: "hosted", visibility });
+    return (await repos.get(name))!.id;
+  }
+
+  async function downloads(repositoryId: string, namespace: string, name: string, count: number) {
+    await db.insert(usageDaily).values({ day: today, repositoryId, namespace, name, action: "download", count, bytes: count * 10 });
+  }
+
+  it("overview is admin only", async () => {
+    expect(await codeOf(call(maintainer()).stats.overview({ days: 30 }))).toBe("FORBIDDEN");
+    expect(await codeOf(call(anonymous).stats.overview({}))).toBe("UNAUTHORIZED");
+  });
+
+  it("overview lists series, top packages with labels, storage, mirror hit rates and named tokens", async () => {
+    const lib = await hosted("libs");
+    await downloads(lib, "org.acme", "core", 5);
+    await db.insert(usageDailyToken).values([
+      { day: today, apiKeyId: "gone", userId: people.maintainer, repositoryId: lib, action: "download", count: 2, bytes: 0 },
+    ]);
+
+    const overview = await call(admin()).stats.overview({ days: 7 });
+
+    expect(overview.series).toHaveLength(7);
+    expect(overview.series.at(-1)).toEqual({ day: today, downloads: 5, uploads: 0, bytes: 50 });
+    expect(overview.topPackages).toEqual([
+      { repositoryId: lib, repository: "libs", namespace: "org.acme", name: "core", label: "org.acme:core", downloads: 5 },
+    ]);
+    expect(overview.storage.map((s) => s.repository).sort()).toEqual(["internal", "libs", "shared"]);
+    expect(overview.hitRates).toEqual([]);
+    expect(overview.tokens).toEqual([
+      expect.objectContaining({ apiKeyId: "gone", keyName: "Deleted key", ownerName: "Max Maintainer", downloads: 2 }),
+    ]);
+  });
+
+  it("repository stats of a private repo the viewer cannot read are NOT_FOUND", async () => {
+    await downloads(repoIds.internal, "corp", "vault", 3);
+    expect(await codeOf(call(anonymous, anonymousViewOn).stats.repository({ repository: "internal" }))).toBe("NOT_FOUND");
+    const outsider: Principal = { kind: "apikey", keyId: "k", userId: people.viewer, role: "viewer", permissions: [] };
+    expect(await codeOf(call(outsider).stats.repository({ repository: "internal" }))).toBe("NOT_FOUND");
+    expect(await codeOf(call(viewer()).stats.repository({ repository: "nope" }))).toBe("NOT_FOUND");
+
+    const stats = await call(viewer()).stats.repository({ repository: "internal" });
+    expect(stats.series.at(-1)?.downloads).toBe(3);
+    expect(stats.hitRate).toBeNull();
+  });
+
+  it("group stats aggregate member downloads", async () => {
+    const a = await hosted("team-a");
+    const b = await hosted("team-b");
+    await call(admin()).repositories.create({ name: "everything", format: "maven", kind: "group", visibility: "public", members: ["team-a", "team-b"] });
+    await downloads(a, "org.acme", "core", 4);
+    await downloads(b, "org.acme", "util", 6);
+    await downloads(repoIds.shared, "acme", "money", 100);
+    const takenAt = new Date("2026-06-01T00:00:00Z");
+    await db.insert(storageSnapshot).values([
+      { day: today, repositoryId: a, hostedBytes: 10, cacheBytes: 0, assetCount: 1, takenAt },
+      { day: today, repositoryId: b, hostedBytes: 20, cacheBytes: 0, assetCount: 2, takenAt },
+      { day: today, repositoryId: repoIds.shared, hostedBytes: 999, cacheBytes: 0, assetCount: 9, takenAt },
+    ]);
+
+    const stats = await call(anonymous, anonymousViewOn).stats.repository({ repository: "everything", days: 7 });
+
+    expect(stats.series.at(-1)?.downloads).toBe(10);
+    expect(stats.topPackages.map((p) => [p.repository, p.label, p.downloads])).toEqual([
+      ["team-b", "org.acme:util", 6],
+      ["team-a", "org.acme:core", 4],
+    ]);
+    expect(stats.storage).toEqual({ hostedBytes: 30, cacheBytes: 0, assetCount: 3, takenAt });
+    expect(stats.hitRate).toBeNull();
+  });
+
+  it("tokenActivity: owner gets it, another maintainer gets NOT_FOUND, admin gets it", async () => {
+    const created = await call(maintainer()).keys.create({ name: "ci", permissions: [{ repository: "shared", access: "read" }] });
+    for (let i = 0; i < 3; i++) {
+      await db.insert(usageEvent).values({ repositoryId: repoIds.shared, path: `p${i}`, action: "download", apiKeyId: created.id, userId: people.maintainer });
+    }
+    await db.insert(usageDailyToken).values({ day: today, apiKeyId: created.id, userId: people.maintainer, repositoryId: repoIds.shared, action: "download", count: 3, bytes: 0 });
+    const other = asUser((await createUser("maintainer", "Other")).id, "maintainer");
+
+    const own = await call(maintainer()).stats.tokenActivity({ keyId: created.id, limit: 2 });
+    expect(own.key).toEqual({ id: created.id, name: "ci" });
+    expect(own.series.at(-1)?.downloads).toBe(3);
+    expect(own.events.map((e) => e.path)).toEqual(["p2", "p1"]);
+    expect(own.nextBefore).toBe(own.events[1]!.id);
+    const rest = await call(maintainer()).stats.tokenActivity({ keyId: created.id, limit: 2, before: own.nextBefore! });
+    expect(rest.events.map((e) => e.path)).toEqual(["p0"]);
+    expect(rest.nextBefore).toBeNull();
+
+    expect(await codeOf(call(other).stats.tokenActivity({ keyId: created.id }))).toBe("NOT_FOUND");
+    expect((await call(admin()).stats.tokenActivity({ keyId: created.id })).events).toHaveLength(3);
+    expect((await call(admin()).stats.tokenActivity({ keyId: "deleted" })).key).toEqual({ id: "deleted", name: "Deleted key" });
+    expect(await codeOf(call(maintainer()).stats.tokenActivity({ keyId: "deleted" }))).toBe("NOT_FOUND");
+  });
+});
+
+describe("npm", () => {
+  /** Stores a hosted packument (and a component with a 1234-byte tarball asset per version). */
+  async function publish(repo: string, name: string, versions: string[], extra: Record<string, unknown> = {}) {
+    const [row] = await db.select({ id: repository.id }).from(repository).where(eq(repository.name, repo));
+    const slash = name.indexOf("/");
+    const namespace = name.startsWith("@") ? name.slice(1, slash) : "";
+    const bare = name.startsWith("@") ? name.slice(slash + 1) : name;
+    const manifests = Object.fromEntries(versions.map((v) => [v, { name, version: v, dist: { tarball: "x", shasum: "y" } }]));
+    await db.insert(npmPackage).values({
+      repositoryId: row!.id,
+      name,
+      document: {
+        _id: name,
+        name,
+        "dist-tags": { latest: versions.at(-1)! },
+        versions: { ...manifests, ...((extra["versions"] as object | undefined) ?? {}) },
+        time: Object.fromEntries(versions.map((v) => [v, "2026-01-01T00:00:00.000Z"])),
+        description: `The ${name} package`,
+        ...(extra["readme"] ? { readme: extra["readme"] } : {}),
+      },
+    });
+    for (const v of versions) {
+      const [comp] = await db.insert(component).values({ repositoryId: row!.id, namespace, name: bare, version: v }).returning();
+      await db.insert(asset).values({
+        repositoryId: row!.id,
+        componentId: comp!.id,
+        path: `${name}/-/${bare}-${v}.tgz`,
+        store: "local",
+        storageKey: `k/${randomUUID()}`,
+        size: 1234,
+        contentType: "application/octet-stream",
+        md5: "m",
+        sha1: "s1",
+        sha256: "s256",
+        sha512: "s512",
+        origin: "hosted",
+      });
+    }
+  }
+
+  beforeEach(async () => {
+    await call(admin()).repositories.create({ name: "npm-priv", format: "npm", kind: "hosted", visibility: "private" });
+    await call(admin()).repositories.create({ name: "npm-pub", format: "npm", kind: "hosted", visibility: "public" });
+  });
+
+  it("packages lists hosted packages with latest", async () => {
+    await publish("npm-priv", "left-pad", ["1.0.0", "1.1.0"]);
+    await publish("npm-priv", "@acme/ui", ["2.0.0"]);
+    const page = await call(viewer()).npm.packages({ repo: "npm-priv" });
+    expect(page.source).toBe("hosted");
+    expect(page.nextCursor).toBeNull();
+    expect(page.items.map((p) => `${p.name}@${p.latest}`)).toEqual(["@acme/ui@2.0.0", "left-pad@1.1.0"]);
+    expect(page.items[0]!.description).toBe("The @acme/ui package");
+    expect((await call(viewer()).npm.packages({ repo: "npm-priv", query: "pad" })).items.map((p) => p.name)).toEqual(["left-pad"]);
+    expect(await codeOf(call(viewer()).npm.packages({ repo: "shared" }))).toBe("BAD_REQUEST");
+  });
+
+  it("packages pages by 25", async () => {
+    for (let i = 0; i < 27; i++) await publish("npm-priv", `pkg-${String(i).padStart(2, "0")}`, ["1.0.0"]);
+    const first = await call(viewer()).npm.packages({ repo: "npm-priv" });
+    expect(first.items).toHaveLength(25);
+    expect(first.nextCursor).toBe(25);
+    const second = await call(viewer()).npm.packages({ repo: "npm-priv", cursor: first.nextCursor! });
+    expect(second.items.map((p) => p.name)).toEqual(["pkg-25", "pkg-26"]);
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it("package returns versions newest first with deprecated flags", async () => {
+    await publish("npm-priv", "@acme/ui", ["1.2.0", "1.10.0", "1.9.0"], {
+      readme: "# UI",
+      versions: { "1.9.0": { name: "@acme/ui", version: "1.9.0", deprecated: "use 1.10", dist: { tarball: "x", shasum: "y" } } },
+    });
+    const pkg = await call(viewer()).npm.package({ repo: "npm-priv", name: "@acme/ui" });
+    expect(pkg!.versions.map((v) => v.version)).toEqual(["1.10.0", "1.9.0", "1.2.0"]);
+    expect(pkg!.versions.find((v) => v.version === "1.9.0")).toMatchObject({ deprecated: "use 1.10", size: 1234, publishedAt: "2026-01-01T00:00:00.000Z" });
+    expect(pkg!.versions[0]!.deprecated).toBeNull();
+    expect(pkg).toMatchObject({ distTags: { latest: "1.9.0" }, readme: "# UI", description: "The @acme/ui package" });
+    expect(await call(viewer()).npm.package({ repo: "npm-priv", name: "missing" })).toBeNull();
+  });
+
+  it("private repo without read is NOT_FOUND", async () => {
+    await publish("npm-priv", "left-pad", ["1.0.0"]);
+    const anon = call(anonymous, anonymousViewOn);
+    expect(await codeOf(anon.npm.packages({ repo: "npm-priv" }))).toBe("NOT_FOUND");
+    expect(await codeOf(anon.npm.package({ repo: "npm-priv", name: "left-pad" }))).toBe("NOT_FOUND");
+    await publish("npm-pub", "open", ["1.0.0"]);
+    expect((await anon.npm.packages({ repo: "npm-pub" })).items).toHaveLength(1);
+  });
+
+  it("mirror source lists cached components only and exposes no config", async () => {
+    await call(admin()).repositories.create({
+      name: "npmjs",
+      format: "npm",
+      kind: "mirror",
+      visibility: "public",
+      upstreams: [{ url: "https://registry.npmjs.org/", authType: "none" }],
+      config: { rules: { deny: ["secret-*"] } },
+    });
+    const [row] = await db.select({ id: repository.id }).from(repository).where(eq(repository.name, "npmjs"));
+    await db.insert(component).values([
+      { repositoryId: row!.id, namespace: "", name: "lodash", version: "4.9.0" },
+      { repositoryId: row!.id, namespace: "", name: "lodash", version: "4.17.21" },
+      { repositoryId: row!.id, namespace: "types", name: "node", version: "22.0.0" },
+    ]);
+    const page = await call(anonymous, anonymousViewOn).npm.packages({ repo: "npmjs" });
+    expect(page.source).toBe("cache");
+    expect(page.items.map((p) => `${p.name}@${p.latest}`)).toEqual(["@types/node@22.0.0", "lodash@4.17.21"]);
+    expect(JSON.stringify(page)).not.toContain("secret-");
+    const pkg = await call(viewer()).npm.package({ repo: "npmjs", name: "lodash" });
+    expect(pkg!.versions.map((v) => v.version)).toEqual(["4.17.21", "4.9.0"]);
+  });
+
+  it("group lists only members the caller can browse, earlier member wins", async () => {
+    await publish("npm-priv", "left-pad", ["1.0.0"]);
+    await publish("npm-pub", "left-pad", ["9.9.9"]);
+    await call(admin()).repositories.create({ name: "npm-grp", format: "npm", kind: "group", visibility: "public", members: ["npm-pub", "npm-priv"] });
+    const anon = await call(anonymous, anonymousViewOn).npm.packages({ repo: "npm-grp" });
+    expect(anon).toMatchObject({ source: "group", members: ["npm-pub"] });
+    const user = await call(viewer()).npm.packages({ repo: "npm-grp" });
+    expect(user.members).toEqual(["npm-pub", "npm-priv"]);
+    expect(user.items.map((p) => `${p.name}@${p.latest}`)).toEqual(["left-pad@9.9.9"]);
+    expect((await call(viewer()).npm.package({ repo: "npm-grp", name: "left-pad" }))!.versions.map((v) => v.version)).toEqual(["9.9.9"]);
   });
 });

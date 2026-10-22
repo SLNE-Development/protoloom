@@ -9,7 +9,11 @@ import {
   redisConnection,
   scheduleDailyCleanup,
   scheduleHourlyEviction,
+  scheduleNpmLoginSweep,
+  scheduleHourlyStatsRollup,
   scheduleRepeating,
+  STATS_ROLLUP_PATTERN,
+  STATS_SCHEDULER_ID,
   type CleanupQueue,
 } from "./index.js";
 
@@ -86,6 +90,27 @@ describe("jobs", () => {
     const evict = schedulers.find((s) => s.key === "evict-hourly");
     expect(evict).toMatchObject({ pattern: "17 * * * *" });
     expect(evict?.template?.data).toEqual({ kind: "evict:all" });
+  });
+
+  it("upserts one npm login sweep scheduler every five minutes", async () => {
+    await scheduleNpmLoginSweep(queue);
+    await scheduleNpmLoginSweep(queue);
+
+    const schedulers = await queue.getJobSchedulers();
+    expect(schedulers).toHaveLength(1);
+    expect(schedulers[0]).toMatchObject({ key: "npm-login-sweep", pattern: "*/5 * * * *" });
+    expect(schedulers[0]?.template?.data).toEqual({ kind: "npm:login-sweep" });
+  });
+
+  it("upserts an hourly stats rollup scheduler at minute 41", async () => {
+    await scheduleHourlyStatsRollup(queue);
+    await scheduleHourlyStatsRollup(queue);
+
+    const schedulers = await queue.getJobSchedulers();
+    expect(schedulers).toHaveLength(1);
+    expect(schedulers[0]).toMatchObject({ key: STATS_SCHEDULER_ID, pattern: STATS_ROLLUP_PATTERN });
+    expect([STATS_SCHEDULER_ID, STATS_ROLLUP_PATTERN]).toEqual(["stats-hourly", "41 * * * *"]);
+    expect(schedulers[0]?.template?.data).toEqual({ kind: "stats:rollup" });
   });
 
   it("scheduleRepeating updates the pattern of an existing scheduler id", async () => {

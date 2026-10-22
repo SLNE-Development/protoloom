@@ -4,7 +4,7 @@ import { env } from "./env";
 import { PATH_HEADER } from "./lib/access";
 
 /** Sections that are never visible without signing in, whatever the anonymous-view setting says. */
-const SIGNED_IN_ONLY = ["/account", "/keys", "/repositories", "/admin"];
+const SIGNED_IN_ONLY = ["/account", "/keys", "/repositories", "/admin", "/cli-login"];
 
 /**
  * Runs before every page request. It only checks whether a session cookie is present (it never

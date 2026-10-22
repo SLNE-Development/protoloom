@@ -18,7 +18,8 @@ import {
   type RepoService,
   type ServerSettings,
 } from "@weaver/core";
-import { user } from "@weaver/db";
+import { eq } from "drizzle-orm";
+import { asset, user } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
 import { createMirrorSource, type ProtoMirrorSource } from "./mirror-source.js";
 import { serveFormatHandler, type HandlerUpstream } from "./testing/upstream.js";
@@ -326,6 +327,50 @@ describe("proto mirror source", () => {
       expect(await readAll(good!.body)).toEqual(ARCHIVE);
       await engine.drain();
       expect((await assets.find(repo.id, "artifacts/acme/money/1.0.0/archive?build=1"))!.sha256).toBe(ARCHIVE_SHA);
+    });
+  });
+
+  describe("broken upstream answers", () => {
+    it("an archive that breaks off mid-body is upstream_unavailable as broken off, not as a foreign API", async () => {
+      const repo = await mirror({ cache: { enabled: true } }, "broken-mirror");
+      up.handler = () => {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(ARCHIVE.subarray(0, 5)));
+            setTimeout(() => controller.error(new Error("connection reset")), 20);
+          },
+        });
+        return Promise.resolve(
+          new Response(body, {
+            headers: { "content-type": "application/gzip", "content-length": String(ARCHIVE.length), "x-weaver-sha256": ARCHIVE_SHA },
+          }),
+        );
+      };
+      const error = await source.archive(repo, release, 1, 0, "GET").then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(RegistryError);
+      expect(error).toMatchObject({ code: "upstream_unavailable" });
+      expect((error as RegistryError).message).toMatch(/broke off/);
+      expect((error as RegistryError).message).not.toMatch(/Weaver proto API/);
+      await engine.drain();
+      expect(await assets.find(repo.id, "artifacts/acme/money/1.0.0/archive?build=1")).toBeNull();
+    });
+
+    it("a HEAD that is not answered as by Weaver leaves the cached archive alone", async () => {
+      const repo = await mirror({ cache: { enabled: true } }, "head-mirror");
+      const path = "artifacts/acme/money/1.0.0-SNAPSHOT/archive?build=3";
+      await readAll((await source.archive(repo, snapshot, 3, 0, "GET"))!.body);
+      await engine.drain();
+      const cachedAsset = await assets.find(repo.id, path);
+      expect(cachedAsset).not.toBeNull();
+      // Stale, so the HEAD asks the upstream, which now answers without a checksum.
+      await testDb.db.update(asset).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(asset.id, cachedAsset!.id));
+      up.handler = (req) =>
+        Promise.resolve(new Response(req.method === "HEAD" ? null : ARCHIVE, { headers: { "content-type": "application/gzip" } }));
+      await expect(source.archive(repo, snapshot, 3, 0, "HEAD")).rejects.toMatchObject({ code: "upstream_unavailable" });
+      expect((await assets.find(repo.id, path))?.id).toBe(cachedAsset!.id);
     });
   });
 

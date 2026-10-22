@@ -8,7 +8,7 @@ import {
   type ProtoFile,
 } from "@weaver/core";
 import { repository, type Db } from "@weaver/db";
-import { ARTIFACTS, AUTH_SECRET, USERS, serverEnv } from "./fixtures";
+import { ARTIFACTS, AUTH_SECRET, MIRROR_UPSTREAM, USERS, serverEnv } from "./fixtures";
 
 function proto(path: string, body: string, imports: string[] = []): ProtoFile {
   const pkg = path.replace(/\/[^/]+$/, "").replaceAll("/", ".");
@@ -20,7 +20,8 @@ function proto(path: string, body: string, imports: string[] = []): ProtoFile {
  * Seeds the browse fixtures through the real publish path: a public `releases` and a private
  * `snapshots` repository, `dev.example:demo:1.0.0` (money.proto), `dev.example:orders:1.0.0`
  * depending on it (so deleting demo hits `has_dependents`), two builds of
- * `dev.example:demo:1.1.0-SNAPSHOT` and `dev.example:scratch:0.1.0`, which a test deletes.
+ * `dev.example:demo:1.1.0-SNAPSHOT` and `dev.example:scratch:0.1.0`, which a test deletes. Also a
+ * public proto mirror without caching and a public proto group of `releases` and that mirror.
  */
 export async function seedArtifacts(db: Db): Promise<void> {
   const rows = await db.insert(repository).values([
@@ -69,4 +70,20 @@ export async function seedArtifacts(db: Db): Promise<void> {
   await publish(ARTIFACTS.snapshots, "demo", "1.1.0-SNAPSHOT", [money]);
   // Deleted by browse.spec (its only version), so nothing else may rely on it.
   await publish(ARTIFACTS.releases, "scratch", "0.1.0", [proto("dev/example/scratch/v1/scratch.proto", "message Scratch {}")]);
+
+  const asAdmin: Principal = { kind: "user", userId: USERS.admin.id, role: "admin" };
+  await repos.create(asAdmin, {
+    name: ARTIFACTS.mirror,
+    format: "proto",
+    kind: "mirror",
+    visibility: "public",
+    upstreams: [{ url: MIRROR_UPSTREAM, authType: "none" }],
+  });
+  await repos.create(asAdmin, {
+    name: ARTIFACTS.group,
+    format: "proto",
+    kind: "group",
+    visibility: "public",
+    members: [ARTIFACTS.releases, ARTIFACTS.mirror],
+  });
 }

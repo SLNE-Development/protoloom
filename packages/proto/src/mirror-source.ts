@@ -12,7 +12,7 @@ import {
   type VersionInfo,
   type VersionSummary,
 } from "@weaver/core";
-import { readAllLimited, streamOf } from "./bytes.js";
+import { readAllLimited, streamOf, TooLargeError } from "./bytes.js";
 import { HOPS_HEADER, manifestBodySchema, protoPath, SHA_HEADER, SHA256_PATTERN, versionInfoFromJson, versionsBodySchema } from "./wire.js";
 
 /** An archive a proto mirror served: the body to stream (null for HEAD) with its size and checksum when known. */
@@ -63,6 +63,11 @@ function notWeaver(repo: Repo): RegistryError {
   return new RegistryError("upstream_unavailable", `Upstream of ${repo.name} did not answer as a Weaver proto API`);
 }
 
+/** The error for an upstream whose body broke off before its end. */
+function brokeOff(repo: Repo, path: string, error: unknown): RegistryError {
+  return new RegistryError("upstream_unavailable", `Upstream of ${repo.name} broke off ${path}: ${error instanceof Error ? error.message : String(error)}`);
+}
+
 /** Creates the proto mirror source over the core mirror engine. */
 export function createMirrorSource(deps: { mirror: MirrorEngine }): ProtoMirrorSource {
   const headers = (hops: number) => ({ accept: "application/json", [HOPS_HEADER]: String(hops + 1) });
@@ -102,7 +107,7 @@ export function createMirrorSource(deps: { mirror: MirrorEngine }): ProtoMirrorS
       text = await new Response(response.body).text();
     } catch (error) {
       await deps.mirror.evict(repo, path);
-      throw new RegistryError("upstream_unavailable", `Upstream of ${repo.name} broke off ${path}: ${error instanceof Error ? error.message : String(error)}`);
+      throw brokeOff(repo, path, error);
     }
     let json: unknown;
     try {
@@ -167,10 +172,11 @@ export function createMirrorSource(deps: { mirror: MirrorEngine }): ProtoMirrorS
         return { status: 200, body: response.body, size: response.asset.size, sha256: response.asset.sha256, cache: response.cache };
       }
       // A Weaver upstream always names the archive's checksum; anything else is not its proto API.
+      // A HEAD caches nothing, so it has nothing to evict (a cached archive it bypassed stays).
       const expected = response.headers.get(SHA_HEADER);
       if (expected === null || !SHA256_PATTERN.test(expected)) {
         await cancelBody(response);
-        throw await rejectBody(repo, path);
+        throw method === "HEAD" ? notWeaver(repo) : await rejectBody(repo, path);
       }
       if (response.cache === "miss") {
         // The bytes are being cached as they stream; proto archives are small enough to check whole
@@ -178,8 +184,10 @@ export function createMirrorSource(deps: { mirror: MirrorEngine }): ProtoMirrorS
         let data: Buffer;
         try {
           data = await readAllLimited(response.body, LIMITS.archiveBytes);
-        } catch {
-          throw await rejectBody(repo, path);
+        } catch (error) {
+          if (error instanceof TooLargeError) throw await rejectBody(repo, path);
+          await deps.mirror.evict(repo, path);
+          throw brokeOff(repo, path, error);
         }
         if (sha256(data) !== expected) throw await rejectBody(repo, path);
         return { status: 200, body: streamOf(data), size: data.length, sha256: expected, cache: "miss" };

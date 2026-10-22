@@ -6,9 +6,11 @@ import { dashboardRouter } from "./routers/dashboard";
 import { invitesRouter } from "./routers/invites";
 import { keysRouter } from "./routers/keys";
 import { mavenRouter } from "./routers/maven";
+import { npmRouter } from "./routers/npm";
 import { policiesRouter } from "./routers/policies";
 import { repositoriesRouter } from "./routers/repositories";
 import { settingsRouter } from "./routers/settings";
+import { statsRouter } from "./routers/stats";
 import { usersRouter } from "./routers/users";
 import { versionsRouter } from "./routers/versions";
 
@@ -17,6 +19,7 @@ export const appRouter = router({
   browse: browseRouter,
   dashboard: dashboardRouter,
   maven: mavenRouter,
+  npm: npmRouter,
   repositories: repositoriesRouter,
   policies: policiesRouter,
   versions: versionsRouter,
@@ -24,6 +27,7 @@ export const appRouter = router({
   invites: invitesRouter,
   users: usersRouter,
   settings: settingsRouter,
+  stats: statsRouter,
   audit: auditRouter,
 });
 

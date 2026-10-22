@@ -4,10 +4,13 @@ import type { BrowseRepo as Repo } from "@/server/trpc/routers/browse";
 import { env } from "@/env";
 import { api } from "@/trpc/server";
 import { MavenView } from "./maven-view";
+import { NpmRepoView } from "./npm/npm-repo-view";
 import { ProtoArtifactList } from "./proto-artifact-list";
+import { ProtoGroupView } from "./proto-group-view";
+import { ProtoMirrorView } from "./proto-mirror-view";
 
-/** The proto browse view: the repository's artifacts with a `?q=` filter. */
-async function ProtoRepositoryView({ repo }: { repo: Repo }) {
+/** The browse view of a hosted proto repository: its artifacts with a `?q=` filter. */
+async function ProtoHostedView({ repo }: { repo: Repo }) {
   const artifacts = await api.browse.artifacts({ repository: repo.name });
   return (
     <>
@@ -19,6 +22,18 @@ async function ProtoRepositoryView({ repo }: { repo: Repo }) {
       </Suspense>
     </>
   );
+}
+
+/** The proto browse view of each repository kind: artifacts (hosted), the cache (mirror) or the members (group). */
+function ProtoRepositoryView({ repo }: { repo: Repo }) {
+  switch (repo.kind) {
+    case "hosted":
+      return <ProtoHostedView repo={repo} />;
+    case "mirror":
+      return <ProtoMirrorView repo={repo} />;
+    case "group":
+      return <ProtoGroupView repo={repo} />;
+  }
 }
 
 /** The Maven browse view: the server fetches the overview, the client view browses by the g, a and v search params. */
@@ -37,5 +52,6 @@ async function MavenRepositoryView({ repo }: { repo: Repo }) {
  */
 export const BROWSE_VIEWS: Partial<Record<Format, (props: { repo: Repo }) => ReactNode>> = {
   maven: MavenRepositoryView,
+  npm: NpmRepoView,
   proto: ProtoRepositoryView,
 };

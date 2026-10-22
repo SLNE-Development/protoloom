@@ -11,7 +11,6 @@ import {
   type Manifest,
   type Principal,
   type Registry,
-  type validateProtos,
 } from "@weaver/core";
 import {
   archiveUrl,
@@ -126,9 +125,9 @@ async function readPublishForm(req: Request): Promise<{ manifest: unknown; archi
  * another method on a known path `405 method_not_allowed` with `allow`. A request that already
  * passed more than {@link MAX_MIRROR_HOPS} mirrors is refused as a mirror loop before any work.
  * Publishing and deleting go to `registry` (hosted repositories only); reads go through the
- * kind-aware proto service. `validate` is not used here: publish validation runs inside `registry`.
+ * kind-aware proto service; publish validation runs inside `registry`.
  */
-export function createProtoHandler(deps: FormatDeps & { registry: Registry; validate?: typeof validateProtos }): FormatHandler {
+export function createProtoHandler(deps: FormatDeps & { registry: Registry }): FormatHandler {
   const service: ProtoService = createProtoService({
     registry: deps.registry,
     repos: deps.repos,

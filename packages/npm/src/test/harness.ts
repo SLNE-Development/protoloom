@@ -34,7 +34,7 @@ export interface Harness {
   tokens: { admin: string; writer: string; reader: string; viewerWriter: string };
   /** Creates a repository as the admin. */
   createRepo(input: CreateRepoInput): Promise<Repo>;
-  /** Sends a request to `/npm/<path>`; `path` is the raw, still percent-encoded part after `/npm/`. */
+  /** Sends a request to `/npm/<path>`; `path` is the raw, still percent-encoded part after `/npm/`, optionally with a query. */
   call(
     method: string,
     path: string,
@@ -113,7 +113,8 @@ export async function createHarness(): Promise<Harness> {
         if (!headers.has("content-type")) headers.set("content-type", "application/json");
       }
       const req = new Request(`${PUBLIC_URL}/npm/${path}`, { method, headers, body });
-      return handler(req, path);
+      // The mount passes the path without the query string, as the web app does.
+      return handler(req, path.split("?")[0]!);
     },
     async stop() {
       await mirror.drain();
