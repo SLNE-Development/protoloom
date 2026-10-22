@@ -22,7 +22,7 @@ import {
   deleteBlobLogged,
   findLatestBuild,
   loadFiles,
-  protoSettings,
+  hostedProtoConfig,
   publishRepositoryOrder,
   versionLockKey,
   type BlobRef,
@@ -126,7 +126,7 @@ async function checkExistingRelease(
   if (isSnapshot(c.version)) return none;
   const existing = await findLatestBuild(db, repo.id, c);
   if (!existing) {
-    if (!protoSettings(repo).allowRedeploy) {
+    if (!hostedProtoConfig(repo).allowRedeploy) {
       const [tombstone] = await db
         .select({ sha256: protoDeletedRelease.sha256 })
         .from(protoDeletedRelease)
@@ -140,7 +140,7 @@ async function checkExistingRelease(
     }
     return none;
   }
-  if (!protoSettings(repo).allowRedeploy) {
+  if (!hostedProtoConfig(repo).allowRedeploy) {
     throw new RegistryError("immutable", `${formatCoordinate(c)} already exists in ${repo.name} and releases are immutable`);
   }
   const dependents = await findDependents(db, c);
@@ -197,7 +197,7 @@ export async function publish(ctx: RegistryContext, p: Principal, input: Publish
     throw new RegistryError("forbidden", `No write access to ${c.group} in ${repo.name}`);
   }
   const snapshot = isSnapshot(c.version);
-  const settings = protoSettings(repo);
+  const settings = hostedProtoConfig(repo);
   if (snapshot && !settings.allowSnapshots) {
     throw new RegistryError("invalid_request", `Repository ${repo.name} does not accept snapshots`);
   }

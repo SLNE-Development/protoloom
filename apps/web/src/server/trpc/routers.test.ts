@@ -9,11 +9,14 @@ import { ValkeyContainer, type StartedValkeyContainer } from "@testcontainers/va
 import { eq, sql } from "drizzle-orm";
 import {
   createRegistry,
+  createRepoService,
   createStoreSetFromEnv,
+  deriveSecretKey,
   packArchive,
   type Principal,
   type ProtoFile,
   type Registry,
+  type RepoService,
   type Role,
 } from "@weaver/core";
 import {
@@ -51,6 +54,7 @@ let testDb: Awaited<ReturnType<typeof startTestDb>>;
 let db: Db;
 let auth: Auth;
 let registry: Registry;
+let repos: RepoService;
 let blobDir: string;
 let valkey: StartedValkeyContainer;
 let liveQueue: CleanupQueue;
@@ -80,6 +84,7 @@ function contextFor(principal: Principal, overrides: Partial<TrpcContext> = {}):
   return {
     db,
     registry,
+    repos,
     auth,
     principal,
     settings: { anonymousView: false },
@@ -138,7 +143,9 @@ beforeAll(async () => {
   db = testDb.db;
   auth = createAuth(db, authEnv);
   blobDir = await mkdtemp(join(tmpdir(), "weaver-trpc-"));
-  registry = createRegistry({ db, stores: createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir }) });
+  const stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir });
+  registry = createRegistry({ db, stores });
+  repos = createRepoService({ db, stores, secretKey: deriveSecretKey(authEnv.BETTER_AUTH_SECRET) });
   liveQueue = createQueue(producerConnection(valkey.getConnectionUrl()));
   deadQueue = createQueue(producerConnection("redis://127.0.0.1:1"), { onError: () => undefined });
 });
@@ -162,7 +169,7 @@ beforeEach(async () => {
 describe("createTrpcContext", () => {
   it("builds an anonymous context with the stored settings and the public URL", async () => {
     await call(admin()).settings.update({ anonymousView: true });
-    const ctx = await createTrpcContext({ headers: new Headers() }, { db, registry, auth });
+    const ctx = await createTrpcContext({ headers: new Headers() }, { db, registry, repos, auth });
     expect(ctx.principal).toEqual({ kind: "anonymous" });
     expect(ctx.settings).toEqual({ anonymousView: true });
     expect(ctx.publicUrl).toBe(BASE);
@@ -170,7 +177,7 @@ describe("createTrpcContext", () => {
   });
 
   it("refuses invalid credentials with UNAUTHORIZED", async () => {
-    const context = createTrpcContext({ headers: new Headers({ authorization: "Bearer nope" }) }, { db, registry, auth });
+    const context = createTrpcContext({ headers: new Headers({ authorization: "Bearer nope" }) }, { db, registry, repos, auth });
     const error = await context.catch((e: unknown) => e);
     expect(error).toBeInstanceOf(TRPCError);
     expect((error as TRPCError).code).toBe("UNAUTHORIZED");

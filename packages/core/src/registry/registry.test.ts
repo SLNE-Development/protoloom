@@ -12,7 +12,7 @@ import type { KeyPermission, Principal, Role } from "../permissions.js";
 import { createStoreSetFromEnv, getBuffer, type ObjectStore, type StoreSet } from "../storage/index.js";
 import { validateProtos } from "../validation.js";
 import { createRegistry, type Manifest, type Registry } from "./index.js";
-import type { ProtoSettings } from "./lookup.js";
+import type { ProtoHostedConfig } from "../repos/config.js";
 
 const anonymous: Principal = { kind: "anonymous" };
 
@@ -25,6 +25,7 @@ const read = (repo: string): KeyPermission => ({ repository: repo, groupPrefix: 
 
 const maintainer = key("maintainer", [write("releases"), write("snapshots"), read("shared")]);
 const admin = key("admin", [write("releases"), write("snapshots")], "key-admin");
+const maintainerWith = (...permissions: KeyPermission[]) => key("maintainer", permissions, "key-extra");
 
 const coord = (group: string, name: string, version: string): Coordinate => ({ group, name, version });
 
@@ -64,12 +65,12 @@ describe("registry", () => {
   ];
 
   /** Inserts a hosted proto repository with the given proto settings in its config. */
-  async function insertRepo(name: string, settings: Partial<ProtoSettings> = {}) {
+  async function insertRepo(name: string, settings: Partial<ProtoHostedConfig> = {}) {
     await testDb.db.insert(repository).values({ name, format: "proto", kind: "hosted", config: settings });
   }
 
   /** Merges proto settings into a repository's config. */
-  async function updateSettings(name: string, settings: Partial<ProtoSettings>) {
+  async function updateSettings(name: string, settings: Partial<ProtoHostedConfig>) {
     await testDb.db
       .update(repository)
       .set({ config: sql`${repository.config} || ${JSON.stringify(settings)}::jsonb` })
@@ -328,6 +329,13 @@ describe("registry", () => {
   it("rejects version kinds the repository does not accept", async () => {
     await expectError(publishMoney(maintainer, "releases", "1.0.0-SNAPSHOT"), "invalid_request");
     await expectError(publishMoney(maintainer, "snapshots", "1.0.0"), "invalid_request");
+  });
+
+  it("rejects publishing to a proto group", async () => {
+    await testDb.db.insert(repository).values({ name: "everything", format: "proto", kind: "group" });
+    const key = maintainerWith(write("everything"));
+    const error = await expectError(publishMoney(key, "everything"), "invalid_request");
+    expect(error.message).toContain("hosted");
   });
 
   it("rejects an invalid manifest", async () => {

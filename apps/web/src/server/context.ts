@@ -1,4 +1,12 @@
-import { createRegistry, createStoreSetFromEnv, deriveSecretKey, type Registry, type StoreSet } from "@weaver/core";
+import {
+  createRegistry,
+  createRepoService,
+  createStoreSetFromEnv,
+  deriveSecretKey,
+  type Registry,
+  type RepoService,
+  type StoreSet,
+} from "@weaver/core";
 import { createDb, type Db } from "@weaver/db";
 import { env } from "../env";
 import { createAuth, type Auth } from "./auth";
@@ -13,6 +21,8 @@ export interface ServerContext {
   registry: Registry;
   /** AES key for upstream credentials, derived once from `BETTER_AUTH_SECRET`. */
   secretKey: Buffer;
+  /** Repository management over `db`, `stores` and `secretKey`. */
+  repos: RepoService;
 }
 
 // Kept on globalThis so dev-mode module reloads reuse the same pool instead of leaking one per reload.
@@ -24,12 +34,14 @@ export function getServerContext(): ServerContext {
     const db = createDb(env.DATABASE_URL);
     // The object stores read only the validated STORAGE_* / S3_* values.
     const stores = createStoreSetFromEnv(env);
+    const secretKey = deriveSecretKey(env.BETTER_AUTH_SECRET);
     globalForContext.__weaverServerContext = {
       db,
       stores,
       auth: createAuth(db),
       registry: createRegistry({ db, stores }),
-      secretKey: deriveSecretKey(env.BETTER_AUTH_SECRET),
+      secretKey,
+      repos: createRepoService({ db, stores, secretKey }),
     };
   }
   return globalForContext.__weaverServerContext;

@@ -2,7 +2,9 @@ import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
 import { protoArtifact, protoBuild, protoBuildFile, protoDependency, protoVersion, repository, type Db, type Tx } from "@weaver/db";
 import type { ProtoFile } from "../archive.js";
 import { formatCoordinate, type Coordinate } from "../coordinates.js";
+import { RegistryError } from "../errors.js";
 import { canAccess, type Principal } from "../permissions.js";
+import { parseRepositoryConfig, type ProtoHostedConfig } from "../repos/config.js";
 import type { Lookup, ResolvedNode } from "../resolution.js";
 import type { StoreId, StoreSet } from "../storage/index.js";
 import type { validateProtos } from "../validation.js";
@@ -29,32 +31,20 @@ export interface BlobRef {
   storageKey: string;
 }
 
-/** The proto-specific settings of a repository. */
-export interface ProtoSettings {
-  allowRedeploy: boolean;
-  allowReleases: boolean;
-  allowSnapshots: boolean;
-  /**
-   * Order in which repositories other than the publish target are searched for dependencies at
-   * publish time. Lower wins; ties are broken by repository name.
-   */
-  resolutionPriority: number;
+/**
+ * The settings of a hosted proto repository, read from `repo.config` with defaults filled in.
+ * Mirrors and groups accept no publishes; `invalid_request` for them.
+ */
+export function hostedProtoConfig(repo: Pick<RepositoryRow, "name" | "kind" | "config">): ProtoHostedConfig {
+  if (repo.kind !== "hosted") {
+    throw new RegistryError("invalid_request", `Repository ${repo.name} is a ${repo.kind}; publish to a hosted repository`);
+  }
+  return parseRepositoryConfig("proto", "hosted", repo.config);
 }
 
-/**
- * Reads the proto settings from `repo.config`, falling back to `false, true, true, 100` for
- * missing or mistyped keys.
- */
-export function protoSettings(repo: Pick<RepositoryRow, "config">): ProtoSettings {
-  const config = repo.config;
-  const flag = (key: string, fallback: boolean) => (typeof config[key] === "boolean" ? (config[key] as boolean) : fallback);
-  const priority = config.resolutionPriority;
-  return {
-    allowRedeploy: flag("allowRedeploy", false),
-    allowReleases: flag("allowReleases", true),
-    allowSnapshots: flag("allowSnapshots", true),
-    resolutionPriority: typeof priority === "number" && Number.isInteger(priority) ? priority : 100,
-  };
+/** The `resolutionPriority` of a proto repository; mirrors and groups have none and rank at the default 100. */
+function resolutionPriority(repo: RepositoryRow): number {
+  return repo.kind === "hosted" ? parseRepositoryConfig("proto", "hosted", repo.config).resolutionPriority : 100;
 }
 
 /**
@@ -109,8 +99,7 @@ export async function publishRepositoryOrder(db: Queryable, target: RepositoryRo
     .where(and(ne(repository.id, target.id), eq(repository.format, "proto")))
     .orderBy(asc(repository.name));
   // A stable sort keeps the database's name order within equal priorities.
-  const priority = (r: RepositoryRow) => protoSettings(r).resolutionPriority;
-  others.sort((a, b) => priority(a) - priority(b));
+  others.sort((a, b) => resolutionPriority(a) - resolutionPriority(b));
   return [target, ...others];
 }
 

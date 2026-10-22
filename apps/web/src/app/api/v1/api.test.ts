@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
-import { createRegistry, createStoreSetFromEnv, deriveSecretKey, packArchive, RegistryError, type ProtoFile } from "@weaver/core";
+import {
+  createRegistry,
+  createRepoService,
+  createStoreSetFromEnv,
+  deriveSecretKey,
+  packArchive,
+  RegistryError,
+  type ProtoFile,
+} from "@weaver/core";
 import { repository, user, type Db } from "@weaver/db";
 import { insertKeyPermissions } from "@/test/catalog";
 import { startTestDb } from "@weaver/db/testing";
@@ -131,6 +139,7 @@ beforeAll(async () => {
     auth,
     registry: createRegistry({ db, stores }),
     secretKey: deriveSecretKey(authEnv.BETTER_AUTH_SECRET),
+    repos: createRepoService({ db, stores, secretKey: deriveSecretKey(authEnv.BETTER_AUTH_SECRET) }),
   };
   keys.maintainer = await createKey("maintainer", [
     { repository: "releases", access: "write" },
