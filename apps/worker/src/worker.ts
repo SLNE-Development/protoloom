@@ -1,12 +1,12 @@
 import { UnrecoverableError, Worker, type ConnectionOptions } from "bullmq";
-import { applyCleanup, RegistryError, runAllCleanups, type StoreSet } from "@weaver/core";
+import { applyCleanup, createAssetService, evictCaches, RegistryError, runAllCleanups, type StoreSet } from "@weaver/core";
 import type { Db } from "@weaver/db";
 import {
-  CLEANUP_QUEUE,
   createQueue,
+  MAINTENANCE_QUEUE,
   scheduleDailyCleanup,
-  type CleanupJobData,
-  type CleanupJobResult,
+  scheduleHourlyEviction,
+  type MaintenanceJobData,
 } from "@weaver/jobs";
 
 /** What the worker needs: the database, the object stores and the Valkey connection. */
@@ -18,37 +18,46 @@ export interface WorkerDeps {
 
 /** A started worker; `close` waits for the running job, then disconnects. */
 export interface RunningWorker {
-  worker: Worker<CleanupJobData, CleanupJobResult>;
+  worker: Worker<MaintenanceJobData, unknown>;
   close(): Promise<void>;
 }
 
 /**
- * Runs one cleanup job. An unknown repository can never succeed, so it fails the job at once
- * instead of spending its retries.
+ * Runs one maintenance job, dispatching on `data.kind`. An unknown repository can never succeed, so
+ * it fails the job at once instead of spending its retries.
  */
-export async function processCleanupJob(deps: WorkerDeps, data: CleanupJobData): Promise<CleanupJobResult> {
+export async function processMaintenanceJob(deps: WorkerDeps, data: MaintenanceJobData): Promise<unknown> {
   const now = new Date();
-  if (data.kind === "cleanup:all") return { deleted: await runAllCleanups(deps.db, deps.stores, now) };
-  try {
-    return { deleted: (await applyCleanup(deps.db, deps.stores, data.repository, now)).length };
-  } catch (error) {
-    if (error instanceof RegistryError && error.code === "not_found") throw new UnrecoverableError(error.message);
-    throw error;
+  switch (data.kind) {
+    case "cleanup:all":
+      return { deleted: await runAllCleanups(deps.db, deps.stores, now) };
+    case "cleanup:repo":
+      try {
+        return { deleted: (await applyCleanup(deps.db, deps.stores, data.repository, now)).length };
+      } catch (error) {
+        if (error instanceof RegistryError && error.code === "not_found") throw new UnrecoverableError(error.message);
+        throw error;
+      }
+    case "evict:all":
+      return evictCaches({ db: deps.db, assets: createAssetService({ db: deps.db, stores: deps.stores }), now });
+    default:
+      throw new UnrecoverableError(`Unknown maintenance job kind ${JSON.stringify((data as { kind?: unknown }).kind)}`);
   }
 }
 
 /**
- * Upserts the daily `cleanup-daily` scheduler (idempotent) and starts a worker that processes
- * cleanup jobs one at a time.
+ * Upserts the `cleanup-daily` and `evict-hourly` schedulers (idempotent) and starts a worker that
+ * processes maintenance jobs one at a time.
  */
 export async function startWorker(deps: WorkerDeps): Promise<RunningWorker> {
   const queue = createQueue(deps.connection);
   try {
     await scheduleDailyCleanup(queue);
+    await scheduleHourlyEviction(queue);
   } finally {
     await queue.close();
   }
-  const worker = new Worker<CleanupJobData, CleanupJobResult>(CLEANUP_QUEUE, (job) => processCleanupJob(deps, job.data), {
+  const worker = new Worker<MaintenanceJobData, unknown>(MAINTENANCE_QUEUE, (job) => processMaintenanceJob(deps, job.data), {
     connection: deps.connection,
     concurrency: 1,
   });

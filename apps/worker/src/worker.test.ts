@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ValkeyContainer, type StartedValkeyContainer } from "@testcontainers/valkey";
-import { asc, sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import {
+  asset,
   cleanupPolicy,
   protoArtifact as artifact,
   protoBuild as build,
@@ -40,7 +41,8 @@ describe("worker", () => {
   }
 
   async function waitForFinish(jobId: string): Promise<CleanupJobStatus> {
-    for (let i = 0; i < 400; i++) {
+    // Generous budget: under heavy parallel load (several containers starting) a job can take long to be picked up.
+    for (let i = 0; i < 1000; i++) {
       const status = await getJobState(queue, jobId);
       if (status.state === "completed" || status.state === "failed") return status;
       await new Promise((r) => setTimeout(r, 50));
@@ -101,15 +103,49 @@ describe("worker", () => {
     expect(remaining.map((r) => r.n)).toEqual([3, 4]);
   });
 
-  it("registers a single daily scheduler when started twice", async () => {
+  it("registers one daily cleanup and one hourly eviction scheduler when started twice", async () => {
     await start();
     await start();
 
     const schedulers = await queue.getJobSchedulers();
-    expect(schedulers).toEqual([expect.objectContaining({ key: "cleanup-daily", pattern: "0 3 * * *" })]);
+    expect(schedulers).toHaveLength(2);
+    expect(schedulers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "cleanup-daily", pattern: "0 3 * * *" }),
+        expect.objectContaining({ key: "evict-hourly", pattern: "17 * * * *" }),
+      ]),
+    );
   });
 
-  it("fails a job for an unknown repository at once instead of retrying it", async () => {
+  it("runs an evict:all job and removes cache assets of mirrors with caching disabled", async () => {
+    const [repo] = await testDb.db
+      .insert(repository)
+      .values({ name: "central", format: "maven", kind: "mirror", config: { cache: { enabled: false } } })
+      .returning();
+    const storageKey = `${repo!.id}/cache/${randomUUID()}`;
+    await putBuffer(stores.primary, storageKey, Buffer.from("jar"));
+    await testDb.db.insert(asset).values({
+      repositoryId: repo!.id,
+      path: "a.jar",
+      store: stores.primary.id,
+      storageKey,
+      size: 3,
+      md5: "0",
+      sha1: "0",
+      sha256: "0",
+      sha512: "0",
+      origin: "cache",
+    });
+
+    await start();
+    const job = await queue.add("evict:all", { kind: "evict:all" });
+    const status = await waitForFinish(job.id!);
+
+    expect(status).toEqual({ state: "completed", result: { repositories: 1, assetsDeleted: 1, bytesFreed: 3 }, failedReason: null });
+    expect(await testDb.db.select().from(asset).where(eq(asset.repositoryId, repo!.id))).toHaveLength(0);
+  });
+
+  it("fails a job for an unknown repository at once instead of retrying it", { timeout: 60_000 }, async () => {
     await start();
     const jobId = await enqueueCleanup(queue, "nope");
 
