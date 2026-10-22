@@ -10,6 +10,7 @@ import {
   MAX_PENDING_LOGINS,
   MAX_PENDING_LOGINS_PER_IP,
   requestIp,
+  sanitizeUserAgent,
   sweepLoginSessions,
 } from "./login.js";
 
@@ -128,6 +129,22 @@ describe("npm web login", () => {
     const [row] = await h.db.select().from(npmLoginSession).where(eq(npmLoginSession.id, id));
     expect(row!.requesterIp).toBe("203.0.113.5");
     expect(row!.requesterUserAgent).toBe("npm/10.8.0 node/v22.0.0 linux x64");
+  });
+
+  it("strips control and format characters from the stored user agent", async () => {
+    const res = await h.call("POST", "npm-hosted/-/v1/login", {
+      json: {},
+      headers: { "user-agent": "npm/10\u0007\u00AD node\u0085" },
+    });
+    const id = ((await res.json()) as { loginUrl: string }).loginUrl.split("/").pop()!;
+    const [row] = await h.db.select().from(npmLoginSession).where(eq(npmLoginSession.id, id));
+    expect(row!.requesterUserAgent).toBe("npm/10 node");
+  });
+
+  it("sanitizeUserAgent removes bidi overrides and isolates", () => {
+    expect(sanitizeUserAgent("npm/10\u202Egnp\u2066x\u2069\u200B")).toBe("npm/10gnpx");
+    expect(sanitizeUserAgent("\u202E")).toBeNull();
+    expect(sanitizeUserAgent(null)).toBeNull();
   });
 
   it("requestIp takes the rightmost x-forwarded-for entry", () => {
