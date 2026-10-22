@@ -17,9 +17,10 @@ export function npmClientConfig(publicUrl: string, repo: string, scope?: string)
   const hostPath = registry.replace(/^https?:/, "");
   const token = "${WEAVER_TOKEN}";
   const npmrc = [`${scope ? `@${scope}:registry` : "registry"}=${registry}`, `${hostPath}:_authToken=${token}`].join("\n");
+  // yarn berry sends the token for unscoped packages only with npmAlwaysAuth; a private repository needs it.
   const yarnrc = scope
-    ? ["npmScopes:", `  ${scope}:`, `    npmRegistryServer: "${registry}"`, `    npmAuthToken: "${token}"`].join("\n")
-    : [`npmRegistryServer: "${registry}"`, `npmAuthToken: "${token}"`].join("\n");
+    ? ["npmScopes:", `  ${scope}:`, `    npmRegistryServer: "${registry}"`, `    npmAuthToken: "${token}"`, "    npmAlwaysAuth: true"].join("\n")
+    : [`npmRegistryServer: "${registry}"`, `npmAuthToken: "${token}"`, "npmAlwaysAuth: true"].join("\n");
   const entry = `{ url = "${registry}", token = "$WEAVER_TOKEN" }`;
   const bunfig = scope ? ["[install.scopes]", `${scope} = ${entry}`].join("\n") : ["[install]", `registry = ${entry}`].join("\n");
   return { npmrc, yarnrc, bunfig };

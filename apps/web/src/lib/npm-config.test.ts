@@ -23,11 +23,17 @@ describe("npmClientConfig", () => {
 
   it("writes .yarnrc.yml for the default and a scoped registry", () => {
     expect(npmClientConfig("https://weaver.slne.dev", "r").yarnrc).toBe(
-      'npmRegistryServer: "https://weaver.slne.dev/npm/r/"\nnpmAuthToken: "${WEAVER_TOKEN}"',
+      'npmRegistryServer: "https://weaver.slne.dev/npm/r/"\nnpmAuthToken: "${WEAVER_TOKEN}"\nnpmAlwaysAuth: true',
     );
     expect(npmClientConfig("https://weaver.slne.dev", "r", "acme").yarnrc).toBe(
-      'npmScopes:\n  acme:\n    npmRegistryServer: "https://weaver.slne.dev/npm/r/"\n    npmAuthToken: "${WEAVER_TOKEN}"',
+      'npmScopes:\n  acme:\n    npmRegistryServer: "https://weaver.slne.dev/npm/r/"\n    npmAuthToken: "${WEAVER_TOKEN}"\n    npmAlwaysAuth: true',
     );
+  });
+
+  // yarn berry sends npmAuthToken for unscoped packages only with npmAlwaysAuth, so with the old snippet every
+  // unscoped install from a private repository failed with "Invalid authentication (as an anonymous user)".
+  it("makes yarn berry send the token for unscoped packages too", () => {
+    expect(npmClientConfig("https://weaver.slne.dev", "r").yarnrc).toMatch(/^npmAlwaysAuth: true$/m);
   });
 
   it("writes bunfig.toml for the default and a scoped registry", () => {
