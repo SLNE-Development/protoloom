@@ -154,3 +154,35 @@ export function randomBlob(seed: number, size: number): Buffer {
 export function digestOf(data: Buffer): string {
   return `sha256:${createHash("sha256").update(data).digest("hex")}`;
 }
+
+/** An OCI descriptor of `data` with `mediaType`, as a manifest references it. */
+export function descriptorOf(data: Buffer, mediaType: string): { mediaType: string; digest: string; size: number } {
+  return { mediaType, digest: digestOf(data), size: data.length };
+}
+
+/** Pushes `data` as a monolithic blob upload to image `name`; resolves to the response (201 on success). */
+export function pushBlob(reg: DockerTestRegistry, name: string, data: Buffer, token: string): Promise<Response> {
+  return reg.call("POST", `${name}/blobs/uploads/?digest=${encodeURIComponent(digestOf(data))}`, { token, body: data });
+}
+
+/**
+ * PUTs a manifest to `name` under `reference`; `manifest` is serialized with `JSON.stringify` unless it is
+ * already a Buffer, and `mediaType` (default: the manifest's own) becomes the Content-Type.
+ */
+export function pushManifest(
+  reg: DockerTestRegistry,
+  name: string,
+  reference: string,
+  manifest: unknown,
+  token: string,
+  mediaType?: string,
+): Promise<Response> {
+  const body = Buffer.isBuffer(manifest) ? manifest : Buffer.from(JSON.stringify(manifest));
+  const type = mediaType ?? (manifest as { mediaType?: string }).mediaType ?? "application/vnd.oci.image.manifest.v1+json";
+  return reg.call("PUT", `${name}/manifests/${reference}`, { token, body, headers: { "content-type": type } });
+}
+
+/** The OCI error code of an error response. */
+export async function errorCodeOf(res: Response): Promise<string> {
+  return ((await res.json()) as { errors: Array<{ code: string }> }).errors[0]!.code;
+}
