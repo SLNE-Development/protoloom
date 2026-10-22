@@ -10,6 +10,7 @@ export {
   type ObjectRead,
   type ObjectStore,
   type PutResult,
+  STORE_IDS,
   type StoreId,
   type StoreSet,
 } from "./object-store.js";
