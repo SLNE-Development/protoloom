@@ -7,6 +7,7 @@ export {
   requestIp,
   sweepLoginSessions,
 } from "./login.js";
+export { npmCleanup } from "./cleanup.js";
 export { createNpmStore, formatRev, type NpmStore } from "./store.js";
 
 export type { PackageName } from "./names.js";
