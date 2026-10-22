@@ -23,6 +23,7 @@
     "@weaver/db": "workspace:*",
     "@weaver/docker": "workspace:*",
     "@weaver/jobs": "workspace:*",
+    "@weaver/proto": "workspace:*",
     "@weaver/ui": "workspace:*",
     "@t3-oss/env-nextjs": "0.13.11",
     "@tanstack/react-query": "5.104.5",
