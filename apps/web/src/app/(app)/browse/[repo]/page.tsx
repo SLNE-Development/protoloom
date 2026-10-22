@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { PackageIcon, SearchIcon } from "lucide-react";
-import { Button } from "@protoloom/ui/components/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@protoloom/ui/components/empty";
-import { InputGroup, InputGroupAddon, InputGroupInput } from "@protoloom/ui/components/input-group";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@protoloom/ui/components/table";
+import { Button } from "@weaver/ui/components/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@weaver/ui/components/empty";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@weaver/ui/components/input-group";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@weaver/ui/components/table";
 import { KindBadge, PageContainer, PageHeader, Panel, RelativeTime, VisibilityBadge } from "@/components/browse-ui";
 import { artifactHref, listingMetadataInput, repositoryHref } from "@/lib/browse";
 import { pageMetadata } from "@/lib/seo";

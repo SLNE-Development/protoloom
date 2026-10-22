@@ -1,5 +1,5 @@
 import { count, desc, eq, inArray } from "drizzle-orm";
-import { artifact, build, user, version } from "@protoloom/db";
+import { artifact, build, user, version } from "@weaver/db";
 import { browseProcedure, router } from "../init";
 import { browsableRepositories, canReadGroup, coordinateText } from "../helpers";
 

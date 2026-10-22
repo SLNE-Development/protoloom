@@ -13,7 +13,7 @@ import {
   SunIcon,
   UserIcon,
 } from "lucide-react";
-import type { Role } from "@protoloom/core";
+import type { Role } from "@weaver/core";
 import {
   CommandDialog,
   CommandEmpty,
@@ -22,7 +22,7 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator,
-} from "@protoloom/ui/components/command";
+} from "@weaver/ui/components/command";
 import { navItemsFor } from "@/lib/navigation";
 import { useCommandMenu } from "./command-actions";
 import { NAV_ICONS } from "./nav-icons";

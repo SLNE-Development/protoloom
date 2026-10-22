@@ -1,4 +1,4 @@
-import config from "@protoloom/config/eslint";
+import config from "@weaver/config/eslint";
 export default [
   ...config,
   { ignores: ["next-env.d.ts"] },

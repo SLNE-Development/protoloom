@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ValkeyContainer, type StartedValkeyContainer } from "@testcontainers/valkey";
 import { asc, sql } from "drizzle-orm";
-import { artifact, build, cleanupPolicy, repository, version } from "@protoloom/db";
-import { startTestDb } from "@protoloom/db/testing";
-import { createLocalStore, type BlobStore } from "@protoloom/core";
+import { artifact, build, cleanupPolicy, repository, version } from "@weaver/db";
+import { startTestDb } from "@weaver/db/testing";
+import { createLocalStore, type BlobStore } from "@weaver/core";
 import {
   createQueue,
   enqueueCleanup,
@@ -15,7 +15,7 @@ import {
   redisConnection,
   type CleanupJobStatus,
   type CleanupQueue,
-} from "@protoloom/jobs";
+} from "@weaver/jobs";
 import { loadEnv } from "./env.js";
 import { startWorker, type RunningWorker } from "./worker.js";
 
@@ -47,7 +47,7 @@ describe("worker", () => {
       startTestDb(),
       new ValkeyContainer("valkey/valkey:9.1.2-alpine").start(),
     ]);
-    blobDir = await mkdtemp(join(tmpdir(), "protoloom-worker-"));
+    blobDir = await mkdtemp(join(tmpdir(), "weaver-worker-"));
     blobs = createLocalStore(blobDir);
     queue = createQueue(redisConnection(valkey.getConnectionUrl()));
   });
@@ -118,7 +118,7 @@ describe("worker", () => {
 
 describe("loadEnv", () => {
   const base = {
-    DATABASE_URL: "postgres://protoloom:protoloom@localhost:5432/protoloom",
+    DATABASE_URL: "postgres://weaver:weaver@localhost:5432/weaver",
     VALKEY_URL: "redis://localhost:6379",
     STORAGE_DRIVER: "local",
     STORAGE_LOCAL_PATH: "/data",

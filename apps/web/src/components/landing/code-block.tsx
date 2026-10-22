@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { cn } from "@protoloom/ui/lib/utils";
+import { cn } from "@weaver/ui/lib/utils";
 
 /**
  * Styles for Shiki output from ./highlight: light colours are inline, dark ones come from

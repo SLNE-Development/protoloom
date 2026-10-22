@@ -1,6 +1,6 @@
 /** Test-only helpers: insert catalog rows directly into a test database. */
 import { randomUUID } from "node:crypto";
-import { artifact, build, buildFile, dependency, repository, version, type Db } from "@protoloom/db";
+import { artifact, build, buildFile, dependency, repository, version, type Db } from "@weaver/db";
 
 /** Test helper: inserts a repository row and returns its id. */
 export async function insertRepository(db: Db, name: string, visibility: "public" | "private"): Promise<string> {

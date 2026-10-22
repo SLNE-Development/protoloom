@@ -1,13 +1,13 @@
 import { UnrecoverableError, Worker, type ConnectionOptions } from "bullmq";
-import { applyCleanup, RegistryError, runAllCleanups, type BlobStore } from "@protoloom/core";
-import type { Db } from "@protoloom/db";
+import { applyCleanup, RegistryError, runAllCleanups, type BlobStore } from "@weaver/core";
+import type { Db } from "@weaver/db";
 import {
   CLEANUP_QUEUE,
   createQueue,
   scheduleDailyCleanup,
   type CleanupJobData,
   type CleanupJobResult,
-} from "@protoloom/jobs";
+} from "@weaver/jobs";
 
 /** What the worker needs: the database, the blob store and the Valkey connection. */
 export interface WorkerDeps {
@@ -53,10 +53,10 @@ export async function startWorker(deps: WorkerDeps): Promise<RunningWorker> {
     concurrency: 1,
   });
   worker.on("failed", (job, error) => {
-    console.error(`protoloom-worker: job ${job?.id ?? "?"} (${job?.name ?? "?"}) failed`, error);
+    console.error(`weaver-worker: job ${job?.id ?? "?"} (${job?.name ?? "?"}) failed`, error);
   });
   worker.on("error", (error) => {
-    console.error("protoloom-worker: worker error", error);
+    console.error("weaver-worker: worker error", error);
   });
   await worker.waitUntilReady();
   return { worker, close: () => worker.close() };

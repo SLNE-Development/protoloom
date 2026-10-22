@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
-import { auditEvent, build, deletedRelease, repository } from "@protoloom/db";
-import { startTestDb } from "@protoloom/db/testing";
+import { auditEvent, build, deletedRelease, repository } from "@weaver/db";
+import { startTestDb } from "@weaver/db/testing";
 import { packArchive, type ProtoFile } from "../archive.js";
 import type { Coordinate } from "../coordinates.js";
 import type { RegistryError } from "../errors.js";
@@ -96,7 +96,7 @@ describe("registry", () => {
 
   beforeAll(async () => {
     testDb = await startTestDb();
-    blobDir = await mkdtemp(join(tmpdir(), "protoloom-registry-"));
+    blobDir = await mkdtemp(join(tmpdir(), "weaver-registry-"));
     blobs = createLocalStore(blobDir);
     registry = createRegistry({ db: testDb.db, blobs });
   }, 120_000);

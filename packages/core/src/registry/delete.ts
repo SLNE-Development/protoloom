@@ -1,5 +1,5 @@
 import { and, desc, eq, sql } from "drizzle-orm";
-import { artifact, build, deletedRelease, version } from "@protoloom/db";
+import { artifact, build, deletedRelease, version } from "@weaver/db";
 import { recordAudit } from "../audit.js";
 import { formatCoordinate, type Coordinate } from "../coordinates.js";
 import { RegistryError } from "../errors.js";

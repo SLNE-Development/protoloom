@@ -3,11 +3,11 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { DatabaseIcon, PlusIcon, SettingsIcon } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@protoloom/ui/components/alert";
-import { Button } from "@protoloom/ui/components/button";
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@protoloom/ui/components/empty";
-import { Skeleton } from "@protoloom/ui/components/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@protoloom/ui/components/table";
+import { Alert, AlertDescription, AlertTitle } from "@weaver/ui/components/alert";
+import { Button } from "@weaver/ui/components/button";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@weaver/ui/components/empty";
+import { Skeleton } from "@weaver/ui/components/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@weaver/ui/components/table";
 import { PageBody, PageHeader } from "@/components/manage/page-header";
 import { AcceptsBadges, VisibilityBadge } from "@/components/manage/visibility-badge";
 import { errorMessage } from "@/lib/trpc-error";

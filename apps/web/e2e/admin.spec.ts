@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { eq } from "drizzle-orm";
-import { auditEvent, createDb, repository, session, setting, user } from "@protoloom/db";
+import { auditEvent, createDb, repository, session, setting, user } from "@weaver/db";
 import { BASE_URL, STATE_FILE, USERS, sessionToken } from "./fixtures";
 import { loginAs } from "./helpers";
 
@@ -114,7 +114,7 @@ test.describe("invites", () => {
     try {
       const visitor = await anonymous.newPage();
       await visitor.goto(url);
-      await expect(visitor.getByRole("heading", { name: "You're invited to Protoloom" })).toBeVisible();
+      await expect(visitor.getByRole("heading", { name: "You're invited to Weaver" })).toBeVisible();
       await expect(visitor.getByTestId("invite-role")).toHaveText("viewer");
       await expect(visitor.getByRole("button", { name: "Continue with GitHub" })).toBeVisible();
     } finally {

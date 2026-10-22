@@ -52,15 +52,15 @@ message TransferRequest { string to = 1; Money amount = 2; }
 ] as const;
 
 export const HERO_BUILD_GRADLE = `plugins {
-    id("dev.protoloom") version "0.1.0"
+    id("dev.slne.weaver") version "0.1.0"
 }
 
-protoloom {
+weaver {
     repositories("releases", "snapshots")
 }
 
 dependencies {
-    protoloom("${SAMPLE_COORDINATE}")
+    weaver("${SAMPLE_COORDINATE}")
 }
 `;
 
@@ -75,11 +75,11 @@ rootProject.name = "protection-service"
 `;
 
 export const CLIENT_GRADLE = `plugins {
-    id("dev.protoloom") version "0.1.0"
+    id("dev.slne.weaver") version "0.1.0"
 }
 
-// url and token default to PROTOLOOM_URL and PROTOLOOM_TOKEN
-protoloom {
+// url and token default to WEAVER_URL and WEAVER_TOKEN
+weaver {
     repositories("releases", "snapshots")
     publishing {
         repository = "releases"
@@ -91,12 +91,12 @@ protoloom {
 }
 
 dependencies {
-    protoloom("${SAMPLE_COORDINATE}")
-    protoloom(project(":shared-contracts"))
+    weaver("${SAMPLE_COORDINATE}")
+    weaver(project(":shared-contracts"))
 }
 `;
 
-/** protoloom.json of the Node CLI, pointing at this instance. */
+/** weaver.json of the Node CLI, pointing at this instance. */
 export function cliConfig(origin: string): string {
   return `{
   "url": "${origin}",
@@ -111,8 +111,8 @@ export function cliConfig(origin: string): string {
 
 export const CLI_PACKAGE_JSON = `{
   "scripts": {
-    "protos": "protoloom fetch",
-    "prebuild": "protoloom fetch"
+    "protos": "weaver fetch",
+    "prebuild": "weaver fetch"
   }
 }
 `;
@@ -121,15 +121,15 @@ export const CLI_PACKAGE_JSON = `{
 export function composeSnippet(origin: string): string {
   return `# excerpt — see docker-compose.prod.yml for the full stack
 services:
-  protoloom:
-    image: ghcr.io/slne-development/protoloom:latest
+  weaver:
+    image: ghcr.io/slne-development/weaver:latest
     command: ["web"]
     environment:
       BETTER_AUTH_URL: ${origin}
       INITIAL_ADMIN: github:your-login
       STORAGE_DRIVER: s3
   worker:
-    image: ghcr.io/slne-development/protoloom:latest
+    image: ghcr.io/slne-development/weaver:latest
     command: ["worker"]
 `;
 }

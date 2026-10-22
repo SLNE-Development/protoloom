@@ -1,10 +1,10 @@
-import { isValidGroup, isValidName, isValidRepositoryName, isValidVersion, type Registry } from "@protoloom/core";
+import { isValidGroup, isValidName, isValidRepositoryName, isValidVersion, type Registry } from "@weaver/core";
 import type { OgCardInput } from "./og";
 
 /** Shown for private, unknown or malformed artifacts: names nothing, so it can't confirm a private artifact exists. */
 export const GENERIC_ARTIFACT_CARD: OgCardInput = {
   eyebrow: "Artifact",
-  title: "Protoloom",
+  title: "Weaver",
   subtitle: "Versioned .proto contracts for every build.",
 };
 

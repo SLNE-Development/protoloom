@@ -3,7 +3,7 @@ import { OG_IMAGE_SIZE } from "@/lib/seo";
 
 // The footer shows the instance host from BETTER_AUTH_URL, so render at request time.
 export const dynamic = "force-dynamic";
-export const alt = "Protoloom: versioned .proto contracts for every build";
+export const alt = "Weaver: versioned .proto contracts for every build";
 export const size = OG_IMAGE_SIZE;
 export const contentType = "image/png";
 

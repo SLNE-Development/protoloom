@@ -11,7 +11,7 @@ Resolution turns the coordinates you declared into the complete list of artifact
 
 A client sends two lists to `POST /api/v1/resolve`:
 
-- **repositories**, in order: `["releases", "snapshots"]`. In Gradle this is `protoloom { repositories(...) }`; in the CLI it is `repositories` in `protoloom.json`.
+- **repositories**, in order: `["releases", "snapshots"]`. In Gradle this is `weaver { repositories(...) }`; in the CLI it is `repositories` in `weaver.json`.
 - **dependencies**, as exact coordinates: `["dev.surf.economy:economy-contracts:1.4.0"]`.
 
 The server answers with every artifact in the tree, each with its repository, build number, checksum and archive URL, plus any version conflicts it settled. See [REST API](/docs/api#resolve-dependencies).
@@ -45,7 +45,7 @@ Check that the repository holding it is in your list and that your key can read 
 
 ## Which version wins
 
-Dependencies are exact, but two artifacts in the tree can ask for different versions of the same artifact. Protoloom then picks the **highest** version, like Gradle does.
+Dependencies are exact, but two artifacts in the tree can ask for different versions of the same artifact. Weaver then picks the **highest** version, like Gradle does.
 
 ```text
 your project
@@ -60,7 +60,7 @@ Only versions that are still part of the tree count. If picking a higher version
 Each settled conflict is reported. The Gradle plugin logs:
 
 ```text
-Protoloom resolved a version conflict: {"group":"dev.surf.common","name":"common-types","requested":["2.0.0","2.1.0"],"selected":"2.1.0"}
+Weaver resolved a version conflict: {"group":"dev.surf.common","name":"common-types","requested":["2.0.0","2.1.0"],"selected":"2.1.0"}
 ```
 
 The CLI prints:
@@ -99,4 +99,4 @@ Only repositories your API key can read are used. An admin sets the priority per
 
 ## Local modules in Gradle
 
-In a multi-module Gradle build, `protoloom(project(":contracts"))` uses the protos of another module directly, without publishing it first. If that module publishes the same `group:name` as a remote artifact in the tree, the module wins and the remote artifact is left out together with its dependencies. See [Gradle plugin](/docs/gradle#local-modules).
+In a multi-module Gradle build, `weaver(project(":contracts"))` uses the protos of another module directly, without publishing it first. If that module publishes the same `group:name` as a remote artifact in the tree, the module wins and the remote artifact is left out together with its dependencies. See [Gradle plugin](/docs/gradle#local-modules).

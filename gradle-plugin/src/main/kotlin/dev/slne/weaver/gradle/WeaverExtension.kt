@@ -1,4 +1,4 @@
-package dev.protoloom.gradle
+package dev.slne.weaver.gradle
 
 import org.gradle.api.Action
 import org.gradle.api.file.Directory
@@ -9,12 +9,12 @@ import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
 import javax.inject.Inject
 
-/** The `protoloom {}` block: registry connection, repositories to resolve from, and what to publish. */
-abstract class ProtoloomExtension @Inject constructor(objects: ObjectFactory) {
-    /** Base URL of the Protoloom server. Defaults to the `PROTOLOOM_URL` environment variable. */
+/** The `weaver {}` block: registry connection, repositories to resolve from, and what to publish. */
+abstract class WeaverExtension @Inject constructor(objects: ObjectFactory) {
+    /** Base URL of the Weaver server. Defaults to the `WEAVER_URL` environment variable. */
     abstract val url: Property<String>
 
-    /** API key sent as a bearer token. Defaults to the `PROTOLOOM_TOKEN` environment variable. */
+    /** API key sent as a bearer token. Defaults to the `WEAVER_TOKEN` environment variable. */
     abstract val token: Property<String>
 
     /** Repositories to resolve dependencies from, in lookup order. */

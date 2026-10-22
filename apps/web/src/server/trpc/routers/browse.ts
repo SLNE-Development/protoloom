@@ -1,7 +1,7 @@
 import { and, asc, count, countDistinct, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { compareVersions, isValidGroup, isValidName, parseCoordinate, type Principal } from "@protoloom/core";
-import { artifact, repository, version, type Db } from "@protoloom/db";
+import { compareVersions, isValidGroup, isValidName, parseCoordinate, type Principal } from "@weaver/core";
+import { artifact, repository, version, type Db } from "@weaver/db";
 import { browseProcedure, router } from "../init";
 import {
   browsableRepositories,

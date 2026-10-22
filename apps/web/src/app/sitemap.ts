@@ -1,5 +1,5 @@
 import type { MetadataRoute } from "next";
-import { getSettings } from "@protoloom/core";
+import { getSettings } from "@weaver/core";
 import { listDocsPaths, listPublicBrowsePages, type BrowsePage } from "@/lib/public-catalog";
 import { siteUrl } from "@/lib/seo";
 import { getServerContext } from "@/server/context";

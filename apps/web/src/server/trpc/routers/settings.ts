@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { updateSettings, type ServerSettings } from "@protoloom/core";
+import { updateSettings, type ServerSettings } from "@weaver/core";
 import { adminProcedure, publicProcedure, router } from "../init";
 
 /** Server-wide settings. */

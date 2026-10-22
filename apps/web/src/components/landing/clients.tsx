@@ -56,8 +56,8 @@ export async function Clients({ origin }: { origin: string }) {
         >
           <CodeHtml html={gradle} label="build.gradle.kts" />
         </ClientCard>
-        <ClientCard title="Node CLI" files="protoloom.json · package.json" docs="/docs/cli" footer="PROTOLOOM_TOKEN=… pnpm protos">
-          <CodeHtml html={config} label="protoloom.json" />
+        <ClientCard title="Node CLI" files="weaver.json · package.json" docs="/docs/cli" footer="WEAVER_TOKEN=… pnpm protos">
+          <CodeHtml html={config} label="weaver.json" />
           <p className="border-t px-4 pt-3 font-mono text-xs text-muted-foreground">package.json</p>
           <CodeHtml html={pkg} label="package.json" className="[&_pre]:pt-1.5" />
         </ClientCard>

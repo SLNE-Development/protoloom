@@ -1,6 +1,6 @@
-import { createBlobStoreFromEnv } from "@protoloom/core";
-import { createDb } from "@protoloom/db";
-import { redisConnection } from "@protoloom/jobs";
+import { createBlobStoreFromEnv } from "@weaver/core";
+import { createDb } from "@weaver/db";
+import { redisConnection } from "@weaver/jobs";
 import { loadEnv } from "./env.js";
 import { startWorker } from "./worker.js";
 
@@ -8,19 +8,19 @@ const env = loadEnv(process.env);
 const db = createDb(env.DATABASE_URL);
 const blobs = createBlobStoreFromEnv(env);
 const running = await startWorker({ db, blobs, connection: redisConnection(env.VALKEY_URL) });
-console.log("protoloom-worker: processing cleanup jobs");
+console.log("weaver-worker: processing cleanup jobs");
 
 let stopping = false;
 async function shutdown(signal: string): Promise<void> {
   if (stopping) return;
   stopping = true;
-  console.log(`protoloom-worker: ${signal} received, finishing the current job`);
+  console.log(`weaver-worker: ${signal} received, finishing the current job`);
   try {
     await running.close();
     await db.$client.end();
     process.exit(0);
   } catch (error) {
-    console.error("protoloom-worker: shutdown failed", error);
+    console.error("weaver-worker: shutdown failed", error);
     process.exit(1);
   }
 }

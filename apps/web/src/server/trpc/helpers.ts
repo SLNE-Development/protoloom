@@ -11,8 +11,8 @@ import {
   type Coordinate,
   type Principal,
   type RepoRef,
-} from "@protoloom/core";
-import { repository, type Db, type Tx } from "@protoloom/db";
+} from "@weaver/core";
+import { repository, type Db, type Tx } from "@weaver/db";
 
 /** A repository name (`^[a-z0-9][a-z0-9-]{0,62}$`). */
 export const repositoryName = z.string().refine(isValidRepositoryName, "Invalid repository name");

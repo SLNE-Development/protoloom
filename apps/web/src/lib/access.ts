@@ -1,11 +1,11 @@
-import type { Role } from "@protoloom/core";
+import type { Role } from "@weaver/core";
 import { env } from "../env";
 
 /** Where a signed-in user lands by default. */
 export const DASHBOARD_PATH = "/dashboard";
 
 /** Request header in which the proxy hands the requested path (pathname plus query) to layouts. */
-export const PATH_HEADER = "x-protoloom-path";
+export const PATH_HEADER = "x-weaver-path";
 
 /** The outcome of the app shell's page gate. */
 export type AccessDecision = { kind: "allow" } | { kind: "redirect"; to: string };

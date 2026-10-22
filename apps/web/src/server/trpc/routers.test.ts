@@ -15,10 +15,10 @@ import {
   type ProtoFile,
   type Registry,
   type Role,
-} from "@protoloom/core";
-import { apikey, apiKeyPermission, auditEvent, build, cleanupPolicy, invite, session, user, type Db } from "@protoloom/db";
-import { startTestDb } from "@protoloom/db/testing";
-import { createQueue, producerConnection, type CleanupQueue } from "@protoloom/jobs";
+} from "@weaver/core";
+import { apikey, apiKeyPermission, auditEvent, build, cleanupPolicy, invite, session, user, type Db } from "@weaver/db";
+import { startTestDb } from "@weaver/db/testing";
+import { createQueue, producerConnection, type CleanupQueue } from "@weaver/jobs";
 import { createAuth, type Auth, type AuthEnv } from "../auth";
 import { API_KEY_PREFIX } from "./routers/keys";
 import { appRouter, createCaller } from "./root";
@@ -126,7 +126,7 @@ beforeAll(async () => {
   [testDb, valkey] = await Promise.all([startTestDb(), new ValkeyContainer("valkey/valkey:9.1.2-alpine").start()]);
   db = testDb.db;
   auth = createAuth(db, authEnv);
-  blobDir = await mkdtemp(join(tmpdir(), "protoloom-trpc-"));
+  blobDir = await mkdtemp(join(tmpdir(), "weaver-trpc-"));
   registry = createRegistry({ db, blobs: createLocalStore(blobDir) });
   liveQueue = createQueue(producerConnection(valkey.getConnectionUrl()));
   deadQueue = createQueue(producerConnection("redis://127.0.0.1:1"), { onError: () => undefined });

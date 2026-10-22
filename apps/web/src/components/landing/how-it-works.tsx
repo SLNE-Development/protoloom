@@ -27,7 +27,7 @@ const STEPS: { n: string; title: string; text: string; terminal: ReactNode; labe
   },
   {
     n: "2 · validate",
-    title: "Protoloom checks every file",
+    title: "Weaver checks every file",
     text: "Each artifact must compile together with its dependencies, and every import must come from the artifact itself or a declared dependency.",
     label: "A rejected publish",
     terminal: (
@@ -48,10 +48,10 @@ const STEPS: { n: string; title: string; text: string; terminal: ReactNode; labe
     terminal: (
       <>
         <Prompt>./gradlew fetchProtos</Prompt>
-        {"\n"}Protoloom: downloading dev.surf.economy:economy-contracts:1.4.0
-        {"\n"}Protoloom: downloading dev.surf.core:core-types:2.1.0
+        {"\n"}Weaver: downloading dev.surf.economy:economy-contracts:1.4.0
+        {"\n"}Weaver: downloading dev.surf.core:core-types:2.1.0
         {"\n"}
-        <span className="text-release">✓</span> build/protoloom/protos
+        <span className="text-release">✓</span> build/weaver/protos
       </>
     ),
   },

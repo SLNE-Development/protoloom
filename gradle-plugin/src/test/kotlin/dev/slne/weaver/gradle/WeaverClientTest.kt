@@ -1,4 +1,4 @@
-package dev.protoloom.gradle
+package dev.slne.weaver.gradle
 
 import com.sun.net.httpserver.HttpServer
 import org.gradle.api.GradleException
@@ -10,8 +10,8 @@ import java.net.URI
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
-class ProtoloomClientTest {
-    private val client = ProtoloomClient("https://registry.example.com", "token")
+class WeaverClientTest {
+    private val client = WeaverClient("https://registry.example.com", "token")
 
     @Test
     fun `an explicit 443 is the same origin as the default https port`() {
@@ -46,7 +46,7 @@ class ProtoloomClientTest {
         server.start()
         try {
             val archive = File(tmp, "a.tar.gz").apply { writeBytes(byteArrayOf(1, 2, 3)) }
-            val client = ProtoloomClient("http://127.0.0.1:${server.address.port}", "token")
+            val client = WeaverClient("http://127.0.0.1:${server.address.port}", "token")
             return assertFailsWith<GradleException> {
                 client.publish("releases", Manifest("dev.surf.protection", "protection-contracts", "2.0.0", emptyList()), archive)
             }
@@ -114,7 +114,7 @@ class ProtoloomClientTest {
         }
         server.start()
         try {
-            ProtoloomClient("http://127.0.0.1:${server.address.port}", "token").resolve(listOf("releases"), emptyList())
+            WeaverClient("http://127.0.0.1:${server.address.port}", "token").resolve(listOf("releases"), emptyList())
         } finally {
             server.stop(0)
         }

@@ -9,7 +9,7 @@ export const metadata: Metadata = { title: "Settings" };
 export default async function SettingsPage() {
   const { settings } = await requireRole("admin", "/admin/settings");
   return (
-    <AdminPage title="Settings" description="Server-wide settings of this Protoloom.">
+    <AdminPage title="Settings" description="Server-wide settings of this Weaver.">
       <div className="max-w-3xl">
         <AnonymousViewSetting initial={settings.anonymousView} />
       </div>

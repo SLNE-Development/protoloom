@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
-import { createLocalStore, createRegistry, packArchive, RegistryError, type ProtoFile } from "@protoloom/core";
-import { apiKeyPermission, repository, user, type Db } from "@protoloom/db";
-import { startTestDb } from "@protoloom/db/testing";
+import { createLocalStore, createRegistry, packArchive, RegistryError, type ProtoFile } from "@weaver/core";
+import { apiKeyPermission, repository, user, type Db } from "@weaver/db";
+import { startTestDb } from "@weaver/db/testing";
 import { createAuth, type Auth, type AuthEnv } from "@/server/auth";
 import type { ServerContext } from "@/server/context";
 import { handle } from "@/server/http";
@@ -119,7 +119,7 @@ beforeAll(async () => {
   testDb = await startTestDb();
   db = testDb.db;
   auth = createAuth(db, authEnv);
-  blobDir = await mkdtemp(join(tmpdir(), "protoloom-api-"));
+  blobDir = await mkdtemp(join(tmpdir(), "weaver-api-"));
   const blobs = createLocalStore(blobDir);
   holder.ctx = { db, blobs, auth, registry: createRegistry({ db, blobs }) };
   keys.maintainer = await createKey("maintainer", [
@@ -184,7 +184,7 @@ describe("PUT publish", () => {
     const archive = await archiveRoute(new Request(artifactUrl(money, "/archive")), ctxOf(money));
     expect(archive.status).toBe(200);
     expect(archive.headers.get("content-type")).toBe("application/gzip");
-    expect(archive.headers.get("x-protoloom-sha256")).toBe(published.sha256);
+    expect(archive.headers.get("x-weaver-sha256")).toBe(published.sha256);
     expect(archive.headers.get("content-disposition")).toBe('attachment; filename="money-1.0.0.tar.gz"');
     const bytes = Buffer.from(await archive.arrayBuffer());
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(published.sha256);
@@ -433,7 +433,7 @@ describe("GET manifest and HEAD archive", () => {
     expect(head.status).toBe(200);
     expect(head.headers.get("content-type")).toBe("application/gzip");
     expect(head.headers.get("content-length")).toBe(String(size));
-    expect(head.headers.get("x-protoloom-sha256")).toBe(published.sha256);
+    expect(head.headers.get("x-weaver-sha256")).toBe(published.sha256);
     expect(head.headers.get("content-disposition")).toBe('attachment; filename="money-1.0.0.tar.gz"');
     expect(await head.text()).toBe("");
     expect(await downloadCount(money)).toBe(1);
@@ -447,14 +447,14 @@ describe("GET manifest and HEAD archive", () => {
 
     const get = (query: string) =>
       archiveRoute(new Request(artifactUrl(snap, `/archive${query}`), { headers: headers(keys.maintainer) }), ctxOf(snap));
-    expect((await get("")).headers.get("x-protoloom-sha256")).toBe(second.sha256);
-    expect((await get("?build=1")).headers.get("x-protoloom-sha256")).toBe(first.sha256);
-    expect((await get("?build=2")).headers.get("x-protoloom-sha256")).toBe(second.sha256);
+    expect((await get("")).headers.get("x-weaver-sha256")).toBe(second.sha256);
+    expect((await get("?build=1")).headers.get("x-weaver-sha256")).toBe(first.sha256);
+    expect((await get("?build=2")).headers.get("x-weaver-sha256")).toBe(second.sha256);
     const head = await archiveHead(
       new Request(artifactUrl(snap, "/archive?build=1"), { method: "HEAD", headers: headers(keys.maintainer) }),
       ctxOf(snap),
     );
-    expect(head.headers.get("x-protoloom-sha256")).toBe(first.sha256);
+    expect(head.headers.get("x-weaver-sha256")).toBe(first.sha256);
 
     const gone = await get("?build=3");
     expect(gone.status).toBe(404);

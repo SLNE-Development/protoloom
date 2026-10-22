@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Button } from "@protoloom/ui/components/button";
+import { Button } from "@weaver/ui/components/button";
 import type { SocialProviderId } from "@/server/auth";
 import type { PublicStats } from "@/lib/public-catalog";
 import { HeroCards } from "./hero-cards";
@@ -12,7 +12,7 @@ function plural(count: number, one: string, many: string): string {
   return `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
 }
 
-/** First screen: what Protoloom is, the way in, and the layered Gradle + proto cards. */
+/** First screen: what Weaver is, the way in, and the layered Gradle + proto cards. */
 export async function Hero({
   host,
   stats,
@@ -58,7 +58,7 @@ export async function Hero({
             Versioned .proto contracts for every build.
           </h1>
           <p className="mb-[26px] max-w-[48ch] text-base leading-[1.55] text-muted-foreground">
-            Publish protobuf files from Gradle as versioned artifacts. Protoloom checks that they compile, resolves their
+            Publish protobuf files from Gradle as versioned artifacts. Weaver checks that they compile, resolves their
             dependencies, and hands Kotlin, Java and Node builds exactly the files they need.
           </p>
           <div className="flex flex-wrap items-center gap-2.5">

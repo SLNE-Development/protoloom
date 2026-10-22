@@ -1,4 +1,4 @@
-package dev.protoloom.gradle
+package dev.slne.weaver.gradle
 
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.RegularFileProperty
@@ -12,16 +12,16 @@ import org.gradle.api.tasks.TaskAction
 
 /**
  * Writes this module's [LocalManifest] (`{ "coordinate": "g:n:v" | null, "external": [...] }`),
- * which `protoloomElements` exposes to local modules that depend on this one.
+ * which `weaverElements` exposes to local modules that depend on this one.
  */
 @CacheableTask
 abstract class LocalManifestTask : DefaultTask() {
-    /** `group:name:version` from `protoloom.publishing`; absent when the block is incomplete. */
+    /** `group:name:version` from `weaver.publishing`; absent when the block is incomplete. */
     @get:Input
     @get:Optional
     abstract val coordinate: Property<String>
 
-    /** This module's direct external `protoloom` dependencies (`g:n:v`). */
+    /** This module's direct external `weaver` dependencies (`g:n:v`). */
     @get:Input
     abstract val external: ListProperty<String>
 

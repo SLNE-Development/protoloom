@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { count, eq } from "drizzle-orm";
-import { artifact, createDb, repository, setting, version } from "@protoloom/db";
+import { artifact, createDb, repository, setting, version } from "@weaver/db";
 import { STATE_FILE, USERS } from "./fixtures";
 import { loginAs } from "./helpers";
 
@@ -82,7 +82,7 @@ test.describe("artifact browser", () => {
     await expect(page.getByTestId("proto-viewer")).toContainText("message Money");
 
     await page.getByRole("tab", { name: "Usage" }).click();
-    await expect(page.getByRole("tabpanel")).toContainText('protoloom("dev.example:demo:1.0.0")');
+    await expect(page.getByRole("tabpanel")).toContainText('weaver("dev.example:demo:1.0.0")');
 
     await page.getByRole("tab", { name: /Dependents/ }).click();
     await expect(page.getByRole("tabpanel").getByRole("link", { name: "dev.example:orders:1.0.0" })).toBeVisible();
@@ -104,7 +104,7 @@ test.describe("artifact browser", () => {
 
     const response = await page.request.get(href!);
     expect(response.status()).toBe(200);
-    expect(response.headers()["x-protoloom-sha256"]).toBe(sha);
+    expect(response.headers()["x-weaver-sha256"]).toBe(sha);
   });
 
   test("Copy on the viewer fetches the file", async ({ page, context }) => {
@@ -160,7 +160,7 @@ test.describe("artifact browser", () => {
   test("public pages get canonical URLs and share cards, private ones the generic card and noindex", async ({ page }) => {
     await loginAs(page, USERS.admin.id);
     await page.goto(VERSION_PAGE);
-    await expect(page).toHaveTitle("dev.example:demo:1.0.0 · Protoloom");
+    await expect(page).toHaveTitle("dev.example:demo:1.0.0 · Weaver");
     const ogImage = page.locator('meta[property="og:image"]');
     await expect(ogImage).toHaveAttribute("content", /\/og\/artifact\/releases\/dev\.example\/demo\/1\.0\.0$/);
     await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", new RegExp(`${VERSION_PAGE}$`));

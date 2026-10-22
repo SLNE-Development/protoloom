@@ -1,4 +1,4 @@
-import type { Db } from "@protoloom/db";
+import type { Db } from "@weaver/db";
 import type { Coordinate } from "../coordinates.js";
 import type { Principal } from "../permissions.js";
 import type { Resolution, ResolveOptions } from "../resolution.js";

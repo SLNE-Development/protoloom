@@ -6,14 +6,14 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRoundIcon, PlusIcon, TriangleAlertIcon, XIcon } from "lucide-react";
 import { toast } from "sonner";
-import type { Role } from "@protoloom/core";
-import { Alert, AlertDescription, AlertTitle } from "@protoloom/ui/components/alert";
-import { Button } from "@protoloom/ui/components/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@protoloom/ui/components/dialog";
-import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@protoloom/ui/components/form";
-import { Input } from "@protoloom/ui/components/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@protoloom/ui/components/select";
-import { Spinner } from "@protoloom/ui/components/spinner";
+import type { Role } from "@weaver/core";
+import { Alert, AlertDescription, AlertTitle } from "@weaver/ui/components/alert";
+import { Button } from "@weaver/ui/components/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@weaver/ui/components/dialog";
+import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@weaver/ui/components/form";
+import { Input } from "@weaver/ui/components/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@weaver/ui/components/select";
+import { Spinner } from "@weaver/ui/components/spinner";
 import { CopyButton } from "@/components/manage/copy-button";
 import {
   EXPIRY_OPTIONS,
@@ -97,11 +97,11 @@ export function CreateKeyDialog({ open, onOpenChange, role }: { open: boolean; o
                 <TriangleAlertIcon />
                 <AlertTitle>You won&apos;t see this key again</AlertTitle>
                 <AlertDescription>
-                  Protoloom stores only a hash. If you lose the key, revoke it and create a new one.
+                  Weaver stores only a hash. If you lose the key, revoke it and create a new one.
                 </AlertDescription>
               </Alert>
               <p className="text-xs text-muted-foreground">
-                Use it as <code className="font-mono">PROTOLOOM_TOKEN</code> for the CLI and the Gradle plugin, or send it as{" "}
+                Use it as <code className="font-mono">WEAVER_TOKEN</code> for the CLI and the Gradle plugin, or send it as{" "}
                 <code className="font-mono">Authorization: Bearer &lt;key&gt;</code>.
               </p>
             </div>

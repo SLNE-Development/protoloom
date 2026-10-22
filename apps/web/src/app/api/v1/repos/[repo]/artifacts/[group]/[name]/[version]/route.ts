@@ -1,4 +1,4 @@
-import { formatCoordinate, LIMITS, RegistryError, type Manifest, type VersionInfo } from "@protoloom/core";
+import { formatCoordinate, LIMITS, RegistryError, type Manifest, type VersionInfo } from "@weaver/core";
 import { getServerContext } from "@/server/context";
 import {
   forceParam,

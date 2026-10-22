@@ -1,4 +1,4 @@
-package dev.protoloom.gradle
+package dev.slne.weaver.gradle
 
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
@@ -21,8 +21,8 @@ import java.io.File
 import javax.inject.Inject
 
 /**
- * Uploads the packed `.proto` archive with a manifest built from `protoloom.publishing` and the
- * `protoloom` dependencies; a local module dependency is declared by its own publishing coordinate.
+ * Uploads the packed `.proto` archive with a manifest built from `weaver.publishing` and the
+ * `weaver` dependencies; a local module dependency is declared by its own publishing coordinate.
  * `-SNAPSHOT` versions go to the snapshot repository when one is set.
  */
 @DisableCachingByDefault(because = "Uploads to a remote registry")
@@ -58,7 +58,7 @@ abstract class PublishProtosTask : DefaultTask() {
     @get:Input
     abstract val dependencies: ListProperty<String>
 
-    /** Paths of the local modules declared directly in `protoloom`, such as `:contracts`. */
+    /** Paths of the local modules declared directly in `weaver`, such as `:contracts`. */
     @get:Input
     abstract val projectDependencies: ListProperty<String>
 
@@ -71,7 +71,7 @@ abstract class PublishProtosTask : DefaultTask() {
     @get:Internal
     abstract val localManifestProjects: MapProperty<String, String>
 
-    /** `protoloom.publishing.source`, checked for `.proto` files before uploading. */
+    /** `weaver.publishing.source`, checked for `.proto` files before uploading. */
     @get:Internal
     abstract val sourceDir: DirectoryProperty
 
@@ -103,10 +103,10 @@ abstract class PublishProtosTask : DefaultTask() {
         val source = sourceDir.get().asFile
         val archiveFile = archive.get().asFile
         if (!archiveFile.isFile || archiveOperations.tarTree(archiveOperations.gzip(archiveFile)).isEmpty) {
-            throw GradleException("No .proto files found in $source (protoloom.publishing.source).")
+            throw GradleException("No .proto files found in $source (weaver.publishing.source).")
         }
 
-        val client = protoloomClient(url.orNull, token.orNull)
+        val client = weaverClient(url.orNull, token.orNull)
         val result = client.publish(target, manifest, archiveFile)
         val redeployed = if (result.redeployed) " (redeployed)" else ""
         logger.lifecycle("Published ${result.coordinate} to $target, build ${result.buildNumber}$redeployed")
@@ -117,13 +117,13 @@ abstract class PublishProtosTask : DefaultTask() {
         val manifestByProject = localManifestProjects.get().entries.associate { (file, project) -> project to File(file) }
         return projectDependencies.get().map { path ->
             val manifest = manifestByProject[path]
-                ?: throw GradleException("Module $path does not provide a protoloom manifest. Apply the dev.protoloom plugin to it.")
+                ?: throw GradleException("Module $path does not provide a weaver manifest. Apply the dev.slne.weaver plugin to it.")
             readLocalManifest(manifest).coordinate
-                ?: throw GradleException("Module $path has no protoloom.publishing block (group, name and version) to publish it under.")
+                ?: throw GradleException("Module $path has no weaver.publishing block (group, name and version) to publish it under.")
         }
     }
 
     private fun required(property: Property<String>, name: String): String =
         property.orNull?.takeIf { it.isNotBlank() }
-            ?: throw GradleException("protoloom.publishing.$name is not set.")
+            ?: throw GradleException("weaver.publishing.$name is not set.")
 }

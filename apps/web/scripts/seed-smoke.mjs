@@ -1,4 +1,4 @@
-// Seeds a fresh Protoloom database for the end-to-end smoke test (scripts/e2e-smoke.sh).
+// Seeds a fresh Weaver database for the end-to-end smoke test (scripts/e2e-smoke.sh).
 //
 // Login is OAuth only, so no user can be created through the UI in a test stack. This script
 // creates, idempotently:
@@ -11,16 +11,16 @@
 //
 // It is NOT part of the image. scripts/e2e-smoke.sh bundles it with esbuild into one file and
 // copies it into the running app container (docker cp), then runs it with plain node.
-// Guards: it runs only with PROTOLOOM_SMOKE_SEED=1, and refuses a database that has any user
+// Guards: it runs only with WEAVER_SMOKE_SEED=1, and refuses a database that has any user
 // other than the smoke admin. Needs DATABASE_URL, BETTER_AUTH_SECRET and BETTER_AUTH_URL.
 import { randomUUID } from "node:crypto";
 import { apiKey } from "@better-auth/api-key";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { betterAuth } from "better-auth";
 import { eq, ne } from "drizzle-orm";
-import { account, apikey, apiKeyPermission, createDb, repository, session, user, verification } from "@protoloom/db";
+import { account, apikey, apiKeyPermission, createDb, repository, session, user, verification } from "@weaver/db";
 
-const ADMIN_EMAIL = "smoke-admin@protoloom.invalid";
+const ADMIN_EMAIL = "smoke-admin@weaver.invalid";
 const REPOSITORY = "releases";
 /** Must match API_KEY_PREFIX in src/server/trpc/routers/keys.ts. */
 const API_KEY_PREFIX = "pl_";
@@ -37,8 +37,8 @@ function required(name) {
 
 const log = (message) => console.error(`seed-smoke: ${message}`);
 
-if (process.env.PROTOLOOM_SMOKE_SEED !== "1") {
-  console.error("seed-smoke: refusing to run without PROTOLOOM_SMOKE_SEED=1 (smoke-test stacks only)");
+if (process.env.WEAVER_SMOKE_SEED !== "1") {
+  console.error("seed-smoke: refusing to run without WEAVER_SMOKE_SEED=1 (smoke-test stacks only)");
   process.exit(1);
 }
 

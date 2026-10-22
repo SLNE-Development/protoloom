@@ -25,7 +25,7 @@ You can combine them, for example `releases`, `snapshots` and `public`. Clients 
 3. Optionally add a **description**.
 4. Choose the settings below and save.
 
-The name can't be changed later. Clients refer to it in `protoloom { repositories(...) }` and `protoloom.json`.
+The name can't be changed later. Clients refer to it in `weaver { repositories(...) }` and `weaver.json`.
 
 ## Settings
 

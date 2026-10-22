@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheckIcon, CircleXIcon, EyeIcon, PencilIcon, PlayIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
 import { toast } from "sonner";
-import { Alert, AlertDescription, AlertTitle } from "@protoloom/ui/components/alert";
+import { Alert, AlertDescription, AlertTitle } from "@weaver/ui/components/alert";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,14 +14,14 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@protoloom/ui/components/alert-dialog";
-import { Badge } from "@protoloom/ui/components/badge";
-import { Button } from "@protoloom/ui/components/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@protoloom/ui/components/dialog";
-import { Skeleton } from "@protoloom/ui/components/skeleton";
-import { Spinner } from "@protoloom/ui/components/spinner";
-import { Switch } from "@protoloom/ui/components/switch";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@protoloom/ui/components/table";
+} from "@weaver/ui/components/alert-dialog";
+import { Badge } from "@weaver/ui/components/badge";
+import { Button } from "@weaver/ui/components/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@weaver/ui/components/dialog";
+import { Skeleton } from "@weaver/ui/components/skeleton";
+import { Spinner } from "@weaver/ui/components/spinner";
+import { Switch } from "@weaver/ui/components/switch";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@weaver/ui/components/table";
 import { describePolicy, toPolicyInput, type PolicyFormValues } from "@/lib/cleanup-policies";
 import { errorMessage, runNowErrorMessage } from "@/lib/trpc-error";
 import { useTRPC, type RouterOutputs } from "@/trpc/client";

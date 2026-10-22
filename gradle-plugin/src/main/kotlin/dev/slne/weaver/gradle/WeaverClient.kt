@@ -1,4 +1,4 @@
-package dev.protoloom.gradle
+package dev.slne.weaver.gradle
 
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
@@ -74,11 +74,11 @@ private data class ValidationIssue(val path: String = "", val line: Int? = null,
 private data class ValidationDetails(val issues: List<ValidationIssue> = emptyList())
 
 /**
- * Client for the Protoloom REST API (`/api/v1`). Every non-2xx response becomes a
+ * Client for the Weaver REST API (`/api/v1`). Every non-2xx response becomes a
  * [GradleException] of the form `<code>: <message>` taken from the server's error body; for
  * `validation_failed` each issue follows on its own line as `  <path>:<line>: <message>`.
  */
-internal class ProtoloomClient(baseUrl: String, private val token: String?) {
+internal class WeaverClient(baseUrl: String, private val token: String?) {
     private val baseUrl = baseUrl.trimEnd('/')
     // HTTP/1.1 for every registry URL, http and https alike. Over plain http the JDK client would
     // otherwise ask for an h2c upgrade, which the Next.js server answers by closing the connection;
@@ -132,7 +132,7 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
     fun publish(repository: String, manifest: Manifest, archive: File): PublishResponse {
         val path = listOf(repository, "artifacts", manifest.group, manifest.name, manifest.version)
             .joinToString("/") { URLEncoder.encode(it, StandardCharsets.UTF_8) }
-        val boundary = "protoloom-${UUID.randomUUID()}"
+        val boundary = "weaver-${UUID.randomUUID()}"
         val manifestJson = json.encodeToString(Manifest.serializer(), manifest)
         val body = multipart(boundary, manifestJson, archive)
         val request = request(URI.create("$baseUrl/api/v1/repos/$path"))
@@ -151,7 +151,7 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
         val archive = try {
             URI.create(archiveUrl)
         } catch (e: IllegalArgumentException) {
-            throw GradleException("Protoloom server returned an invalid archive URL: $archiveUrl", e)
+            throw GradleException("Weaver server returned an invalid archive URL: $archiveUrl", e)
         }
         val base = URI.create(baseUrl)
         if (sameOrigin(archive, base)) return archive
@@ -159,7 +159,7 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
         val apiPath = path.indexOf(API_PREFIX).let { if (it >= 0) path.substring(it) else path }
         val query = archive.rawQuery?.let { "?$it" }.orEmpty()
         val rebased = URI.create(baseUrl + apiPath + query)
-        logger.info("Protoloom: archive URL {} is not on {}; requesting {} instead", archiveUrl, baseUrl, rebased)
+        logger.info("Weaver: archive URL {} is not on {}; requesting {} instead", archiveUrl, baseUrl, rebased)
         return rebased
     }
 
@@ -179,10 +179,10 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
         try {
             http.send(request, handler)
         } catch (e: IOException) {
-            throw GradleException("Protoloom $action failed: could not reach ${request.uri()}: ${e.message}", e)
+            throw GradleException("Weaver $action failed: could not reach ${request.uri()}: ${e.message}", e)
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
-            throw GradleException("Protoloom $action was interrupted", e)
+            throw GradleException("Weaver $action was interrupted", e)
         }
 
     private fun errorFor(status: Int, body: String, action: String): GradleException {
@@ -196,7 +196,7 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
         return if (error != null) {
             GradleException("${error.code}: ${error.message}" + validationIssueLines(error))
         } else {
-            GradleException("Protoloom $action failed with HTTP $status: ${body.take(500)}")
+            GradleException("Weaver $action failed with HTTP $status: ${body.take(500)}")
         }
     }
 
@@ -235,9 +235,9 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
         try {
             json.decodeFromString(serializer, body)
         } catch (e: SerializationException) {
-            throw GradleException("Unexpected response from Protoloom server: ${e.message}", e)
+            throw GradleException("Unexpected response from Weaver server: ${e.message}", e)
         } catch (e: IllegalArgumentException) {
-            throw GradleException("Unexpected response from Protoloom server: ${e.message}", e)
+            throw GradleException("Unexpected response from Weaver server: ${e.message}", e)
         }
 
     private fun multipart(boundary: String, manifestJson: String, archive: File): ByteArray {
@@ -267,7 +267,7 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
         val OTHER_CONTROLS = Regex("[\u0000-\u001F\u007F-\u009F]")
         val SPACES = Regex(" {2,}")
         val json = Json { ignoreUnknownKeys = true }
-        val logger: Logger = Logging.getLogger(ProtoloomClient::class.java)
+        val logger: Logger = Logging.getLogger(WeaverClient::class.java)
 
         fun sameOrigin(a: URI, b: URI): Boolean =
             a.scheme.equals(b.scheme, ignoreCase = true) &&
@@ -296,10 +296,10 @@ internal class ProtoloomClient(baseUrl: String, private val token: String?) {
     }
 }
 
-/** Creates a client for [url], failing with a hint at `PROTOLOOM_URL` when no URL is configured. */
-internal fun protoloomClient(url: String?, token: String?): ProtoloomClient {
+/** Creates a client for [url], failing with a hint at `WEAVER_URL` when no URL is configured. */
+internal fun weaverClient(url: String?, token: String?): WeaverClient {
     if (url.isNullOrBlank()) {
-        throw GradleException("No Protoloom server URL configured. Set the PROTOLOOM_URL environment variable or protoloom.url.")
+        throw GradleException("No Weaver server URL configured. Set the WEAVER_URL environment variable or weaver.url.")
     }
-    return ProtoloomClient(url, token)
+    return WeaverClient(url, token)
 }

@@ -1,4 +1,4 @@
-package dev.protoloom.gradle
+package dev.slne.weaver.gradle
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -16,7 +16,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Multi-project builds where `:service` declares `protoloom(project(":contracts"))` and `:contracts`
+ * Multi-project builds where `:service` declares `weaver(project(":contracts"))` and `:contracts`
  * depends on the remote `dev.example:remote:1.0.0`.
  */
 class LocalModulesTest {
@@ -52,7 +52,7 @@ class LocalModulesTest {
             ),
             Json.parseToJsonElement(stub.resolveBodies.single()),
         )
-        val protos = projectDir.resolve("service/build/protoloom/protos")
+        val protos = projectDir.resolve("service/build/weaver/protos")
         assertEquals(CONTRACTS_PROTO, protos.resolve("contracts/v1/a.proto").readText())
         assertEquals(remoteContent, protos.resolve("remote/v1/remote.proto").readText())
         assertEquals(
@@ -71,17 +71,17 @@ class LocalModulesTest {
         val second = gradle(":service:fetchProtos").build()
 
         assertTrue(second.output.contains("Reusing configuration cache"), second.output)
-        assertEquals(edited, projectDir.resolve("service/build/protoloom/protos/contracts/v1/a.proto").readText())
+        assertEquals(edited, projectDir.resolve("service/build/weaver/protos/contracts/v1/a.proto").readText())
     }
 
     @Test
     fun `fetchProtos needs no registry when the local modules have no remote dependencies`() {
         writeProjects(contractsDependencies = "")
 
-        val result = gradle(":service:fetchProtos", env = System.getenv() - "PROTOLOOM_URL" - "PROTOLOOM_TOKEN").build()
+        val result = gradle(":service:fetchProtos", env = System.getenv() - "WEAVER_URL" - "WEAVER_TOKEN").build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":service:fetchProtos")?.outcome)
-        assertEquals(CONTRACTS_PROTO, projectDir.resolve("service/build/protoloom/protos/contracts/v1/a.proto").readText())
+        assertEquals(CONTRACTS_PROTO, projectDir.resolve("service/build/weaver/protos/contracts/v1/a.proto").readText())
         assertEquals(0, stub.resolveBodies.size)
     }
 
@@ -94,9 +94,9 @@ class LocalModulesTest {
         projectDir.resolve("app/build.gradle.kts").writeText(
             """
             plugins {
-                id("dev.protoloom")
+                id("dev.slne.weaver")
             }
-            protoloom {
+            weaver {
                 repositories("releases")
                 publishing {
                     repository = "releases"
@@ -106,7 +106,7 @@ class LocalModulesTest {
                 }
             }
             dependencies {
-                protoloom(project(":service"))
+                weaver(project(":service"))
             }
             """.trimIndent() + "\n",
         )
@@ -120,8 +120,8 @@ class LocalModulesTest {
             ),
             Json.parseToJsonElement(stub.resolveBodies.single()),
         )
-        assertEquals(CONTRACTS_PROTO, projectDir.resolve("app/build/protoloom/protos/contracts/v1/a.proto").readText())
-        assertEquals(remoteContent, projectDir.resolve("app/build/protoloom/protos/remote/v1/remote.proto").readText())
+        assertEquals(CONTRACTS_PROTO, projectDir.resolve("app/build/weaver/protos/contracts/v1/a.proto").readText())
+        assertEquals(remoteContent, projectDir.resolve("app/build/weaver/protos/remote/v1/remote.proto").readText())
         val publish = stub.publishes.single()
         val manifest = Json.parseToJsonElement(parseMultipart(publish.contentType, publish.body).getValue("manifest").text)
         assertEquals(JsonArray(listOf(JsonPrimitive("dev.example:service:1.0.0"))), (manifest as JsonObject).getValue("dependencies"))
@@ -154,7 +154,7 @@ class LocalModulesTest {
             "dev.example:contracts:1.0.0" to listOf("dev.example:legacy:1.0.0"),
         )
         writeProjects(contractsDependencies = "")
-        projectDir.resolve("service/build.gradle.kts").appendText("dependencies {\n    protoloom(\"dev.example:x:1.0.0\")\n}\n")
+        projectDir.resolve("service/build.gradle.kts").appendText("dependencies {\n    weaver(\"dev.example:x:1.0.0\")\n}\n")
 
         val result = gradle(":service:fetchProtos").build()
 
@@ -166,7 +166,7 @@ class LocalModulesTest {
             Json.parseToJsonElement(stub.resolveBodies.single()),
         )
         assertEquals(listOf("/api/v1/repos/releases/artifacts/dev.example/x/1.0.0/archive"), stub.archivePaths.toList())
-        val protos = projectDir.resolve("service/build/protoloom/protos")
+        val protos = projectDir.resolve("service/build/weaver/protos")
         assertEquals(
             listOf("contracts/v1/a.proto", "x/v1/x.proto"),
             protos.walk().filter { it.isFile }.map { it.relativeTo(protos).invariantSeparatorsPath }.sorted().toList(),
@@ -184,7 +184,7 @@ class LocalModulesTest {
             projectDir.resolve("contracts/build.gradle.kts").readText(),
         )
         projectDir.resolve("service/build.gradle.kts").appendText(
-            "dependencies {\n    protoloom(project(\":contracts2\"))\n    protoloom(\"dev.example:x:1.0.0\")\n}\n",
+            "dependencies {\n    weaver(project(\":contracts2\"))\n    weaver(\"dev.example:x:1.0.0\")\n}\n",
         )
 
         val result = gradle(":service:fetchProtos").buildAndFail()
@@ -200,14 +200,14 @@ class LocalModulesTest {
         stub.files = mapOf("x/v1/x.proto" to remoteContent)
         stub.extraArtifacts = mapOf("dev.example:contracts:1.0.0" to mapOf("contracts/v1/a.proto" to "// remote copy\n"))
         writeProjects(contractsDependencies = "")
-        projectDir.resolve("service/build.gradle.kts").appendText("dependencies {\n    protoloom(\"dev.example:x:1.0.0\")\n}\n")
+        projectDir.resolve("service/build.gradle.kts").appendText("dependencies {\n    weaver(\"dev.example:x:1.0.0\")\n}\n")
 
         val result = gradle(":service:fetchProtos", "--info").build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":service:fetchProtos")?.outcome)
         assertEquals(listOf("/api/v1/repos/releases/artifacts/dev.example/x/1.0.0/archive"), stub.archivePaths.toList())
         assertEquals(1, Regex("Using project :contracts instead of dev.example:contracts:1.0.0").findAll(result.output).count(), result.output)
-        val protos = projectDir.resolve("service/build/protoloom/protos")
+        val protos = projectDir.resolve("service/build/weaver/protos")
         assertEquals(CONTRACTS_PROTO, protos.resolve("contracts/v1/a.proto").readText())
         assertEquals(remoteContent, protos.resolve("x/v1/x.proto").readText())
     }
@@ -218,7 +218,7 @@ class LocalModulesTest {
         stub.files = mapOf("x/v1/x.proto" to remoteContent, "contracts/v1/a.proto" to "// x's copy\n")
         stub.extraArtifacts = mapOf("dev.example:contracts:1.0.0" to mapOf("contracts/v1/a.proto" to "// remote copy\n"))
         writeProjects(contractsDependencies = "")
-        projectDir.resolve("service/build.gradle.kts").appendText("dependencies {\n    protoloom(\"dev.example:x:1.0.0\")\n}\n")
+        projectDir.resolve("service/build.gradle.kts").appendText("dependencies {\n    weaver(\"dev.example:x:1.0.0\")\n}\n")
 
         val result = gradle(":service:fetchProtos").buildAndFail()
 
@@ -252,12 +252,12 @@ class LocalModulesTest {
 
         val result = gradle(":service:publishProtos").buildAndFail()
 
-        assertTrue(result.output.contains("Module :contracts has no protoloom.publishing block"), result.output)
+        assertTrue(result.output.contains("Module :contracts has no weaver.publishing block"), result.output)
         assertEquals(0, stub.publishes.size)
     }
 
     private fun writeProjects(
-        contractsDependencies: String = """protoloom("dev.example:remote:1.0.0")""",
+        contractsDependencies: String = """weaver("dev.example:remote:1.0.0")""",
         contractsPublishing: String = """
             publishing {
                 repository = "releases"
@@ -277,17 +277,17 @@ class LocalModulesTest {
         projectDir.resolve("contracts/src/main/proto/contracts/v1/a.proto").writeText(CONTRACTS_PROTO)
         projectDir.resolve("contracts/src/main/proto/contracts/v1/notes.txt").writeText("not a proto")
         projectDir.resolve("contracts/build.gradle.kts").writeText(
-            "plugins {\n    id(\"dev.protoloom\")\n}\n" +
-                "protoloom {\n    repositories(\"releases\")\n${contractsPublishing.trimIndent()}\n}\n" +
+            "plugins {\n    id(\"dev.slne.weaver\")\n}\n" +
+                "weaver {\n    repositories(\"releases\")\n${contractsPublishing.trimIndent()}\n}\n" +
                 "dependencies {\n    $contractsDependencies\n}\n",
         )
         projectDir.resolve("service").mkdirs()
         projectDir.resolve("service/build.gradle.kts").writeText(
             """
             plugins {
-                id("dev.protoloom")
+                id("dev.slne.weaver")
             }
-            protoloom {
+            weaver {
                 repositories("releases")
                 publishing {
                     repository = "releases"
@@ -297,7 +297,7 @@ class LocalModulesTest {
                 }
             }
             dependencies {
-                protoloom(project(":contracts"))
+                weaver(project(":contracts"))
             }
             """.trimIndent() + "\n",
         )
@@ -305,7 +305,7 @@ class LocalModulesTest {
 
     private fun gradle(
         vararg tasks: String,
-        env: Map<String, String> = System.getenv() + mapOf("PROTOLOOM_URL" to stub.url, "PROTOLOOM_TOKEN" to "secret-token"),
+        env: Map<String, String> = System.getenv() + mapOf("WEAVER_URL" to stub.url, "WEAVER_TOKEN" to "secret-token"),
     ): GradleRunner = GradleRunner.create()
         .withProjectDir(projectDir)
         .withPluginClasspath()

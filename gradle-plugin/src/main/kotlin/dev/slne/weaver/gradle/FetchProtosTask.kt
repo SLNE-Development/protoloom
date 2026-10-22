@@ -1,4 +1,4 @@
-package dev.protoloom.gradle
+package dev.slne.weaver.gradle
 
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
@@ -25,7 +25,7 @@ import java.io.File
 import javax.inject.Inject
 
 /**
- * Builds one merged proto root from the `protoloom` dependencies: the `.proto` files of local
+ * Builds one merged proto root from the `weaver` dependencies: the `.proto` files of local
  * modules are copied as they are, and the remote dependencies (this module's own plus those of all
  * local modules) are resolved on the server in one `/resolve` call and extracted next to them.
  * A local module with a publishing block stands in for its `group:name`: roots with that
@@ -68,11 +68,11 @@ abstract class FetchProtosTask : DefaultTask() {
     @get:Internal
     abstract val localManifestProjects: MapProperty<String, String>
 
-    /** Content-addressed archive cache, `<gradleUserHome>/caches/protoloom`. */
+    /** Content-addressed archive cache, `<gradleUserHome>/caches/weaver`. */
     @get:Internal
     abstract val cacheDir: DirectoryProperty
 
-    /** The merged proto root, `build/protoloom/protos`. */
+    /** The merged proto root, `build/weaver/protos`. */
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
@@ -118,11 +118,11 @@ abstract class FetchProtosTask : DefaultTask() {
     private fun fetchRemote(plan: ResolvePlan, localModules: List<LocalModule>): List<Origin> {
         val repos = repositories.get()
         if (repos.isEmpty()) {
-            throw GradleException("protoloom.repositories is empty. Add the repositories to resolve from, for example repositories(\"releases\").")
+            throw GradleException("weaver.repositories is empty. Add the repositories to resolve from, for example repositories(\"releases\").")
         }
-        val client = protoloomClient(url.orNull, token.orNull)
+        val client = weaverClient(url.orNull, token.orNull)
         val resolution = client.resolve(repos, plan.roots, plan.exclude)
-        resolution.conflicts.forEach { logger.lifecycle("Protoloom resolved a version conflict: $it") }
+        resolution.conflicts.forEach { logger.lifecycle("Weaver resolved a version conflict: $it") }
         // Backstop for a server that ignores `exclude`.
         val substituted = substituteLocalModules(resolution.artifacts, localModules)
         substituted.substitutions.forEach { logSubstitution(it.project, it.artifact.coordinate) }
@@ -137,17 +137,17 @@ abstract class FetchProtosTask : DefaultTask() {
 
     /** The `.proto` files of a local module's source directory, the same set `packProtos` would publish. */
     private fun protoFiles(dir: File): FileTree =
-        objects.fileTree().from(dir).matching { include(ProtoloomPlugin.PROTO_PATTERN) }
+        objects.fileTree().from(dir).matching { include(WeaverPlugin.PROTO_PATTERN) }
 
-    private fun cachedArchive(client: ProtoloomClient, artifact: ResolvedArtifact): File {
+    private fun cachedArchive(client: WeaverClient, artifact: ResolvedArtifact): File {
         if (!SHA256.matches(artifact.sha256)) {
-            throw GradleException("Protoloom server returned an invalid checksum for ${artifact.coordinate}: ${artifact.sha256}")
+            throw GradleException("Weaver server returned an invalid checksum for ${artifact.coordinate}: ${artifact.sha256}")
         }
         val file = cacheDir.file("${artifact.sha256}.tar.gz").get().asFile
         if (file.isFile) {
-            logger.info("Protoloom: using cached {} ({})", artifact.coordinate, artifact.sha256)
+            logger.info("Weaver: using cached {} ({})", artifact.coordinate, artifact.sha256)
         } else {
-            logger.lifecycle("Protoloom: downloading {}", artifact.coordinate)
+            logger.lifecycle("Weaver: downloading {}", artifact.coordinate)
             client.download(artifact, file)
         }
         return file
@@ -203,7 +203,7 @@ internal fun localCoordinates(localModules: List<LocalModule>): Map<String, Stri
         if (previous != null && previous != module.project) {
             val (first, second) = listOf(previous, module.project).sorted()
             throw GradleException(
-                "Projects $first and $second both publish $key; give each local module its own protoloom.publishing group and name.",
+                "Projects $first and $second both publish $key; give each local module its own weaver.publishing group and name.",
             )
         }
     }

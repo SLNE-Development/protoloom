@@ -5,7 +5,7 @@ import * as schema from "./schema/index.js";
 export * from "./schema/index.js";
 export { migrate } from "./migrate.js";
 
-/** Drizzle database handle bound to the Protoloom schema. */
+/** Drizzle database handle bound to the Weaver schema. */
 export type Db = NodePgDatabase<typeof schema> & { $client: pg.Pool };
 
 /** Transaction handle passed to `db.transaction` callbacks. */
@@ -20,7 +20,7 @@ export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 export function createDb(url: string): Db {
   const pool = new pg.Pool({ connectionString: url });
   pool.on("error", (error) => {
-    console.error("protoloom: idle postgres client error", error);
+    console.error("weaver: idle postgres client error", error);
   });
   return drizzle(pool, { schema });
 }

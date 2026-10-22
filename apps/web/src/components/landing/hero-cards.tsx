@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@protoloom/ui/components/tabs";
-import { cn } from "@protoloom/ui/lib/utils";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@weaver/ui/components/tabs";
+import { cn } from "@weaver/ui/lib/utils";
 import { codeClasses } from "./code-block";
 import { KindPill } from "./layout";
 

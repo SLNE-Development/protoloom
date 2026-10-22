@@ -1,7 +1,7 @@
 import { Queue, type ConnectionOptions, type DefaultJobOptions, type JobState } from "bullmq";
 
 /** Name of the BullMQ queue that carries cleanup jobs. */
-export const CLEANUP_QUEUE = "protoloom-cleanup";
+export const CLEANUP_QUEUE = "weaver-cleanup";
 
 /** Id of the job scheduler that runs every repository's cleanup policies once a day. */
 export const DAILY_SCHEDULER_ID = "cleanup-daily";
@@ -60,7 +60,7 @@ export function producerConnection(url: string): ConnectionOptions {
 export const PRODUCER_TIMEOUT_MS = 5_000;
 
 /** Process-wide brand of {@link QueueUnavailableError} instances, shared by every copy of this module. */
-const QUEUE_UNAVAILABLE = Symbol.for("protoloom.QueueUnavailableError");
+const QUEUE_UNAVAILABLE = Symbol.for("weaver.QueueUnavailableError");
 
 /**
  * Thrown by producer operations when Valkey can't be reached in time.
@@ -122,7 +122,7 @@ export function createQueue(connection: ConnectionOptions, options: QueueOptions
     connection,
     defaultJobOptions: CLEANUP_JOB_OPTIONS,
   });
-  queue.on("error", options.onError ?? ((error: Error) => console.error("protoloom: cleanup queue error:", error.message)));
+  queue.on("error", options.onError ?? ((error: Error) => console.error("weaver: cleanup queue error:", error.message)));
   return queue;
 }
 

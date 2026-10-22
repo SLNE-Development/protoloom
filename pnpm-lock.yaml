@@ -32,16 +32,16 @@ importers:
       '@next/env':
         specifier: 16.4.2
         version: 16.4.2
-      '@protoloom/core':
+      '@weaver/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@protoloom/db':
+      '@weaver/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@protoloom/jobs':
+      '@weaver/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs
-      '@protoloom/ui':
+      '@weaver/ui':
         specifier: workspace:*
         version: link:../../packages/ui
       '@t3-oss/env-nextjs':
@@ -132,7 +132,7 @@ importers:
       '@playwright/test':
         specifier: 1.64.1
         version: 1.64.1
-      '@protoloom/config':
+      '@weaver/config':
         specifier: workspace:*
         version: link:../../packages/config
       '@tailwindcss/postcss':
@@ -177,13 +177,13 @@ importers:
 
   apps/worker:
     dependencies:
-      '@protoloom/core':
+      '@weaver/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@protoloom/db':
+      '@weaver/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@protoloom/jobs':
+      '@weaver/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs
       '@t3-oss/env-core':
@@ -199,7 +199,7 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
     devDependencies:
-      '@protoloom/config':
+      '@weaver/config':
         specifier: workspace:*
         version: link:../../packages/config
       '@testcontainers/valkey':
@@ -226,10 +226,10 @@ importers:
 
   packages/cli:
     devDependencies:
-      '@protoloom/config':
+      '@weaver/config':
         specifier: workspace:*
         version: link:../config
-      '@protoloom/core':
+      '@weaver/core':
         specifier: workspace:*
         version: link:../core
       '@types/node':
@@ -275,7 +275,7 @@ importers:
       '@bufbuild/buf':
         specifier: 1.74.0
         version: 1.74.0
-      '@protoloom/db':
+      '@weaver/db':
         specifier: workspace:*
         version: link:../db
       drizzle-orm:
@@ -288,7 +288,7 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
     devDependencies:
-      '@protoloom/config':
+      '@weaver/config':
         specifier: workspace:*
         version: link:../config
       '@types/node':
@@ -313,7 +313,7 @@ importers:
         specifier: 8.23.1
         version: 8.23.1
     devDependencies:
-      '@protoloom/config':
+      '@weaver/config':
         specifier: workspace:*
         version: link:../config
       '@testcontainers/postgresql':
@@ -347,7 +347,7 @@ importers:
         specifier: 6.0.0
         version: 6.0.0
     devDependencies:
-      '@protoloom/config':
+      '@weaver/config':
         specifier: workspace:*
         version: link:../config
       '@testcontainers/valkey':
@@ -438,7 +438,7 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
     devDependencies:
-      '@protoloom/config':
+      '@weaver/config':
         specifier: workspace:*
         version: link:../config
       '@tailwindcss/postcss':

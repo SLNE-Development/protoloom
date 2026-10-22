@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
-import { artifact, build, buildFile, dependency, repository, version, type Db, type Tx } from "@protoloom/db";
+import { artifact, build, buildFile, dependency, repository, version, type Db, type Tx } from "@weaver/db";
 import type { ProtoFile } from "../archive.js";
 import { formatCoordinate, type Coordinate } from "../coordinates.js";
 import { canAccess, type Principal } from "../permissions.js";
@@ -28,7 +28,7 @@ export async function deleteBlobLogged(blobs: BlobStore, key: string): Promise<v
   try {
     await blobs.delete(key);
   } catch (error) {
-    console.warn(`protoloom: failed to delete orphaned blob ${key}`, error);
+    console.warn(`weaver: failed to delete orphaned blob ${key}`, error);
   }
 }
 

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createRegistry, type BlobStore, type Registry } from "@protoloom/core";
-import { startTestDb } from "@protoloom/db/testing";
+import { createRegistry, type BlobStore, type Registry } from "@weaver/core";
+import { startTestDb } from "@weaver/db/testing";
 import { artifactCard, GENERIC_ARTIFACT_CARD } from "./og-artifact";
 import { insertRepository, insertVersion } from "@/test/catalog";
 

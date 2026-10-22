@@ -29,9 +29,9 @@ describe("jobs", () => {
     await queue.obliterate({ force: true });
   });
 
-  it("uses the protoloom-cleanup queue", () => {
+  it("uses the weaver-cleanup queue", () => {
     expect(queue.name).toBe(CLEANUP_QUEUE);
-    expect(CLEANUP_QUEUE).toBe("protoloom-cleanup");
+    expect(CLEANUP_QUEUE).toBe("weaver-cleanup");
   });
 
   it("enqueues a repository cleanup that waits for a worker", async () => {

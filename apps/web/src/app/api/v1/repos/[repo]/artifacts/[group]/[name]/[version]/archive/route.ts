@@ -13,14 +13,14 @@ function archiveHeaders(size: number, sha256: string, filename: string): Headers
     "content-type": "application/gzip",
     "content-length": String(size),
     "content-disposition": `attachment; filename="${filename}"`,
-    "x-protoloom-sha256": sha256,
+    "x-weaver-sha256": sha256,
     "cache-control": "private, no-store",
   };
 }
 
 /**
  * `GET`: the tar.gz archive of a version's newest build, or of build `?build=<n>` (404 once that
- * build is gone), with its SHA-256 in `x-protoloom-sha256`. Counts as a download.
+ * build is gone), with its SHA-256 in `x-weaver-sha256`. Counts as a download.
  */
 export const GET = handle(async (req: Request, { params }: Context) => {
   const p = await params;

@@ -1,5 +1,5 @@
 import { and, asc, eq, max, sql } from "drizzle-orm";
-import { artifact, build, buildFile, dependency, repository, user, version } from "@protoloom/db";
+import { artifact, build, buildFile, dependency, repository, user, version } from "@weaver/db";
 import { compareVersions, formatCoordinate, type Coordinate } from "../coordinates.js";
 import { RegistryError } from "../errors.js";
 import { canAccess, canForce, type Principal } from "../permissions.js";

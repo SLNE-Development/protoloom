@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readdir, readFile, rename, rm, symlink, writeFile } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { packArchive, sha256, type ProtoFile } from "@protoloom/core/archive";
+import { packArchive, sha256, type ProtoFile } from "@weaver/core/archive";
 import { fetchProtos, OUTPUT_MARKER } from "./fetch.js";
 import { run } from "./cli.js";
 
@@ -56,7 +56,7 @@ beforeEach(async () => {
   malformedResolve = false;
   artifacts = [];
   archives = new Map();
-  work = await mkdtemp(join(tmpdir(), "protoloom-cli-"));
+  work = await mkdtemp(join(tmpdir(), "weaver-cli-"));
   server = createServer((req, res) => {
     void (async () => {
       const [rawPath = "", query = ""] = (req.url ?? "").split("?");
@@ -100,7 +100,7 @@ beforeEach(async () => {
         const a = artifacts.find((x) => archivePath(x) === path) as StubArtifact;
         res.writeHead(200, {
           "content-type": "application/gzip",
-          "x-protoloom-sha256": a.headerSha ?? sha256(archive),
+          "x-weaver-sha256": a.headerSha ?? sha256(archive),
         });
         res.end(archive);
         return;
@@ -190,7 +190,7 @@ describe("fetchProtos", () => {
     expect(requests.filter((r) => r.path.endsWith("/archive"))).toHaveLength(2);
   });
 
-  it("fails naming the coordinate when the archive sha differs from x-protoloom-sha256", async () => {
+  it("fails naming the coordinate when the archive sha differs from x-weaver-sha256", async () => {
     artifacts.push({ group: "com.acme", name: "a", version: "1.0.0", files: [proto("a.proto")], headerSha: "0".repeat(64) });
     await expect(fetchProtos(options())).rejects.toThrow(/Checksum mismatch for com\.acme:a:1\.0\.0/);
   });
@@ -326,13 +326,13 @@ describe("fetchProtos", () => {
 
     it("writes the marker file", async () => {
       await fetchProtos(options());
-      expect(await readFile(join(work, "out", OUTPUT_MARKER), "utf8")).toContain("protoloom");
+      expect(await readFile(join(work, "out", OUTPUT_MARKER), "utf8")).toContain("weaver");
     });
 
     it("refuses a non-empty directory without the marker and leaves it untouched", async () => {
       await mkdir(join(work, "out"), { recursive: true });
       await writeFile(join(work, "out", "precious.txt"), "keep");
-      await expect(fetchProtos(options())).rejects.toThrow(/wasn't created by protoloom; remove it or choose another outDir/);
+      await expect(fetchProtos(options())).rejects.toThrow(/wasn't created by weaver; remove it or choose another outDir/);
       expect(await readFile(join(work, "out", "precious.txt"), "utf8")).toBe("keep");
     });
 
@@ -360,7 +360,7 @@ describe("fetchProtos", () => {
     it("refuses an outDir containing the config file", async () => {
       await mkdir(join(work, "cfg"), { recursive: true });
       await expect(
-        fetchProtos(outOf(join(work, "proj"), join(work, "cfg"), { configPath: join(work, "cfg", "protoloom.json") })),
+        fetchProtos(outOf(join(work, "proj"), join(work, "cfg"), { configPath: join(work, "cfg", "weaver.json") })),
       ).rejects.toThrow(/config file/);
     });
 
@@ -401,13 +401,13 @@ describe("run", () => {
 
   it("prints the server error message and returns exit code 1 on 401", async () => {
     await writeFile(
-      join(work, "protoloom.json"),
+      join(work, "weaver.json"),
       JSON.stringify({ url: baseUrl, repositories: ["main"], dependencies: ["com.acme:a:1.0.0"] }),
     );
     const { io, err } = capture();
     const code = await run(
-      ["fetch", "--config", join(work, "protoloom.json"), "--out", join(work, "out")],
-      { PROTOLOOM_TOKEN: "bad" },
+      ["fetch", "--config", join(work, "weaver.json"), "--out", join(work, "out")],
+      { WEAVER_TOKEN: "bad" },
       io,
       work,
     );
@@ -416,16 +416,16 @@ describe("run", () => {
     expect(err.join("")).not.toMatch(/\n\s+at /);
   });
 
-  it("lets PROTOLOOM_URL override the config url and fetches successfully", async () => {
+  it("lets WEAVER_URL override the config url and fetches successfully", async () => {
     artifacts.push({ group: "com.acme", name: "a", version: "1.0.0", files: [proto("a.proto")] });
     await writeFile(
-      join(work, "protoloom.json"),
+      join(work, "weaver.json"),
       JSON.stringify({ url: "http://127.0.0.1:1", repositories: ["main"], dependencies: ["com.acme:a:1.0.0"] }),
     );
     const { io } = capture();
     const code = await run(
-      ["fetch", "--config", join(work, "protoloom.json"), "--out", join(work, "out")],
-      { PROTOLOOM_URL: baseUrl },
+      ["fetch", "--config", join(work, "weaver.json"), "--out", join(work, "out")],
+      { WEAVER_URL: baseUrl },
       io,
       work,
     );
@@ -433,12 +433,12 @@ describe("run", () => {
     expect(await tree(join(work, "out"))).toEqual(["a.proto"]);
   });
 
-  it("fails when neither the config nor PROTOLOOM_URL provides a url", async () => {
-    await writeFile(join(work, "protoloom.json"), JSON.stringify({ repositories: [], dependencies: [] }));
+  it("fails when neither the config nor WEAVER_URL provides a url", async () => {
+    await writeFile(join(work, "weaver.json"), JSON.stringify({ repositories: [], dependencies: [] }));
     const { io, err } = capture();
-    const code = await run(["fetch", "--config", join(work, "protoloom.json")], {}, io, work);
+    const code = await run(["fetch", "--config", join(work, "weaver.json")], {}, io, work);
     expect(code).toBe(1);
-    expect(err.join("")).toMatch(/PROTOLOOM_URL/);
+    expect(err.join("")).toMatch(/WEAVER_URL/);
   });
 
   it("lists fetch in --help", async () => {

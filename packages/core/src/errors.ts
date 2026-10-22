@@ -20,7 +20,7 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
 };
 
 /** Process-wide brand of {@link RegistryError} instances, shared by every copy of this module. */
-const BRAND = Symbol.for("protoloom.RegistryError");
+const BRAND = Symbol.for("weaver.RegistryError");
 
 /**
  * Domain error carrying a stable machine-readable code and its HTTP status.

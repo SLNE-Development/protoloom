@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { setting, type Db } from "@protoloom/db";
-import { startTestDb } from "@protoloom/db/testing";
+import { setting, type Db } from "@weaver/db";
+import { startTestDb } from "@weaver/db/testing";
 import type { ServerContext } from "@/server/context";
 import { insertRepository, insertVersion } from "@/test/catalog";
 import sitemap from "./sitemap";

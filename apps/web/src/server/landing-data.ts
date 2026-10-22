@@ -1,4 +1,4 @@
-import { getSettings } from "@protoloom/core";
+import { getSettings } from "@weaver/core";
 import { getPublicStats, type PublicStats } from "@/lib/public-catalog";
 import { getServerContext } from "@/server/context";
 

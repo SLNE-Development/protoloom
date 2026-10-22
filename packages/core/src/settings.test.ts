@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
-import { auditEvent } from "@protoloom/db";
-import { startTestDb } from "@protoloom/db/testing";
+import { auditEvent } from "@weaver/db";
+import { startTestDb } from "@weaver/db/testing";
 import type { Principal } from "./permissions.js";
 import { getSettings, updateSettings } from "./settings.js";
 

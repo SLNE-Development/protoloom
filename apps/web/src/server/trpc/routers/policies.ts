@@ -1,9 +1,9 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { isValidGroup, planCleanup, recordAudit } from "@protoloom/core";
-import { cleanupPolicy } from "@protoloom/db";
-import { enqueueCleanup, getJobState, type CleanupJobStatus } from "@protoloom/jobs";
+import { isValidGroup, planCleanup, recordAudit } from "@weaver/core";
+import { cleanupPolicy } from "@weaver/db";
+import { enqueueCleanup, getJobState, type CleanupJobStatus } from "@weaver/jobs";
 import { adminProcedure, router, type TrpcContext } from "../init";
 import { audited, coordinateText, notFound, repositoryName, requireRepository } from "../helpers";
 

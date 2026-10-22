@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { formatCoordinate, isValidGroup, isValidName, parseCoordinate } from "@protoloom/core";
+import { formatCoordinate, isValidGroup, isValidName, parseCoordinate } from "@weaver/core";
 import { getServerContext } from "@/server/context";
 import { archiveUrl, handle, invalidRequest, json, readJson } from "@/server/http";
 import { getPrincipal } from "@/server/principal";

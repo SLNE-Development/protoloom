@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { artifact, version, type Db } from "@protoloom/db";
-import { startTestDb } from "@protoloom/db/testing";
+import { artifact, version, type Db } from "@weaver/db";
+import { startTestDb } from "@weaver/db/testing";
 import { getPublicStats, listDocsPaths, listPublicBrowsePages } from "./public-catalog";
 import { insertRepository, insertVersion } from "@/test/catalog";
 
@@ -11,10 +11,10 @@ describe("listDocsPaths", () => {
   let dir: string;
 
   beforeAll(async () => {
-    dir = await mkdtemp(join(tmpdir(), "protoloom-docs-"));
+    dir = await mkdtemp(join(tmpdir(), "weaver-docs-"));
     await mkdir(join(dir, "admin"), { recursive: true });
     await mkdir(join(dir, "self-host"), { recursive: true });
-    await writeFile(join(dir, "index.md"), "---\ntitle: What is Protoloom\n---\n");
+    await writeFile(join(dir, "index.md"), "---\ntitle: What is Weaver\n---\n");
     await writeFile(join(dir, "gradle.md"), "# Gradle\n");
     await writeFile(join(dir, "admin", "keys.md"), "# Keys\n");
     await writeFile(join(dir, "admin", "index.md"), "# Admin\n");

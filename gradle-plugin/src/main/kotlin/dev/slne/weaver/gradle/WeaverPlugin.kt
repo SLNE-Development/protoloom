@@ -1,4 +1,4 @@
-package dev.protoloom.gradle
+package dev.slne.weaver.gradle
 
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
@@ -9,44 +9,44 @@ import org.gradle.api.tasks.bundling.Tar
 import java.io.File
 
 /**
- * Adds the `protoloom` extension, the declarable `protoloom` configuration for proto dependencies
+ * Adds the `weaver` extension, the declarable `weaver` configuration for proto dependencies
  * (remote `group:name:version` coordinates and `project(":x")` modules of the same build), and the
  * `fetchProtos` and `publishProtos` tasks.
  */
-class ProtoloomPlugin : Plugin<Project> {
+class WeaverPlugin : Plugin<Project> {
     override fun apply(project: Project) {
-        val extension = project.extensions.create(EXTENSION, ProtoloomExtension::class.java)
-        extension.url.convention(project.providers.environmentVariable("PROTOLOOM_URL"))
-        extension.token.convention(project.providers.environmentVariable("PROTOLOOM_TOKEN"))
+        val extension = project.extensions.create(EXTENSION, WeaverExtension::class.java)
+        extension.url.convention(project.providers.environmentVariable("WEAVER_URL"))
+        extension.token.convention(project.providers.environmentVariable("WEAVER_TOKEN"))
         extension.publishing.version.convention(
             project.provider { project.version.toString() }.filter { it != Project.DEFAULT_VERSION },
         )
         extension.publishing.source.convention(project.layout.projectDirectory.dir("src/main/proto"))
 
-        val protoloom = project.configurations.dependencyScope(CONFIGURATION) {
+        val weaver = project.configurations.dependencyScope(CONFIGURATION) {
             description = "Proto bundles (group:name:version) and local modules to fetch and to declare as dependencies when publishing."
         }
-        val externalCoordinates = protoloom.map { configuration ->
+        val externalCoordinates = weaver.map { configuration ->
             configuration.dependencies.withType(ExternalModuleDependency::class.java).map { dependency ->
                 externalCoordinate(dependency.group, dependency.name, dependency.version)
             }
         }
 
         val publishing = extension.publishing
-        val localManifest = project.tasks.register("protoloomManifest", LocalManifestTask::class.java) {
-            description = "Writes the coordinate and external protoloom dependencies that dependent local modules read."
+        val localManifest = project.tasks.register("weaverManifest", LocalManifestTask::class.java) {
+            description = "Writes the coordinate and external weaver dependencies that dependent local modules read."
             coordinate.set(
                 publishing.group.zip(publishing.name) { group, name -> "$group:$name" }
                     .zip(publishing.version) { groupAndName, version -> "$groupAndName:$version" },
             )
             external.set(externalCoordinates)
-            manifestFile.set(project.layout.buildDirectory.file("protoloom/module.json"))
+            manifestFile.set(project.layout.buildDirectory.file("weaver/module.json"))
         }
-        val localModules = LocalModules(project, protoloom, extension, localManifest.flatMap { it.manifestFile })
+        val localModules = LocalModules(project, weaver, extension, localManifest.flatMap { it.manifestFile })
 
         val fetchProtos = project.tasks.register("fetchProtos", FetchProtosTask::class.java) {
             group = TASK_GROUP
-            description = "Resolves the protoloom dependencies and extracts them into build/protoloom/protos."
+            description = "Resolves the weaver dependencies and extracts them into build/weaver/protos."
             url.set(extension.url)
             token.set(extension.token)
             repositories.set(extension.repositories)
@@ -55,26 +55,26 @@ class ProtoloomPlugin : Plugin<Project> {
             localSourceProjects.set(localModules.sourceProjects)
             localManifests.from(localModules.manifests)
             localManifestProjects.set(localModules.manifestProjects)
-            cacheDir.set(File(project.gradle.gradleUserHomeDir, "caches/protoloom"))
-            outputDir.set(project.layout.buildDirectory.dir("protoloom/protos"))
+            cacheDir.set(File(project.gradle.gradleUserHomeDir, "caches/weaver"))
+            outputDir.set(project.layout.buildDirectory.dir("weaver/protos"))
         }
         extension.protosDirFrom(fetchProtos.flatMap { it.outputDir })
 
         val packProtos = project.tasks.register("packProtos", Tar::class.java) {
             group = TASK_GROUP
-            description = "Packs the .proto files of protoloom.publishing.source into a reproducible tar.gz."
+            description = "Packs the .proto files of weaver.publishing.source into a reproducible tar.gz."
             from(publishing.source) { include(PROTO_PATTERN) }
             includeEmptyDirs = false
             compression = Compression.GZIP
             isPreserveFileTimestamps = false
             isReproducibleFileOrder = true
-            destinationDirectory.set(project.layout.buildDirectory.dir("protoloom/publish"))
+            destinationDirectory.set(project.layout.buildDirectory.dir("weaver/publish"))
             archiveFileName.set("protos.tar.gz")
         }
 
         project.tasks.register("publishProtos", PublishProtosTask::class.java) {
             group = TASK_GROUP
-            description = "Publishes the .proto files to the Protoloom registry."
+            description = "Publishes the .proto files to the Weaver registry."
             url.set(extension.url)
             token.set(extension.token)
             repository.set(publishing.repository)
@@ -92,18 +92,18 @@ class ProtoloomPlugin : Plugin<Project> {
     }
 
     companion object {
-        const val EXTENSION = "protoloom"
-        const val CONFIGURATION = "protoloom"
-        const val TASK_GROUP = "protoloom"
+        const val EXTENSION = "weaver"
+        const val CONFIGURATION = "weaver"
+        const val TASK_GROUP = "weaver"
         internal const val PROTO_PATTERN = "**/*.proto"
     }
 }
 
-/** The `group:name:version` of an external `protoloom` dependency; group and version are required. */
+/** The `group:name:version` of an external `weaver` dependency; group and version are required. */
 internal fun externalCoordinate(group: String?, name: String, version: String?): String {
     val checkedVersion = version?.takeIf { it.isNotBlank() }
-        ?: throw GradleException("protoloom dependency $group:$name needs a version.")
+        ?: throw GradleException("weaver dependency $group:$name needs a version.")
     val checkedGroup = group?.takeIf { it.isNotBlank() }
-        ?: throw GradleException("protoloom dependency $name:$checkedVersion needs a group (group:name:version).")
+        ?: throw GradleException("weaver dependency $name:$checkedVersion needs a group (group:name:version).")
     return "$checkedGroup:$name:$checkedVersion"
 }

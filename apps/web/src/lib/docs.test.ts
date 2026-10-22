@@ -78,8 +78,8 @@ describe("slug mapping", () => {
 
 describe("fillUrl", () => {
   it("replaces every {{url}} with the instance URL without a trailing slash", () => {
-    expect(fillUrl("export PROTOLOOM_URL={{url}}\nopen {{url}}/docs", "https://protos.test/")).toBe(
-      "export PROTOLOOM_URL=https://protos.test\nopen https://protos.test/docs",
+    expect(fillUrl("export WEAVER_URL={{url}}\nopen {{url}}/docs", "https://protos.test/")).toBe(
+      "export WEAVER_URL=https://protos.test\nopen https://protos.test/docs",
     );
   });
 
@@ -96,7 +96,7 @@ describe("with a fixture docs directory", () => {
   let dir: string;
 
   beforeAll(async () => {
-    dir = await mkdtemp(join(tmpdir(), "protoloom-docs-"));
+    dir = await mkdtemp(join(tmpdir(), "weaver-docs-"));
     await mkdir(join(dir, "admin"));
     const page = (title: string, section: string, order: number, body = "") =>
       `---\ntitle: ${title}\ndescription: About ${title}.\nsection: ${section}\norder: ${order}\n---\n\n${body}`;
@@ -173,7 +173,7 @@ describe("rendering", () => {
   let dir: string;
 
   beforeAll(async () => {
-    dir = await mkdtemp(join(tmpdir(), "protoloom-render-"));
+    dir = await mkdtemp(join(tmpdir(), "weaver-render-"));
     await writeFile(
       join(dir, "index.md"),
       [
@@ -187,7 +187,7 @@ describe("rendering", () => {
         "Open {{url}}/login.",
         "",
         '```kotlin title="build.gradle.kts"',
-        'protoloom { url = "{{url}}" }',
+        'weaver { url = "{{url}}" }',
         "```",
         "",
         "> [!WARNING]",
@@ -228,7 +228,7 @@ describe("rendering", () => {
     expect(doc?.html.replace(/<[^>]+>/g, "")).toContain("Open https://protos.test/login.");
     expect(doc?.html).not.toContain("{{url}}");
     // Highlighted code splits text into spans; strip tags to check the code content.
-    expect(doc?.html.replace(/<[^>]+>/g, "")).toContain('protoloom { url = "https://protos.test" }');
+    expect(doc?.html.replace(/<[^>]+>/g, "")).toContain('weaver { url = "https://protos.test" }');
   });
 
   it("highlights code with light and dark colours, a title and a copy button", async () => {
@@ -311,7 +311,7 @@ describe("the real docs", () => {
     const { readFile } = await import("node:fs/promises");
     for (const doc of docs) {
       const text = await readFile(doc.file, "utf8");
-      expect(text, doc.file).not.toMatch(/protoloom\.slne\.dev|protos\.example\.com/);
+      expect(text, doc.file).not.toMatch(/weaver\.slne\.dev|protos\.example\.com/);
     }
   });
 

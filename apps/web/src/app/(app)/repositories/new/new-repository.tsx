@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Button } from "@protoloom/ui/components/button";
+import { Button } from "@weaver/ui/components/button";
 import { PageBody, PageHeader } from "@/components/manage/page-header";
 import { NEW_REPOSITORY_DEFAULTS, toRepositoryInput } from "@/lib/repository-settings";
 import { errorMessage } from "@/lib/trpc-error";

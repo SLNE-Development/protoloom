@@ -1,4 +1,4 @@
-package dev.protoloom.gradle
+package dev.slne.weaver.gradle
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
@@ -30,7 +30,7 @@ internal class CapturedRequest(
 )
 
 /**
- * A minimal stand-in for the Protoloom REST API that records what the plugin sends. `/resolve`
+ * A minimal stand-in for the Weaver REST API that records what the plugin sends. `/resolve`
  * answers with [coordinate], whose archive holds [files], and [extraArtifacts], minus the
  * `group:name` keys in the request's `exclude` and whatever is reachable only through them via
  * [artifactDependencies] (unless [ignoreExclude] is set, to mimic an older server).
@@ -102,7 +102,7 @@ internal class RegistryStub : AutoCloseable {
                     }
                     val archive = tarGz(files)
                     val bytes = if (corruptArchive) tarGz(files.mapValues { "tampered" }) else archive
-                    exchange.responseHeaders.add("x-protoloom-sha256", sha256(archive))
+                    exchange.responseHeaders.add("x-weaver-sha256", sha256(archive))
                     exchange.respond(200, "application/gzip", bytes)
                 }
                 "PUT" -> {

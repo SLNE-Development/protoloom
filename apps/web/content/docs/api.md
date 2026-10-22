@@ -48,7 +48,7 @@ Publishing needs an API key with `write` access. Signed-in browser sessions can'
 
 ```sh
 curl -X PUT "{{url}}/api/v1/repos/releases/artifacts/dev.surf.economy/economy-contracts/1.4.0" \
-  -H "Authorization: Bearer $PROTOLOOM_TOKEN" \
+  -H "Authorization: Bearer $WEAVER_TOKEN" \
   -F 'manifest={"group":"dev.surf.economy","name":"economy-contracts","version":"1.4.0","dependencies":["dev.surf.common:common-types:2.0.0"]};type=application/json' \
   -F "archive=@protos.tar.gz;type=application/gzip"
 ```
@@ -186,7 +186,7 @@ Describes the newest build; for a snapshot that is the latest publish.
 GET /api/v1/repos/{repo}/artifacts/{group}/{name}/{version}/archive
 ```
 
-Returns the `.tar.gz` of the newest build as `application/gzip`, or of a specific build with `?build=<n>` (`404 not_found` once that build was deleted, for example by a cleanup policy), with its checksum in the `x-protoloom-sha256` header. Each request counts as a download, which [cleanup policies](/docs/admin/cleanup) use to find unused versions.
+Returns the `.tar.gz` of the newest build as `application/gzip`, or of a specific build with `?build=<n>` (`404 not_found` once that build was deleted, for example by a cleanup policy), with its checksum in the `x-weaver-sha256` header. Each request counts as a download, which [cleanup policies](/docs/admin/cleanup) use to find unused versions.
 
 ```sh
 curl -fLo economy-contracts-1.4.0.tar.gz \

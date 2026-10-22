@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
-import { RegistryError, type KeyPermission, type Principal, type Role } from "@protoloom/core";
-import { apiKeyPermission, user, type Db } from "@protoloom/db";
+import { RegistryError, type KeyPermission, type Principal, type Role } from "@weaver/core";
+import { apiKeyPermission, user, type Db } from "@weaver/db";
 import type { Auth } from "./auth";
 import { getServerContext } from "./context";
 import { effectiveRole } from "./roles";

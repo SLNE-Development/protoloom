@@ -5,15 +5,15 @@ section: Self-hosting
 order: 1
 ---
 
-Protoloom ships as one Docker image, `ghcr.io/slne-development/protoloom`. The same image runs the web app (`web`) and the background worker (`worker`). The repository's `docker-compose.prod.yml` wires them up with PostgreSQL and Valkey.
+Weaver ships as one Docker image, `ghcr.io/slne-development/weaver`. The same image runs the web app (`web`) and the background worker (`worker`). The repository's `docker-compose.prod.yml` wires them up with PostgreSQL and Valkey.
 
 You need Docker with Compose, a domain with HTTPS in front of the server, and a GitHub or Discord OAuth app.
 
 ## 1. Get the compose file
 
 ```sh
-git clone https://github.com/SLNE-Development/protoloom.git
-cd protoloom
+git clone https://github.com/SLNE-Development/weaver.git
+cd weaver
 cp .env.example .env
 ```
 
@@ -69,10 +69,10 @@ This builds the image from the checked-out source. To run the published image in
 ```yaml title="compose.override.yml"
 services:
   app:
-    image: ghcr.io/slne-development/protoloom:latest
+    image: ghcr.io/slne-development/weaver:latest
     pull_policy: always
   worker:
-    image: ghcr.io/slne-development/protoloom:latest
+    image: ghcr.io/slne-development/weaver:latest
     pull_policy: always
 ```
 
@@ -109,19 +109,19 @@ The default is the `storage-data` volume (`STORAGE_DRIVER=local`). To use any S3
 ```dotenv title=".env"
 STORAGE_DRIVER=s3
 S3_ENDPOINT=https://s3.example.net   # leave empty for AWS
-S3_BUCKET=protoloom
+S3_BUCKET=weaver
 S3_REGION=us-east-1
 S3_ACCESS_KEY_ID=<access key>
 S3_SECRET_ACCESS_KEY=<secret key>
 ```
 
-With `S3_ENDPOINT` set, path-style addressing is used, which works with MinIO, SeaweedFS, Garage and most other providers. Create the bucket before you start. To run SeaweedFS next to Protoloom, copy the `seaweedfs` and `seaweedfs-init` services from `docker-compose.coolify.yml`.
+With `S3_ENDPOINT` set, path-style addressing is used, which works with MinIO, SeaweedFS, Garage and most other providers. Create the bucket before you start. To run SeaweedFS next to Weaver, copy the `seaweedfs` and `seaweedfs-init` services from `docker-compose.coolify.yml`.
 
 ## Back up
 
 Back up two things:
 
-- **The database.** `docker compose -f docker-compose.prod.yml exec -T postgres pg_dump -U protoloom protoloom > protoloom.sql`
+- **The database.** `docker compose -f docker-compose.prod.yml exec -T postgres pg_dump -U weaver weaver > weaver.sql`
 - **The archives.** The `storage-data` volume, or your S3 bucket.
 
 The database holds users, keys, versions and the file contents shown in the browser; the archives are what clients download. Restore both from the same point in time.
@@ -140,4 +140,4 @@ The `app` container applies pending database migrations before it starts serving
 docker compose -f docker-compose.prod.yml logs -f app worker
 ```
 
-The image runs as the unprivileged `node` user. The worker logs `protoloom-worker: processing cleanup jobs` when it is ready.
+The image runs as the unprivileged `node` user. The worker logs `weaver-worker: processing cleanup jobs` when it is ready.

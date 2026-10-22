@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 
 export function generateMetadata(): Metadata {
   return pageMetadata({
-    title: "Protoloom · Versioned .proto contracts for every build",
+    title: "Weaver · Versioned .proto contracts for every build",
     absoluteTitle: true,
     description: SITE_DESCRIPTION,
     path: "/",

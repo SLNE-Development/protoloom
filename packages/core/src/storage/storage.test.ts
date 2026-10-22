@@ -60,13 +60,13 @@ function sharedSuite(name: string, make: () => Promise<{ store: BlobStore; clean
 }
 
 sharedSuite("local store", async () => {
-  const root = await mkdtemp(join(tmpdir(), "protoloom-blob-"));
+  const root = await mkdtemp(join(tmpdir(), "weaver-blob-"));
   return { store: createLocalStore(root), cleanup: () => rm(root, { recursive: true, force: true }) };
 });
 
 describe("local store specifics", () => {
   it("rejects keys containing '..'", async () => {
-    const root = await mkdtemp(join(tmpdir(), "protoloom-blob-"));
+    const root = await mkdtemp(join(tmpdir(), "weaver-blob-"));
     try {
       const store = createLocalStore(root);
       await expect(store.put("../x", Buffer.from("a"))).rejects.toThrow(/\.\./);
@@ -80,7 +80,7 @@ describe("local store specifics", () => {
   });
 
   it("accepts '..' inside a path segment, as in the artifact name foo..bar", async () => {
-    const root = await mkdtemp(join(tmpdir(), "protoloom-blob-"));
+    const root = await mkdtemp(join(tmpdir(), "weaver-blob-"));
     try {
       const store = createLocalStore(root);
       const key = "releases/acme/foo..bar/1.0.0-rc..1/archive.tar.gz";
@@ -94,7 +94,7 @@ describe("local store specifics", () => {
   });
 
   it("rejects absolute and empty keys", async () => {
-    const root = await mkdtemp(join(tmpdir(), "protoloom-blob-"));
+    const root = await mkdtemp(join(tmpdir(), "weaver-blob-"));
     try {
       const store = createLocalStore(root);
       await expect(store.put("/abs", Buffer.from("a"))).rejects.toThrow();
@@ -105,7 +105,7 @@ describe("local store specifics", () => {
   });
 
   it("leaves no temp files behind after put", async () => {
-    const root = await mkdtemp(join(tmpdir(), "protoloom-blob-"));
+    const root = await mkdtemp(join(tmpdir(), "weaver-blob-"));
     try {
       const store = createLocalStore(root);
       await store.put("a/b/c.tar.gz", Buffer.from("a"));
@@ -120,7 +120,7 @@ const s3Endpoint = process.env.S3_TEST_ENDPOINT;
 describe.skipIf(!s3Endpoint)("s3 store", () => {
   const s3Opts = {
     endpoint: s3Endpoint,
-    bucket: process.env.S3_TEST_BUCKET ?? "protoloom",
+    bucket: process.env.S3_TEST_BUCKET ?? "weaver",
     region: "us-east-1",
     accessKeyId: process.env.S3_TEST_ACCESS_KEY_ID ?? "minioadmin",
     secretAccessKey: process.env.S3_TEST_SECRET_ACCESS_KEY ?? "minioadmin",
@@ -131,14 +131,14 @@ describe.skipIf(!s3Endpoint)("s3 store", () => {
   }));
 
   it("throws (rather than returning null) when the bucket does not exist", async () => {
-    const store = createS3Store({ ...s3Opts, bucket: "protoloom-no-such-bucket" });
+    const store = createS3Store({ ...s3Opts, bucket: "weaver-no-such-bucket" });
     await expect(store.get("a/b/c.tar.gz")).rejects.toThrow();
   });
 });
 
 describe("createBlobStoreFromEnv", () => {
   it("creates a local store", async () => {
-    const root = await mkdtemp(join(tmpdir(), "protoloom-blob-"));
+    const root = await mkdtemp(join(tmpdir(), "weaver-blob-"));
     try {
       const store = createBlobStoreFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: root });
       await store.put("k/v", Buffer.from("z"));

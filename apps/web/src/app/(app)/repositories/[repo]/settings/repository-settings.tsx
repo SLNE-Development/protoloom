@@ -15,13 +15,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@protoloom/ui/components/alert-dialog";
-import { Alert, AlertDescription, AlertTitle } from "@protoloom/ui/components/alert";
-import { Button } from "@protoloom/ui/components/button";
-import { Input } from "@protoloom/ui/components/input";
-import { Label } from "@protoloom/ui/components/label";
-import { Skeleton } from "@protoloom/ui/components/skeleton";
-import { Spinner } from "@protoloom/ui/components/spinner";
+} from "@weaver/ui/components/alert-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@weaver/ui/components/alert";
+import { Button } from "@weaver/ui/components/button";
+import { Input } from "@weaver/ui/components/input";
+import { Label } from "@weaver/ui/components/label";
+import { Skeleton } from "@weaver/ui/components/skeleton";
+import { Spinner } from "@weaver/ui/components/spinner";
 import { PageBody, PageHeader } from "@/components/manage/page-header";
 import { VisibilityBadge } from "@/components/manage/visibility-badge";
 import { toRepositoryInput, type RepositorySettingsValues } from "@/lib/repository-settings";

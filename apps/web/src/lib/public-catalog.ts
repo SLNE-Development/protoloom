@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { and, asc, countDistinct, eq, exists, sql } from "drizzle-orm";
-import { artifact, build, repository, version, type Db } from "@protoloom/db";
+import { artifact, build, repository, version, type Db } from "@weaver/db";
 
 /**
  * Where the docs Markdown lives (`content/docs/**\/*.md`, path = URL), relative to the app root.

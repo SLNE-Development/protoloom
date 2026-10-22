@@ -14,7 +14,7 @@ describe("createDb", () => {
     expect(db.$client.listenerCount("error")).toBeGreaterThan(0);
     // Without a listener, EventEmitter#emit("error") throws, which crashes the process.
     expect(() => db.$client.emit("error", failure)).not.toThrow();
-    expect(consoleError).toHaveBeenCalledWith("protoloom: idle postgres client error", failure);
+    expect(consoleError).toHaveBeenCalledWith("weaver: idle postgres client error", failure);
     await db.$client.end();
   });
 });

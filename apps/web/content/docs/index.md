@@ -1,11 +1,11 @@
 ---
-title: What is Protoloom
-description: Protoloom stores versioned bundles of .proto files, resolves their dependencies and serves them to Gradle and Node builds.
+title: What is Weaver
+description: Weaver stores versioned bundles of .proto files, resolves their dependencies and serves them to Gradle and Node builds.
 section: Getting started
 order: 1
 ---
 
-Protoloom is a registry for `.proto` files. A team publishes its protos from Gradle as a versioned artifact. Other projects declare that artifact as a dependency and fetch it, together with everything it imports, into one folder. Code generation happens in your own build, not in Protoloom.
+Weaver is a registry for `.proto` files. A team publishes its protos from Gradle as a versioned artifact. Other projects declare that artifact as a dependency and fetch it, together with everything it imports, into one folder. Code generation happens in your own build, not in Weaver.
 
 This instance runs at `{{url}}`.
 
@@ -50,13 +50,13 @@ See [Versions and snapshots](/docs/versions).
 
 ## How it fits together
 
-1. **Publish.** The Gradle plugin packs `src/main/proto` and uploads it with its dependencies. Protoloom compiles the files together with those dependencies and rejects the upload if anything is wrong. See [Validation on publish](/docs/validation).
+1. **Publish.** The Gradle plugin packs `src/main/proto` and uploads it with its dependencies. Weaver compiles the files together with those dependencies and rejects the upload if anything is wrong. See [Validation on publish](/docs/validation).
 2. **Resolve.** A client sends the coordinates it needs and an ordered list of repositories. The server works out the full dependency tree, picks one version of each artifact and returns download links. See [Dependencies and resolution](/docs/resolution).
-3. **Fetch.** The Gradle plugin or the `protoloom` CLI downloads each archive, checks its checksum and writes all files into one folder that keeps the import paths intact. Your code generator reads that folder.
+3. **Fetch.** The Gradle plugin or the `weaver` CLI downloads each archive, checks its checksum and writes all files into one folder that keeps the import paths intact. Your code generator reads that folder.
 
 ## Who can do what
 
-Protoloom has three roles for people: `admin`, `maintainer` and `viewer`. Signed-in users can browse every repository in the web app. Builds use **API keys**, which carry read or write access per repository and, optionally, per group prefix. See [Users, roles and invites](/docs/admin/users) and [API keys and permissions](/docs/admin/keys).
+Weaver has three roles for people: `admin`, `maintainer` and `viewer`. Signed-in users can browse every repository in the web app. Builds use **API keys**, which carry read or write access per repository and, optionally, per group prefix. See [Users, roles and invites](/docs/admin/users) and [API keys and permissions](/docs/admin/keys).
 
 ## Where to go next
 

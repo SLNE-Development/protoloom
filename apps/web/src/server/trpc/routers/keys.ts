@@ -1,12 +1,12 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { maxKeyAccess, recordAudit, type KeyPermission } from "@protoloom/core";
-import { apikey, apiKeyPermission, repository, user } from "@protoloom/db";
+import { maxKeyAccess, recordAudit, type KeyPermission } from "@weaver/core";
+import { apikey, apiKeyPermission, repository, user } from "@weaver/db";
 import { authedProcedure, router } from "../init";
 import { groupPrefix, notFound, repositoryName } from "../helpers";
 
-/** Prefix of every API key secret Protoloom issues, so leaked keys are recognisable. */
+/** Prefix of every API key secret Weaver issues, so leaked keys are recognisable. */
 export const API_KEY_PREFIX = "pl_";
 
 /** An API key as listed: never the secret, only its first characters (`start`). */

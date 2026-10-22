@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { asc, count, countDistinct, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { apiKeyPermission, artifact, cleanupPolicy, repository, version, type Db } from "@protoloom/db";
+import { apiKeyPermission, artifact, cleanupPolicy, repository, version, type Db } from "@weaver/db";
 import { adminProcedure, router } from "../init";
 import { audited, repositoryName, requireRepository, type RepositoryRow } from "../helpers";
 

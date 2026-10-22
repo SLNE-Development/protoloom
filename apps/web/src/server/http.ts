@@ -5,7 +5,7 @@ import {
   isValidVersion,
   RegistryError,
   type Coordinate,
-} from "@protoloom/core";
+} from "@weaver/core";
 import { env } from "@/env";
 
 /** Body of every REST error response. */
@@ -35,7 +35,7 @@ export function handle<A extends unknown[]>(fn: (...args: A) => Promise<Response
       return await fn(...args);
     } catch (error) {
       if (error instanceof RegistryError) return errorResponse(error);
-      console.error("protoloom: unhandled error in API route", error);
+      console.error("weaver: unhandled error in API route", error);
       const body: ErrorBody = { error: { code: "internal_error", message: "Internal server error" } };
       return json(body, 500);
     }

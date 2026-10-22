@@ -12,7 +12,7 @@ export function Footer({ host }: { host: string }) {
   return (
     <footer>
       <Container className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-[18px] font-mono text-xs text-muted-foreground">
-        <span>Protoloom · {host}</span>
+        <span>Weaver · {host}</span>
         <nav aria-label="Footer" className="flex gap-[18px]">
           {LINKS.map((link) => (
             <Link

@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { setting, type Db } from "@protoloom/db";
+import { setting, type Db } from "@weaver/db";
 import { recordAudit } from "./audit.js";
 import { RegistryError } from "./errors.js";
 import { isAdmin, type Principal } from "./permissions.js";

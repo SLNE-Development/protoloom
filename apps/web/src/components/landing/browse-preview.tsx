@@ -1,5 +1,5 @@
-import { Logo } from "@protoloom/ui/components/logo";
-import { cn } from "@protoloom/ui/lib/utils";
+import { Logo } from "@weaver/ui/components/logo";
+import { cn } from "@weaver/ui/lib/utils";
 import { CodeHtml } from "./code-block";
 import { highlight } from "./highlight";
 import { KindPill, Section, SectionHead } from "./layout";

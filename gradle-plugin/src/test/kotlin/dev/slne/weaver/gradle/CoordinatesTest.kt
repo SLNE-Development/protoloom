@@ -1,4 +1,4 @@
-package dev.protoloom.gradle
+package dev.slne.weaver.gradle
 
 import org.gradle.api.GradleException
 import org.junit.jupiter.api.Test
@@ -14,14 +14,14 @@ class CoordinatesTest {
     @Test
     fun `an external dependency without a group fails clearly`() {
         val missing = assertThrows<GradleException> { externalCoordinate(null, "a", "1") }
-        assertEquals("protoloom dependency a:1 needs a group (group:name:version).", missing.message)
+        assertEquals("weaver dependency a:1 needs a group (group:name:version).", missing.message)
         assertThrows<GradleException> { externalCoordinate(" ", "a", "1") }
     }
 
     @Test
     fun `an external dependency without a version fails clearly`() {
         val missing = assertThrows<GradleException> { externalCoordinate("dev.example", "a", null) }
-        assertEquals("protoloom dependency dev.example:a needs a version.", missing.message)
+        assertEquals("weaver dependency dev.example:a needs a version.", missing.message)
     }
 
     @Test
@@ -75,7 +75,7 @@ class CoordinatesTest {
         val duplicate = assertThrows<GradleException> { resolvePlan(emptyList(), modules) }
 
         assertEquals(
-            "Projects :a and :b both publish dev.example:contracts; give each local module its own protoloom.publishing group and name.",
+            "Projects :a and :b both publish dev.example:contracts; give each local module its own weaver.publishing group and name.",
             duplicate.message,
         )
     }

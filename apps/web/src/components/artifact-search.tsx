@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { PackageIcon } from "lucide-react";
-import { CommandGroup, CommandItem } from "@protoloom/ui/components/command";
+import { CommandGroup, CommandItem } from "@weaver/ui/components/command";
 import { artifactHref } from "@/lib/browse";
 import { useTRPC } from "@/trpc/client";
 import type { ArtifactSearchProps } from "./command-menu";

@@ -1,23 +1,23 @@
 # Production-style stack: web + worker (one image), postgres, valkey.
 #
 #   cp .env.example .env   # fill in the required values
-#   docker compose -f docker-compose.prod.yml pull     # released image ghcr.io/slne-development/protoloom:latest
+#   docker compose -f docker-compose.prod.yml pull     # released image ghcr.io/slne-development/weaver:latest
 #   docker compose -f docker-compose.prod.yml up -d    # or `up -d --build` to build it from this checkout
 #
-# PROTOLOOM_IMAGE overrides the image (e.g. ghcr.io/slne-development/protoloom:0.1.0 to pin a release).
+# WEAVER_IMAGE overrides the image (e.g. ghcr.io/slne-development/weaver:0.1.0 to pin a release).
 #
 # Storage defaults to a local volume shared by web and worker. For S3, set STORAGE_DRIVER=s3 and the
 # S3_* variables (see the commented block below). Run your own S3 provider, or copy the seaweedfs
 # services from docker-compose.coolify.yml.
 
-x-protoloom-env: &protoloom-env
-  DATABASE_URL: postgres://protoloom:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/protoloom
+x-weaver-env: &weaver-env
+  DATABASE_URL: postgres://weaver:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/weaver
   VALKEY_URL: redis://valkey:6379
   STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
   STORAGE_LOCAL_PATH: /data/storage
   # S3 (only used with STORAGE_DRIVER=s3), set in .env:
   #   S3_ENDPOINT=https://s3.example.com   (leave empty for AWS)
-  #   S3_BUCKET=protoloom
+  #   S3_BUCKET=weaver
   #   S3_REGION=us-east-1
   #   S3_ACCESS_KEY_ID=...
   #   S3_SECRET_ACCESS_KEY=...
@@ -40,10 +40,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: ${PROTOLOOM_IMAGE:-ghcr.io/slne-development/protoloom:latest}
+    image: ${WEAVER_IMAGE:-ghcr.io/slne-development/weaver:latest}
     command: ["web"]
     restart: unless-stopped
-    environment: *protoloom-env
+    environment: *weaver-env
     ports:
       - "${APP_PORT:-3000}:3000"
     volumes:
@@ -58,10 +58,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: ${PROTOLOOM_IMAGE:-ghcr.io/slne-development/protoloom:latest}
+    image: ${WEAVER_IMAGE:-ghcr.io/slne-development/weaver:latest}
     command: ["worker"]
     restart: unless-stopped
-    environment: *protoloom-env
+    environment: *weaver-env
     volumes:
       - storage-data:/data/storage
     depends_on:
@@ -79,13 +79,13 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: protoloom
+      POSTGRES_USER: weaver
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
-      POSTGRES_DB: protoloom
+      POSTGRES_DB: weaver
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U protoloom -d protoloom"]
+      test: ["CMD-SHELL", "pg_isready -U weaver -d weaver"]
       interval: 5s
       timeout: 5s
       retries: 15

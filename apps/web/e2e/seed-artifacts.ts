@@ -1,5 +1,5 @@
-import { createLocalStore, createRegistry, packArchive, type Principal, type ProtoFile } from "@protoloom/core";
-import { repository, type Db } from "@protoloom/db";
+import { createLocalStore, createRegistry, packArchive, type Principal, type ProtoFile } from "@weaver/core";
+import { repository, type Db } from "@weaver/db";
 import { ARTIFACTS, USERS, serverEnv } from "./fixtures";
 
 function proto(path: string, body: string, imports: string[] = []): ProtoFile {

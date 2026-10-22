@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Logo } from "@protoloom/ui/components/logo";
+import { Logo } from "@weaver/ui/components/logo";
 
 const SAMPLE = [
   { coordinate: "dev.example:money", version: "1.4.0", kind: "release" },
@@ -39,7 +39,7 @@ export function AuthFrame({
             One place for your team&apos;s .proto contracts, versioned like any other dependency.
           </p>
           <div className="rounded-md border border-sidebar-border bg-black/40 font-mono text-xs">
-            <div className="border-b border-sidebar-border px-3 py-2 text-muted-foreground">$ protoloom fetch</div>
+            <div className="border-b border-sidebar-border px-3 py-2 text-muted-foreground">$ weaver fetch</div>
             <ul className="flex flex-col gap-1.5 px-3 py-3">
               {SAMPLE.map((row) => (
                 <li key={row.coordinate} className="grid grid-cols-[1fr_auto] items-baseline gap-4">

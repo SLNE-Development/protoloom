@@ -1,4 +1,4 @@
-package dev.protoloom.gradle
+package dev.slne.weaver.gradle
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -20,8 +20,8 @@ import java.io.File
 
 /**
  * What a module tells the modules that depend on it in the same build: its own publishing
- * coordinate (`null` without a complete `protoloom.publishing` block) and its direct external
- * `protoloom` dependencies.
+ * coordinate (`null` without a complete `weaver.publishing` block) and its direct external
+ * `weaver` dependencies.
  */
 @Serializable
 internal data class LocalManifest(val coordinate: String?, val external: List<String>)
@@ -37,27 +37,27 @@ internal fun readLocalManifest(file: File): LocalManifest =
     try {
         manifestJson.decodeFromString(LocalManifest.serializer(), file.readText())
     } catch (e: SerializationException) {
-        throw GradleException("Invalid protoloom module manifest $file: ${e.message}", e)
+        throw GradleException("Invalid weaver module manifest $file: ${e.message}", e)
     } catch (e: IllegalArgumentException) {
-        throw GradleException("Invalid protoloom module manifest $file: ${e.message}", e)
+        throw GradleException("Invalid weaver module manifest $file: ${e.message}", e)
     }
 
 /**
- * Wires `protoloom(project(":x"))` dependencies between modules of the same build.
+ * Wires `weaver(project(":x"))` dependencies between modules of the same build.
  *
- * Every project dependency added to `protoloom` is mirrored into the `protoloomLocalApi` scope.
- * `protoloomElements` publishes this module's proto source directory and its [LocalManifest] to
- * other modules, and `protoloomLocalClasspath` resolves them (transitively) from the modules this
+ * Every project dependency added to `weaver` is mirrored into the `weaverLocalApi` scope.
+ * `weaverElements` publishes this module's proto source directory and its [LocalManifest] to
+ * other modules, and `weaverLocalClasspath` resolves them (transitively) from the modules this
  * one depends on.
  */
 internal class LocalModules(
     private val project: Project,
-    protoloom: Provider<out DependencyScopeConfiguration>,
-    extension: ProtoloomExtension,
+    weaver: Provider<out DependencyScopeConfiguration>,
+    extension: WeaverExtension,
     manifestFile: Provider<out RegularFile>,
 ) {
     private val localApi = project.configurations.dependencyScope(LOCAL_API) {
-        description = "Project dependencies mirrored from the protoloom configuration."
+        description = "Project dependencies mirrored from the weaver configuration."
     }
 
     private val classpath = project.configurations.resolvable(LOCAL_CLASSPATH) {
@@ -66,12 +66,12 @@ internal class LocalModules(
         protosUsage(this)
     }
 
-    /** Paths of the projects declared directly in `protoloom`, such as `:contracts`. */
+    /** Paths of the projects declared directly in `weaver`, such as `:contracts`. */
     val directProjects: Provider<List<String>> =
-        protoloom.map { configuration -> configuration.dependencies.withType(ProjectDependency::class.java).map { it.path } }
+        weaver.map { configuration -> configuration.dependencies.withType(ProjectDependency::class.java).map { it.path } }
 
     init {
-        protoloom.get().dependencies.withType(ProjectDependency::class.java).all {
+        weaver.get().dependencies.withType(ProjectDependency::class.java).all {
             localApi.get().dependencies.add(copy())
         }
         project.configurations.consumable(ELEMENTS) {
@@ -113,12 +113,12 @@ internal class LocalModules(
     }
 
     companion object {
-        const val USAGE = "protoloom-protos"
-        const val LOCAL_API = "protoloomLocalApi"
-        const val ELEMENTS = "protoloomElements"
-        const val LOCAL_CLASSPATH = "protoloomLocalClasspath"
-        const val SOURCE_TYPE = "protoloom-source"
-        const val MANIFEST_TYPE = "protoloom-manifest"
+        const val USAGE = "weaver-protos"
+        const val LOCAL_API = "weaverLocalApi"
+        const val ELEMENTS = "weaverElements"
+        const val LOCAL_CLASSPATH = "weaverLocalClasspath"
+        const val SOURCE_TYPE = "weaver-source"
+        const val MANIFEST_TYPE = "weaver-manifest"
 
         private fun projectPathOf(artifact: ResolvedArtifactResult): String =
             (artifact.id.componentIdentifier as? ProjectComponentIdentifier)?.projectPath

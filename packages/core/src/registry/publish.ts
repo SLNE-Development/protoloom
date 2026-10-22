@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, max, sql } from "drizzle-orm";
 import { z } from "zod";
-import { artifact, build, buildFile, deletedRelease, dependency, version } from "@protoloom/db";
+import { artifact, build, buildFile, deletedRelease, dependency, version } from "@weaver/db";
 import { recordAudit } from "../audit.js";
 import { extractArchive, sha256 } from "../archive.js";
 import {

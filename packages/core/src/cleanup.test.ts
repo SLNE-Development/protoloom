@@ -15,8 +15,8 @@ import {
   dependency,
   repository,
   version,
-} from "@protoloom/db";
-import { startTestDb } from "@protoloom/db/testing";
+} from "@weaver/db";
+import { startTestDb } from "@weaver/db/testing";
 import { applyCleanup, planCleanup, runAllCleanups, type CleanupCandidate } from "./cleanup.js";
 import type { Coordinate } from "./coordinates.js";
 import { createLocalStore, type BlobStore } from "./storage/index.js";
@@ -130,7 +130,7 @@ describe("cleanup", () => {
 
   beforeAll(async () => {
     testDb = await startTestDb();
-    blobDir = await mkdtemp(join(tmpdir(), "protoloom-cleanup-"));
+    blobDir = await mkdtemp(join(tmpdir(), "weaver-cleanup-"));
     blobs = createLocalStore(blobDir);
   }, 120_000);
 

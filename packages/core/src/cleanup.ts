@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray, max } from "drizzle-orm";
-import { artifact, build, cleanupPolicy, repository, version, type Db } from "@protoloom/db";
+import { artifact, build, cleanupPolicy, repository, version, type Db } from "@weaver/db";
 import { recordAudit } from "./audit.js";
 import { formatCoordinate, type Coordinate } from "./coordinates.js";
 import { RegistryError } from "./errors.js";
@@ -311,7 +311,7 @@ export async function runAllCleanups(db: Db, blobs: BlobStore, now: Date): Promi
         await lockClient.query("select pg_advisory_unlock($1)", [CLEANUP_LOCK_KEY]);
       } catch (error) {
         unlockError = error instanceof Error ? error : new Error(String(error));
-        console.warn("protoloom: releasing the cleanup lock failed; discarding its connection", unlockError);
+        console.warn("weaver: releasing the cleanup lock failed; discarding its connection", unlockError);
       }
     }
   } finally {

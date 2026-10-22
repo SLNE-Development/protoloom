@@ -1,12 +1,12 @@
 plugins {
-    id("dev.protoloom")
+    id("dev.slne.weaver")
 }
 
 group = "dev.smoke"
 version = "1.0.0"
 
-// PROTOLOOM_URL and PROTOLOOM_TOKEN come from the environment.
-protoloom {
+// WEAVER_URL and WEAVER_TOKEN come from the environment.
+weaver {
     repositories("releases")
     publishing {
         repository.set("releases")

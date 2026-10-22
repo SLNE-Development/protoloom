@@ -1,9 +1,9 @@
 import { initTRPC, TRPCError, type TRPC_ERROR_CODE_KEY } from "@trpc/server";
 import superjson from "superjson";
 import { z, ZodError } from "zod";
-import { getSettings, RegistryError, type ErrorCode, type Principal, type Registry, type ServerSettings } from "@protoloom/core";
-import type { Db } from "@protoloom/db";
-import { QueueUnavailableError, type CleanupQueue } from "@protoloom/jobs";
+import { getSettings, RegistryError, type ErrorCode, type Principal, type Registry, type ServerSettings } from "@weaver/core";
+import type { Db } from "@weaver/db";
+import { QueueUnavailableError, type CleanupQueue } from "@weaver/jobs";
 import type { Auth } from "../auth";
 import { getServerContext } from "../context";
 import { getCleanupQueue } from "../jobs";
@@ -96,7 +96,7 @@ const t = initTRPC.context<TrpcContext>().create({
     const registry: RegistryErrorData | null =
       error.cause instanceof RegistryError ? { code: error.cause.code, details: error.cause.details ?? null } : null;
     if (isUnexpected(error)) {
-      console.error(`protoloom: tRPC ${path ?? "?"} failed`, error.cause);
+      console.error(`weaver: tRPC ${path ?? "?"} failed`, error.cause);
       const data = { ...shape.data };
       delete data.stack;
       return { ...shape, message: INTERNAL_ERROR_MESSAGE, data: { ...data, registry: null, zodError: null } };
@@ -139,7 +139,7 @@ export const publicProcedure = t.procedure.use(domainErrors);
  */
 export const browseProcedure = publicProcedure.use(({ ctx, next }) => {
   if (ctx.principal.kind === "anonymous" && !ctx.settings.anonymousView) {
-    throw new TRPCError({ code: "UNAUTHORIZED", message: "Sign in to browse this Protoloom" });
+    throw new TRPCError({ code: "UNAUTHORIZED", message: "Sign in to browse this Weaver" });
   }
   return next();
 });

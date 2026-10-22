@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-// The CLI's own schema, so the snippet can't drift from what `protoloom fetch` accepts.
+// The CLI's own schema, so the snippet can't drift from what `weaver fetch` accepts.
 import { configSchema } from "../../../../packages/cli/src/config";
 import {
   GENERIC_SHARE_IMAGE,
@@ -12,7 +12,7 @@ import {
   formatBytes,
   formatRelative,
   gradleSnippet,
-  protoloomJsonSnippet,
+  weaverJsonSnippet,
   repositoryHref,
 } from "./browse";
 
@@ -43,11 +43,11 @@ describe("usage snippets", () => {
     const snippet = gradleSnippet(input);
     expect(snippet).toContain('url = "https://protos.example.com"');
     expect(snippet).toContain('repositories("releases")');
-    expect(snippet).toContain('protoloom("dev.example:demo:1.0.0")');
+    expect(snippet).toContain('weaver("dev.example:demo:1.0.0")');
   });
 
-  it("writes a protoloom.json the CLI accepts", () => {
-    const parsed = configSchema.safeParse(JSON.parse(protoloomJsonSnippet(input)));
+  it("writes a weaver.json the CLI accepts", () => {
+    const parsed = configSchema.safeParse(JSON.parse(weaverJsonSnippet(input)));
     expect(parsed.success).toBe(true);
     expect(parsed.data).toEqual({
       url: "https://protos.example.com",

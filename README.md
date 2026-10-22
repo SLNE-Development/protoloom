@@ -1,9 +1,9 @@
-# Protoloom
+# Weaver
 
 A self-hosted registry for `.proto` files. Publish versioned proto bundles from Gradle, resolve their
-dependencies, and fetch them in any project with the Gradle plugin or the `protoloom` CLI.
+dependencies, and fetch them in any project with the Gradle plugin or the `weaver` CLI.
 
-Source: [github.com/SLNE-Development/protoloom](https://github.com/SLNE-Development/protoloom) · License: MIT
+Source: [github.com/SLNE-Development/weaver](https://github.com/SLNE-Development/weaver) · License: MIT
 
 - **Web app and REST API** (Next.js): repositories, versions, dependency graph, API keys, invites.
 - **Worker** (BullMQ on Valkey): background jobs, same image as the web app.
@@ -17,8 +17,8 @@ Source: [github.com/SLNE-Development/protoloom](https://github.com/SLNE-Developm
 | `apps/web` | Next.js app (UI, REST API, tRPC) |
 | `apps/worker` | BullMQ worker |
 | `packages/core`, `packages/db`, `packages/ui` | Shared logic, Drizzle schema + migrations, UI components |
-| `packages/cli` | The `protoloom` CLI |
-| `gradle-plugin` | Gradle plugin `dev.protoloom` |
+| `packages/cli` | The `weaver` CLI |
+| `gradle-plugin` | Gradle plugin `dev.slne.weaver` |
 | `docker/` | Dockerfile and entrypoint |
 | `.github/workflows` | CI (`ci.yml`) and tag releases (`release.yml`) |
 
@@ -73,13 +73,13 @@ OAuth callback URLs to register with the providers:
 Signing in never creates accounts or links by email. A user joins through an invite link
 (`/invite/<token>`, created by an admin) and connects further providers on the Account page (`/account`).
 
-Client variables: `PROTOLOOM_URL` (registry base URL) and `PROTOLOOM_TOKEN` (API key), used by the CLI and the Gradle plugin.
+Client variables: `WEAVER_URL` (registry base URL) and `WEAVER_TOKEN` (API key), used by the CLI and the Gradle plugin.
 
 Compose-only variables: `POSTGRES_PASSWORD` and `APP_PORT` (default `3000`) in `docker-compose.prod.yml`.
 
 ## Gradle plugin
 
-The plugin `dev.protoloom` is published to `https://reposilite.slne.dev/releases/`. Add that repository to the
+The plugin `dev.slne.weaver` is published to `https://reposilite.slne.dev/releases/`. Add that repository to the
 plugin repositories:
 
 ```kotlin
@@ -95,14 +95,14 @@ pluginManagement {
 ```kotlin
 // build.gradle.kts
 plugins {
-    id("dev.protoloom") version "0.1.0"
+    id("dev.slne.weaver") version "0.1.0"
 }
 
 group = "com.example"
 version = "1.2.0"
 
-// PROTOLOOM_URL and PROTOLOOM_TOKEN are read from the environment by default.
-protoloom {
+// WEAVER_URL and WEAVER_TOKEN are read from the environment by default.
+weaver {
     repositories("releases")            // lookup order for dependencies
     publishing {
         repository.set("releases")      // receives release versions
@@ -114,26 +114,26 @@ protoloom {
 }
 
 dependencies {
-    protoloom("com.example:common-types:2.0.0")
-    protoloom(project(":shared-protos"))
+    weaver("com.example:common-types:2.0.0")
+    weaver(project(":shared-protos"))
 }
 ```
 
 - `./gradlew publishProtos` uploads the bundle. Releases are immutable unless the repository allows redeploys; `-SNAPSHOT` versions always create a new build. A deleted release stays reserved: without redeploy it can only be published again with identical content (same sha256).
-- `./gradlew fetchProtos` resolves the declared dependencies (transitively) into `build/protoloom/protos/`; read it through `protoloom.protosDir`.
+- `./gradlew fetchProtos` resolves the declared dependencies (transitively) into `build/weaver/protos/`; read it through `weaver.protosDir`.
 
 ## CLI
 
-The CLI is published to npm as [`protoloom`](https://www.npmjs.com/package/protoloom) (Node 22.3+). Install it
+The CLI is published to npm as [`weaver`](https://www.npmjs.com/package/weaver) (Node 22.3+). Install it
 as a dev dependency of the project that consumes the protos:
 
 ```sh
-npm i -D protoloom
+npm i -D @slne/weaver-cli
 # or
-pnpm add -D protoloom
+pnpm add -D @slne/weaver-cli
 ```
 
-`protoloom.json`:
+`weaver.json`:
 
 ```json
 {
@@ -144,9 +144,9 @@ pnpm add -D protoloom
 ```
 
 ```sh
-export PROTOLOOM_URL=https://protos.example.com
-export PROTOLOOM_TOKEN=...        # only needed for private repositories
-npx protoloom fetch [--config protoloom.json] [--out ./protos]
+export WEAVER_URL=https://protos.example.com
+export WEAVER_TOKEN=...        # only needed for private repositories
+npx @slne/weaver-cli fetch [--config weaver.json] [--out ./protos]
 ```
 
 ## Deploy with Docker Compose
@@ -154,7 +154,7 @@ npx protoloom fetch [--config protoloom.json] [--out ./protos]
 `docker-compose.prod.yml` runs the app, the worker (same image, command `worker`), PostgreSQL and Valkey.
 The app container applies database migrations on start; the worker waits for the app to be healthy.
 
-The released image is `ghcr.io/slne-development/protoloom:latest` (also tagged with each version, e.g. `:0.1.0`).
+The released image is `ghcr.io/slne-development/weaver:latest` (also tagged with each version, e.g. `:0.1.0`).
 `pull` works once the first release has been published (see [Releases](#releases)); until then build from the
 checkout with `up -d --build`.
 
@@ -168,7 +168,7 @@ docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-Set `PROTOLOOM_IMAGE` to pin a version (e.g. `ghcr.io/slne-development/protoloom:0.1.0`) or to use your own build.
+Set `WEAVER_IMAGE` to pin a version (e.g. `ghcr.io/slne-development/weaver:0.1.0`) or to use your own build.
 
 Put a TLS-terminating reverse proxy in front of port 3000 and set `BETTER_AUTH_URL` to its https URL.
 Storage defaults to the `storage-data` volume; for S3 set `STORAGE_DRIVER=s3` and the `S3_*` variables.
@@ -179,10 +179,10 @@ Commands: `web` (default, migrates first) and `worker`. Set `RUN_MIGRATIONS=true
 ## Deploy on Coolify
 
 Create a **Docker Compose** resource from this repository and select `docker-compose.coolify.yml`.
-The `protoloom` and `worker` services pull the published image `ghcr.io/slne-development/protoloom:latest`
-(set `PROTOLOOM_IMAGE` to pin a version). To build from source instead (for example before the first release),
-add `build: { context: ., dockerfile: docker/Dockerfile }` to both services and set `PROTOLOOM_IMAGE=protoloom:local`.
-It contains `protoloom` (web), `worker`, `postgres`, `valkey`, `seaweedfs` (bundled S3 storage, bucket created
+The `weaver` and `worker` services pull the published image `ghcr.io/slne-development/weaver:latest`
+(set `WEAVER_IMAGE` to pin a version). To build from source instead (for example before the first release),
+add `build: { context: ., dockerfile: docker/Dockerfile }` to both services and set `WEAVER_IMAGE=weaver:local`.
+It contains `weaver` (web), `worker`, `postgres`, `valkey`, `seaweedfs` (bundled S3 storage, bucket created
 by a one-shot init container) and `seaweedfs-admin` (the `weed admin` panel).
 
 Coolify generates the database credentials, `BETTER_AUTH_SECRET` and the SeaweedFS keys. You set, in the
@@ -197,17 +197,17 @@ Environment Variables tab:
 | `S3_*` | Optional. Point at an external S3 instead of the bundled one. |
 
 **Storage services always start.** The default is the bundled SeaweedFS: `seaweedfs`, `seaweedfs-init` (creates
-the bucket, safe to re-run on every redeploy) and `seaweedfs-admin` always start, and `protoloom` waits for
+the bucket, safe to re-run on every redeploy) and `seaweedfs-admin` always start, and `weaver` waits for
 `seaweedfs-init`, regardless of `STORAGE_DRIVER`. To use local storage or an external S3 instead:
 
 1. Set the variables: `STORAGE_DRIVER=local`, or `STORAGE_DRIVER=s3` with `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`,
    `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`.
 2. Edit `docker-compose.coolify.yml` (for example in a fork): delete the `seaweedfs`, `seaweedfs-init` and
-   `seaweedfs-admin` services, the `seaweedfs-init` entry under `protoloom` -> `depends_on`, and the
+   `seaweedfs-admin` services, the `seaweedfs-init` entry under `weaver` -> `depends_on`, and the
    `seaweedfs-data` and `seaweedfs-admin-data` volumes.
 
-**`BETTER_AUTH_URL` versus the service URL.** In Coolify you assign a domain to the `protoloom` service
-(`SERVICE_FQDN_PROTOLOOM_3000`). That value only tells the proxy where to route traffic. With a Cloudflare Tunnel
+**`BETTER_AUTH_URL` versus the service URL.** In Coolify you assign a domain to the `weaver` service
+(`SERVICE_FQDN_WEAVER_3000`). That value only tells the proxy where to route traffic. With a Cloudflare Tunnel
 the URL Coolify knows is plain `http://`, while OAuth callbacks, secure cookies and all links need `https://`.
 So `BETTER_AUTH_URL` is a separate required variable you set to the public https URL, and the app never derives
 a URL from the request or from the service FQDN. It ignores `Host` and `X-Forwarded-*` headers for this purpose
@@ -231,15 +231,15 @@ and runs the Gradle plugin tests.
 Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`. The tag must equal the version in
 `packages/cli/package.json` and `gradle-plugin/build.gradle.kts`. It publishes:
 
-- the image `ghcr.io/slne-development/protoloom:X.Y.Z` and `:latest` (linux/amd64 and linux/arm64),
-- the CLI to npm as `protoloom@X.Y.Z`,
-- the Gradle plugin `dev.protoloom:X.Y.Z` to `https://reposilite.slne.dev/releases/`.
+- the image `ghcr.io/slne-development/weaver:X.Y.Z` and `:latest` (linux/amd64 and linux/arm64),
+- the CLI to npm as `@slne/weaver-cli@X.Y.Z`,
+- the Gradle plugin `dev.slne.weaver:X.Y.Z` to `https://reposilite.slne.dev/releases/`.
 
 Repository secrets the release needs:
 
 | Secret | Used for |
 | --- | --- |
-| `NPM_TOKEN` | npm automation (or granular publish) token for the `protoloom` package. |
+| `NPM_TOKEN` | npm automation (or granular publish) token for the `weaver` package. |
 | `SLNE_RELEASES_REPO_USERNAME` | Reposilite user with write access to `releases`. |
 | `SLNE_RELEASES_REPO_PASSWORD` | Its password or token. |
 

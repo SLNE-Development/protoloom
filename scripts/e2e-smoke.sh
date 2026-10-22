@@ -16,7 +16,7 @@ export MSYS_NO_PATHCONV=1
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-PROJECT="protoloom-smoke"
+PROJECT="weaver-smoke"
 PORT="${SMOKE_PORT:-3100}"
 URL="http://localhost:${PORT}"
 WORK="$(mktemp -d)"
@@ -47,7 +47,7 @@ fail() { echo "SMOKE FAILED: $*" >&2; exit 1; }
 rand() { node -e "process.stdout.write(require('crypto').randomBytes(24).toString('hex'))"; }
 
 cat >"$ENV_FILE" <<ENV
-PROTOLOOM_IMAGE=protoloom:smoke
+WEAVER_IMAGE=weaver:smoke
 POSTGRES_PASSWORD=$(rand)
 BETTER_AUTH_SECRET=$(rand)
 BETTER_AUTH_URL=${URL}
@@ -74,11 +74,11 @@ echo "==> 2. seed admin, 'releases' repository and API key"
   "--banner:js=import { createRequire as __seedCreateRequire } from 'node:module'; const require = __seedCreateRequire(import.meta.url);" \
   --outfile="$WORK/seed-smoke.mjs"
 docker cp "$WORK/seed-smoke.mjs" "$(compose ps -q app):/tmp/seed-smoke.mjs"
-TOKEN="$(compose exec -T -e PROTOLOOM_SMOKE_SEED=1 app node /tmp/seed-smoke.mjs | tail -n 1 | tr -d '\r\n')"
+TOKEN="$(compose exec -T -e WEAVER_SMOKE_SEED=1 app node /tmp/seed-smoke.mjs | tail -n 1 | tr -d '\r\n')"
 case "$TOKEN" in pl_*) ;; *) fail "seed printed no API key (got '${TOKEN}')" ;; esac
 
 echo "==> 3. publish with the Gradle plugin"
-export PROTOLOOM_URL="$URL" PROTOLOOM_TOKEN="$TOKEN"
+export WEAVER_URL="$URL" WEAVER_TOKEN="$TOKEN"
 (cd scripts/fixtures/gradle-sample && ../../../gradle-plugin/gradlew --no-daemon --console=plain publishProtos)
 
 echo "==> 4. buf validation rejects a bundle with a missing import"
@@ -111,9 +111,9 @@ fi
 grep -q "message Hello" "$FOUND" || fail "$FOUND has no message Hello"
 
 echo "==> 7. the worker processes a cleanup job"
-# Enqueued with @protoloom/jobs (the web app's code path) against the stack's Valkey.
+# Enqueued with @weaver/jobs (the web app's code path) against the stack's Valkey.
 compose exec -T -w /app/apps/worker worker node --input-type=module -e '
-import { createQueue, enqueueCleanup, getJobState, producerConnection } from "@protoloom/jobs";
+import { createQueue, enqueueCleanup, getJobState, producerConnection } from "@weaver/jobs";
 const queue = createQueue(producerConnection(process.env.VALKEY_URL));
 try {
   const id = await enqueueCleanup(queue, "releases");

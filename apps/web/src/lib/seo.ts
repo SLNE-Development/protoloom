@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { env } from "@/env";
 
-export const SITE_NAME = "Protoloom";
+export const SITE_NAME = "Weaver";
 /** Meta description; at most 160 characters so search results show it whole. */
 export const SITE_DESCRIPTION =
   "Self-hosted registry for .proto files: publish versioned protobuf contracts from Gradle, checked on publish, and fetch them with their dependencies.";
@@ -52,7 +52,7 @@ export interface PageMetadataInput {
   image?: string;
   /** For private pages: `noindex, nofollow`. */
   noindex?: boolean;
-  /** Use `title` as is, without the "· Protoloom" template. */
+  /** Use `title` as is, without the "· Weaver" template. */
   absoluteTitle?: boolean;
 }
 

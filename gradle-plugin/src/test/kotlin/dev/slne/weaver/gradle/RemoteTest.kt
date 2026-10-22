@@ -1,4 +1,4 @@
-package dev.protoloom.gradle
+package dev.slne.weaver.gradle
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -39,11 +39,11 @@ class RemoteTest {
     fun `fetchProtos resolves the declared dependencies and extracts them into the proto root`() {
         writeBuild(
             """
-            protoloom {
+            weaver {
                 repositories("releases")
             }
             dependencies {
-                protoloom("dev.example:a:1.0.0")
+                weaver("dev.example:a:1.0.0")
             }
             """,
         )
@@ -56,7 +56,7 @@ class RemoteTest {
             Json.parseToJsonElement("""{"repositories":["releases"],"dependencies":["dev.example:a:1.0.0"]}"""),
             Json.parseToJsonElement(stub.resolveBodies.single()),
         )
-        assertEquals(stub.protoContent, projectDir.resolve("build/protoloom/protos/a/v1/a.proto").readText())
+        assertEquals(stub.protoContent, projectDir.resolve("build/weaver/protos/a/v1/a.proto").readText())
         assertEquals(listOf("Bearer secret-token", "Bearer secret-token"), stub.authorizations.toList())
     }
 
@@ -64,23 +64,23 @@ class RemoteTest {
     fun `a second fetch reuses the cached archive`() {
         writeBuild(
             """
-            protoloom {
+            weaver {
                 repositories("releases")
             }
             dependencies {
-                protoloom("dev.example:a:1.0.0")
+                weaver("dev.example:a:1.0.0")
             }
             """,
         )
 
         gradle("fetchProtos").build()
-        projectDir.resolve("build/protoloom/protos/a/v1/a.proto").delete()
+        projectDir.resolve("build/weaver/protos/a/v1/a.proto").delete()
         val second = gradle("fetchProtos").build()
 
         assertTrue(second.output.contains("Reusing configuration cache"), second.output)
         assertEquals(2, stub.resolveBodies.size)
         assertEquals(1, stub.archiveDownloads.get())
-        assertEquals(stub.protoContent, projectDir.resolve("build/protoloom/protos/a/v1/a.proto").readText())
+        assertEquals(stub.protoContent, projectDir.resolve("build/weaver/protos/a/v1/a.proto").readText())
     }
 
     @Test
@@ -88,11 +88,11 @@ class RemoteTest {
         stub.corruptArchive = true
         writeBuild(
             """
-            protoloom {
+            weaver {
                 repositories("releases")
             }
             dependencies {
-                protoloom("dev.example:a:1.0.0")
+                weaver("dev.example:a:1.0.0")
             }
             """,
         )
@@ -100,18 +100,18 @@ class RemoteTest {
         val result = gradle("fetchProtos").buildAndFail()
 
         assertTrue(result.output.contains("Checksum mismatch for dev.example:a:1.0.0"), result.output)
-        assertFalse(projectDir.resolve("build/protoloom/protos/a/v1/a.proto").exists())
+        assertFalse(projectDir.resolve("build/weaver/protos/a/v1/a.proto").exists())
     }
 
     @Test
     fun `protosDir carries the fetchProtos task dependency`() {
         writeBuild(
             """
-            protoloom {
+            weaver {
                 repositories("releases")
             }
             dependencies {
-                protoloom("dev.example:a:1.0.0")
+                weaver("dev.example:a:1.0.0")
             }
 
             abstract class ReadProtos : DefaultTask() {
@@ -125,7 +125,7 @@ class RemoteTest {
             }
 
             tasks.register<ReadProtos>("readProtos") {
-                protos.set(protoloom.protosDir)
+                protos.set(weaver.protosDir)
             }
             """,
         )
@@ -141,7 +141,7 @@ class RemoteTest {
         writeProtoSources()
         writeBuild(
             """
-            protoloom {
+            weaver {
                 publishing {
                     repository = "releases"
                     group = "dev.example"
@@ -150,7 +150,7 @@ class RemoteTest {
                 }
             }
             dependencies {
-                protoloom("dev.example:a:1.0.0")
+                weaver("dev.example:a:1.0.0")
             }
             """,
         )
@@ -181,7 +181,7 @@ class RemoteTest {
         writeBuild(
             """
             version = "1.1.0-SNAPSHOT"
-            protoloom {
+            weaver {
                 publishing {
                     repository = "releases"
                     snapshotRepository = "snapshots"
@@ -207,7 +207,7 @@ class RemoteTest {
         writeProtoSources()
         writeBuild(
             """
-            protoloom {
+            weaver {
                 publishing {
                     repository = "releases"
                     group = "dev.example"
@@ -224,35 +224,35 @@ class RemoteTest {
     }
 
     @Test
-    fun `a missing registry url names PROTOLOOM_URL`() {
+    fun `a missing registry url names WEAVER_URL`() {
         writeBuild(
             """
-            protoloom {
+            weaver {
                 repositories("releases")
             }
             dependencies {
-                protoloom("dev.example:a:1.0.0")
+                weaver("dev.example:a:1.0.0")
             }
             """,
         )
 
-        val result = gradle("fetchProtos", env = System.getenv() - "PROTOLOOM_URL" - "PROTOLOOM_TOKEN").buildAndFail()
+        val result = gradle("fetchProtos", env = System.getenv() - "WEAVER_URL" - "WEAVER_TOKEN").buildAndFail()
 
-        assertTrue(result.output.contains("PROTOLOOM_URL"), result.output)
+        assertTrue(result.output.contains("WEAVER_URL"), result.output)
         assertEquals(0, stub.resolveBodies.size)
     }
 
     @Test
-    fun `an archiveUrl on another origin is rebased onto protoloom url and never receives the token`() {
+    fun `an archiveUrl on another origin is rebased onto weaver url and never receives the token`() {
         RecordingServer().use { foreign ->
             stub.archiveOrigin = foreign.url
             writeBuild(
                 """
-                protoloom {
+                weaver {
                     repositories("releases")
                 }
                 dependencies {
-                    protoloom("dev.example:a:1.0.0")
+                    weaver("dev.example:a:1.0.0")
                 }
                 """,
             )
@@ -262,7 +262,7 @@ class RemoteTest {
             assertEquals(emptyList(), foreign.requests.toList())
             assertEquals(listOf("/api/v1/repos/releases/artifacts/dev.example/a/1.0.0/archive"), stub.archivePaths.toList())
             assertEquals(listOf("Bearer secret-token", "Bearer secret-token"), stub.authorizations.toList())
-            assertEquals(stub.protoContent, projectDir.resolve("build/protoloom/protos/a/v1/a.proto").readText())
+            assertEquals(stub.protoContent, projectDir.resolve("build/weaver/protos/a/v1/a.proto").readText())
         }
     }
 
@@ -270,22 +270,22 @@ class RemoteTest {
     fun `fetchProtos removes stale files from the proto root`() {
         writeBuild(
             """
-            protoloom {
+            weaver {
                 repositories("releases")
             }
             dependencies {
-                protoloom("dev.example:a:1.0.0")
+                weaver("dev.example:a:1.0.0")
             }
             """,
         )
-        val stale = projectDir.resolve("build/protoloom/protos/old/x.proto")
+        val stale = projectDir.resolve("build/weaver/protos/old/x.proto")
         stale.parentFile.mkdirs()
         stale.writeText("syntax = \"proto3\";\n")
 
         gradle("fetchProtos").build()
 
         assertFalse(stale.exists())
-        assertTrue(projectDir.resolve("build/protoloom/protos/a/v1/a.proto").isFile)
+        assertTrue(projectDir.resolve("build/weaver/protos/a/v1/a.proto").isFile)
     }
 
     @Test
@@ -294,7 +294,7 @@ class RemoteTest {
         projectDir.resolve("protos/README.md").writeText("no protos here")
         writeBuild(
             """
-            protoloom {
+            weaver {
                 publishing {
                     repository = "releases"
                     group = "dev.example"
@@ -317,7 +317,7 @@ class RemoteTest {
     private fun writeBuild(body: String) {
         projectDir.resolve("settings.gradle.kts").writeText("""rootProject.name = "consumer"""" + "\n")
         projectDir.resolve("build.gradle.kts").writeText(
-            "plugins {\n    id(\"dev.protoloom\")\n}\n" + body.trimIndent() + "\n",
+            "plugins {\n    id(\"dev.slne.weaver\")\n}\n" + body.trimIndent() + "\n",
         )
     }
 
@@ -331,7 +331,7 @@ class RemoteTest {
 
     private fun gradle(
         vararg tasks: String,
-        env: Map<String, String> = System.getenv() + mapOf("PROTOLOOM_URL" to stub.url, "PROTOLOOM_TOKEN" to "secret-token"),
+        env: Map<String, String> = System.getenv() + mapOf("WEAVER_URL" to stub.url, "WEAVER_TOKEN" to "secret-token"),
     ): GradleRunner = GradleRunner.create()
         .withProjectDir(projectDir)
         .withPluginClasspath()

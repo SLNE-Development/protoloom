@@ -2,9 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { makeSignature } from "better-auth/crypto";
-import { updateSettings } from "@protoloom/core";
-import { user, type Db } from "@protoloom/db";
-import { startTestDb } from "@protoloom/db/testing";
+import { updateSettings } from "@weaver/core";
+import { user, type Db } from "@weaver/db";
+import { startTestDb } from "@weaver/db/testing";
 import { createAuth, type Auth, type AuthEnv } from "./auth";
 import { resolveAppSession } from "./session";
 

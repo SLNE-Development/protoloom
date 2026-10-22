@@ -1,4 +1,4 @@
-import type { Role } from "@protoloom/core";
+import type { Role } from "@weaver/core";
 
 /** Where a nav item sits in the sidebar. */
 export type NavSection = "registry" | "admin";
