@@ -11,6 +11,7 @@ import {
   type StoreSet,
 } from "@weaver/core";
 import { dockerManifest, dockerManifestRef, dockerTag, type Db, type Tx } from "@weaver/db";
+import { syncImageComponents } from "./components.js";
 import { runDockerGc } from "./gc.js";
 
 const DAY_MS = 86_400_000;
@@ -291,6 +292,7 @@ async function deleteLockedTags(tx: Tx, repo: Repo, image: string, tags: Array<{
       .returning({ tag: dockerTag.tag });
     if (rows.length > 0) deleted.push(tag);
   }
+  if (deleted.length > 0) await syncImageComponents(tx, repo.id, image);
   return deleted;
 }
 
@@ -352,6 +354,7 @@ async function deleteOrphanRows(
       doomed.map((d) => d.id),
     ),
   );
+  await syncImageComponents(tx, repo.id, image);
   return doomed.map((d) => d.digest).sort(byteOrder);
 }
 
