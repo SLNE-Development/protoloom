@@ -55,6 +55,14 @@ tasks.register<Exec>("generateContracts") {
 
 With surf-tide or another proto plugin, pass `weaver.protosDir` wherever it accepts a source or include directory.
 
+To search a group, list it like any repository. The group looks in its members in order:
+
+```kotlin
+weaver {
+    repositories("proto-all")
+}
+```
+
 ## In a Node project
 
 Add `weaver.json` next to `package.json`:

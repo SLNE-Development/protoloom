@@ -62,6 +62,23 @@ Gradle couldn't find a URL. Set `WEAVER_URL={{url}}`, or `weaver { url = "…" }
 | `Checksum mismatch for …` | The download was corrupted or changed on the way. Run again; if it persists, check proxies between you and the server. |
 | `warning: Version conflict: …` | Not an error. Two artifacts ask for different versions; the highest wins. |
 
+## Mirrors
+
+### Mirror loop detected
+
+Mirrors forward requests to each other and the hop count (`x-weaver-hops`) passed 4. Check the upstream URLs for a cycle, such as A mirroring B while B mirrors A, and point one of them at a hosted repository.
+
+### upstream_unavailable
+
+`upstream_unavailable: Upstream of <mirror> did not answer` (Gradle) or `error: Upstream of <mirror> did not answer` (CLI), with HTTP status `502`. The mirror's upstream is down, unreachable or answered with an error, and the mirror has no cached copy. Check the upstream URL and token in the mirror's settings and that the other instance is up. Turn on caching to keep serving what was fetched once.
+
+### Other mirror and group messages
+
+| Message | Cause | Fix |
+| --- | --- | --- |
+| `method_not_allowed` when publishing | The target is a group or a mirror, which are read only. | Publish to a hosted repository. |
+| `validation_failed: Dependency not found: …` although a mirror has it | Publishing never consults mirrors. | Publish the dependency into a hosted repository first. |
+
 ## Invite not working
 
 | What you see | Cause | Fix |

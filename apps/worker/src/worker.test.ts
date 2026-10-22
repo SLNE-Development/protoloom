@@ -120,6 +120,7 @@ describe("loadEnv", () => {
   const base = {
     DATABASE_URL: "postgres://weaver:weaver@localhost:5432/weaver",
     VALKEY_URL: "redis://localhost:6379",
+    BETTER_AUTH_SECRET: "x".repeat(32),
     STORAGE_DRIVER: "local",
     STORAGE_LOCAL_PATH: "/data",
   };

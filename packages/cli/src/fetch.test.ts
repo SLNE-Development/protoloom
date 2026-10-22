@@ -19,6 +19,8 @@ interface StubArtifact {
   archiveHost?: string;
   /** Builds the archiveUrl from the primary base url (relative, prefixed, ...). */
   archiveUrlFor?: (base: string) => string;
+  /** The repository the server reports and serves the archive from (default "main"); a group name for group tests. */
+  repository?: string;
 }
 
 interface Logged {
@@ -34,6 +36,7 @@ let foreign: Server;
 let foreignUrl: string;
 let foreignRequests: Logged[];
 let malformedResolve = false;
+let resolveFailure: { status: number; body: unknown } | undefined;
 let baseUrl: string;
 let requests: Logged[];
 let artifacts: StubArtifact[];
@@ -48,12 +51,13 @@ async function readBody(req: IncomingMessage): Promise<string> {
 
 const coord = (a: StubArtifact): string => `${a.group}:${a.name}:${a.version}`;
 const archivePath = (a: StubArtifact): string =>
-  `/api/v1/repos/main/artifacts/${a.group}/${a.name}/${a.version}/archive`;
+  `/api/v1/repos/${a.repository ?? "main"}/artifacts/${a.group}/${a.name}/${a.version}/archive`;
 
 beforeEach(async () => {
   requests = [];
   foreignRequests = [];
   malformedResolve = false;
+  resolveFailure = undefined;
   artifacts = [];
   archives = new Map();
   work = await mkdtemp(join(tmpdir(), "weaver-cli-"));
@@ -73,6 +77,10 @@ beforeEach(async () => {
       }
       if (req.method === "POST" && path === "/api/v1/resolve") {
         await readBody(req);
+        if (resolveFailure) {
+          json(resolveFailure.status, resolveFailure.body);
+          return;
+        }
         if (malformedResolve) {
           json(200, { artifacts: "nope" });
           return;
@@ -82,7 +90,7 @@ beforeEach(async () => {
           const archive = await packArchive(a.files);
           archives.set(archivePath(a), archive);
           out.push({
-            repository: "main",
+            repository: a.repository ?? "main",
             coordinate: coord(a),
             group: a.group,
             name: a.name,
@@ -296,6 +304,26 @@ describe("fetchProtos", () => {
     await fetchProtos(options({ token: "secret", cacheDir: join(work, "cache-2") }));
     expect(foreignRequests).toHaveLength(0);
     expect(archiveRequests()[0]).toMatchObject({ query: "build=1", authorization: "Bearer secret" });
+  });
+
+  it("resolving through a group name downloads from the group's archive url", async () => {
+    artifacts.push({ group: "com.acme", name: "a", version: "1.0.0", files: [proto("acme/a/a.proto", "A")], repository: "all" });
+    const result = await fetchProtos(options({ repositories: ["all"] }));
+    expect(result).toEqual({ artifacts: 1, files: 1 });
+    const downloads = requests.filter((r) => r.method === "GET");
+    expect(downloads.map((r) => r.path)).toEqual(["/api/v1/repos/all/artifacts/com.acme/a/1.0.0/archive"]);
+    expect(await readFile(join(work, "out", "acme/a/a.proto"), "utf8")).toBe("A");
+  });
+
+  it("upstream_unavailable is printed as the server message", async () => {
+    resolveFailure = {
+      status: 502,
+      body: { error: { code: "upstream_unavailable", message: "Upstream of up-mirror did not answer" } },
+    };
+    await expect(fetchProtos(options({ repositories: ["up-mirror"] }))).rejects.toMatchObject({
+      name: "CliError",
+      message: "Upstream of up-mirror did not answer",
+    });
   });
 
   it("fails clearly on a malformed resolve response", async () => {

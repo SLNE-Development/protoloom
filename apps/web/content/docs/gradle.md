@@ -67,7 +67,7 @@ dependencies {
 
 - `url` is the base URL of the server, for example `{{url}}`. Without it, both tasks fail with `No Weaver server URL configured. Set the WEAVER_URL environment variable or weaver.url.`
 - `token` is an API key, sent as `Authorization: Bearer <token>`. It is optional when you only read public repositories. It is never part of a task's inputs, so changing it doesn't invalidate anything.
-- `repositories` is the lookup order for dependencies. `fetchProtos` fails with `weaver.repositories is empty` when you declared remote dependencies but no repository.
+- `repositories` is the lookup order for dependencies. Entries can be hosted, mirror or group repositories: `repositories("proto-all")` searches the members of the group `proto-all` in order. `fetchProtos` fails with `weaver.repositories is empty` when you declared remote dependencies but no repository.
 
 ## The `publishing` block
 

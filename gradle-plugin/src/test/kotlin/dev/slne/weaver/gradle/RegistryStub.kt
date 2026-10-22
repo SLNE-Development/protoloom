@@ -62,6 +62,10 @@ internal class RegistryStub : AutoCloseable {
     val archiveDownloads = AtomicInteger()
     val publishes = CopyOnWriteArrayList<CapturedRequest>()
 
+    /** When set, `/resolve` answers [resolveStatus] with [resolveResponse] instead of the artifacts. */
+    @Volatile var resolveStatus = 200
+    @Volatile var resolveResponse = ""
+
     @Volatile var corruptArchive = false
     @Volatile var publishStatus = 201
     @Volatile var publishResponse = """{"coordinate":"dev.example:b:1.0.0","buildNumber":1,"sha256":"00","redeployed":false}"""
@@ -71,6 +75,10 @@ internal class RegistryStub : AutoCloseable {
             authorizations += exchange.requestHeaders.getFirst("Authorization")
             val request = exchange.requestBody.readBytes().toString(Charsets.UTF_8)
             resolveBodies += request
+            if (resolveStatus != 200) {
+                exchange.respond(resolveStatus, "application/json", resolveResponse.toByteArray())
+                return@createContext
+            }
             val exclude = if (ignoreExclude) {
                 emptySet()
             } else {
