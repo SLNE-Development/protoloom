@@ -242,6 +242,93 @@ describe("proto mirror source", () => {
     expect(up.hits.map((h) => h.url)).toEqual(["/api/v1/repos/up/artifacts/acme/money/1.0.0/archive"]);
   });
 
+  it("a manifest with a malformed sha256 is upstream_unavailable", async () => {
+    const repo = await mirror();
+    for (const bad of [{ sha256: "abc" }, { sha256: ARCHIVE_SHA.toUpperCase() }, { builds: [{ buildNumber: 1, createdAt: CREATED, sha256: "x" }] }]) {
+      up.handler = () => Promise.resolve(Response.json({ ...manifestJson("1.0.0", 1), ...bad }));
+      await expect(source.manifest(repo, release, 0)).rejects.toMatchObject({ code: "upstream_unavailable" });
+    }
+  });
+
+  it("a bearer-auth upstream receives authorization: Bearer <token>", async () => {
+    const repo = await repos.create(admin, {
+      name: "bearer-mirror",
+      format: "proto",
+      kind: "mirror",
+      upstreams: [{ url: `${up.origin}/api/v1/repos/up`, authType: "bearer", secret: "remote-token" }],
+    });
+    expect(await source.node(repo, release, 0)).not.toBeNull();
+    const got = await source.archive(repo, release, 1, 0, "GET");
+    await readAll(got!.body);
+    expect(up.hits.map((h) => h.headers.authorization)).toEqual(["Bearer remote-token", "Bearer remote-token"]);
+  });
+
+  it("manifest of a build asks the upstream with ?build=", async () => {
+    const repo = await mirror();
+    const info = await source.manifest(repo, snapshot, 0, 3);
+    expect(info).toMatchObject({ coordinate: snapshot, buildNumber: 3 });
+    expect(up.hits.map((h) => h.url)).toEqual(["/api/v1/repos/up/artifacts/acme/money/1.0.0-SNAPSHOT?build=3"]);
+    // An upstream answering another build than the one asked for is not a Weaver proto API.
+    await expect(source.manifest(repo, snapshot, 0, 2)).rejects.toMatchObject({ code: "upstream_unavailable" });
+  });
+
+  describe("invalid upstream bodies never stay cached", () => {
+    const cachedMirror = () => mirror({ cache: { enabled: true } });
+
+    it("a non-JSON or schema-invalid body is evicted", async () => {
+      const repo = await cachedMirror();
+      up.handler = () => Promise.resolve(new Response("<html>login</html>", { headers: { "content-type": "text/html" } }));
+      await expect(source.versions(repo, "acme", "money", 0)).rejects.toMatchObject({ code: "upstream_unavailable" });
+      expect(await assets.find(repo.id, "artifacts/acme/money")).toBeNull();
+      up.handler = () => Promise.resolve(Response.json({ versions: "x" }));
+      await expect(source.versions(repo, "acme", "money", 0)).rejects.toMatchObject({ code: "upstream_unavailable" });
+      await engine.drain();
+      expect(await assets.find(repo.id, "artifacts/acme/money")).toBeNull();
+
+      up.handler = cannedApi;
+      expect(await source.versions(repo, "acme", "money", 0)).toHaveLength(2);
+      await engine.drain();
+      expect(await assets.find(repo.id, "artifacts/acme/money")).not.toBeNull();
+    });
+
+    it("a manifest of another coordinate is evicted", async () => {
+      const repo = await cachedMirror();
+      up.handler = () => Promise.resolve(Response.json(manifestJson("2.0.0", 1)));
+      await expect(source.manifest(repo, release, 0)).rejects.toMatchObject({ code: "upstream_unavailable" });
+      await engine.drain();
+      expect(await assets.find(repo.id, "artifacts/acme/money/1.0.0")).toBeNull();
+    });
+
+    it("an archive without x-weaver-sha256 is evicted and upstream_unavailable", async () => {
+      const repo = await cachedMirror();
+      up.handler = () => Promise.resolve(new Response(ARCHIVE, { headers: { "content-type": "application/gzip" } }));
+      await expect(source.archive(repo, release, 1, 0, "GET")).rejects.toMatchObject({ code: "upstream_unavailable" });
+      await engine.drain();
+      expect(await assets.find(repo.id, "artifacts/acme/money/1.0.0/archive?build=1")).toBeNull();
+      // Without caching, the same answer is refused too.
+      const plain = await mirror({}, "plain-mirror");
+      await expect(source.archive(plain, release, 1, 0, "GET")).rejects.toMatchObject({ code: "upstream_unavailable" });
+      await expect(source.archive(plain, release, 1, 0, "HEAD")).rejects.toMatchObject({ code: "upstream_unavailable" });
+    });
+
+    it("an archive whose bytes do not match x-weaver-sha256 is evicted and upstream_unavailable", async () => {
+      const repo = await cachedMirror();
+      const other = createHash("sha256").update("other bytes").digest("hex");
+      up.handler = () =>
+        Promise.resolve(new Response(ARCHIVE, { headers: { "content-type": "application/gzip", "x-weaver-sha256": other } }));
+      await expect(source.archive(repo, release, 1, 0, "GET")).rejects.toMatchObject({ code: "upstream_unavailable" });
+      await engine.drain();
+      expect(await assets.find(repo.id, "artifacts/acme/money/1.0.0/archive?build=1")).toBeNull();
+
+      up.handler = cannedApi;
+      const good = await source.archive(repo, release, 1, 0, "GET");
+      expect(good).toMatchObject({ cache: "miss", sha256: ARCHIVE_SHA });
+      expect(await readAll(good!.body)).toEqual(ARCHIVE);
+      await engine.drain();
+      expect((await assets.find(repo.id, "artifacts/acme/money/1.0.0/archive?build=1"))!.sha256).toBe(ARCHIVE_SHA);
+    });
+  });
+
   it("HEAD archive has no body", async () => {
     const repo = await mirror();
     const got = await source.archive(repo, release, 1, 0, "HEAD");

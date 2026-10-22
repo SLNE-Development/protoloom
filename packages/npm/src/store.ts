@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, count, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, asc, countDistinct, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { RegistryError } from "@weaver/core";
 import { npmPackage, type Db, type Tx } from "@weaver/db";
 import type { Packument } from "./packument.js";
@@ -17,8 +17,13 @@ export interface NpmStore {
   save(tx: DbOrTx, repoId: string, name: string, document: Packument, expectedRev: number | null): Promise<number>;
   /** Deletes the package row. */
   remove(tx: DbOrTx, repoId: string, name: string): Promise<void>;
-  /** Packages of the repositories whose name, description or keywords contain `text`, exact name first, then by name. */
+  /**
+   * Packages of the repositories whose name, description or keywords contain `text`, exact name first, then by name.
+   * A name found in several repositories counts once and comes from the earliest repository in `repoIds`.
+   */
   search(repoIds: string[], text: string, size: number, from: number): Promise<{ total: number; documents: Packument[] }>;
+  /** Which of `names` exist as packages in any of the repositories. */
+  existing(repoIds: string[], names: string[]): Promise<Set<string>>;
 }
 
 /** JSON with object keys sorted at every level, so equal documents serialize equally whatever their key order. */
@@ -104,15 +109,34 @@ export function createNpmStore(db: Db): NpmStore {
           sql`EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(${npmPackage.document}->'keywords') = 'array' THEN ${npmPackage.document}->'keywords' ELSE '[]'::jsonb END) AS k WHERE k ILIKE ${pattern})`,
         ),
       );
-      const [{ total } = { total: 0 }] = await db.select({ total: count() }).from(npmPackage).where(where);
-      const rows = await db
-        .select({ document: npmPackage.document })
+      const [{ total } = { total: 0 }] = await db.select({ total: countDistinct(npmPackage.name) }).from(npmPackage).where(where);
+      const order = sql`array_position(ARRAY[${sql.join(
+        repoIds.map((id) => sql`${id}`),
+        sql`, `,
+      )}]::uuid[], ${npmPackage.repositoryId})`;
+      const first = db
+        .selectDistinctOn([npmPackage.name], { name: npmPackage.name, document: npmPackage.document })
         .from(npmPackage)
         .where(where)
-        .orderBy(sql`CASE WHEN lower(${npmPackage.name}) = lower(${text}) THEN 0 ELSE 1 END`, asc(npmPackage.name))
+        .orderBy(asc(npmPackage.name), order)
+        .as("first");
+      const rows = await db
+        .select({ document: first.document })
+        .from(first)
+        .orderBy(sql`CASE WHEN lower(${first.name}) = lower(${text}) THEN 0 ELSE 1 END`, asc(first.name))
         .limit(size)
         .offset(from);
       return { total, documents: rows.map((r) => r.document as Packument) };
+    },
+
+    async existing(repoIds, names) {
+      if (repoIds.length === 0 || names.length === 0) return new Set();
+      const rows = await db
+        .selectDistinct({ name: npmPackage.name })
+        .from(npmPackage)
+        // One array parameter, so any number of names stays within the protocol's 65,535 bind parameters.
+        .where(and(inArray(npmPackage.repositoryId, repoIds), sql`${npmPackage.name} = ANY(${sql.param(names)}::text[])`));
+      return new Set(rows.map((r) => r.name));
     },
   };
 }

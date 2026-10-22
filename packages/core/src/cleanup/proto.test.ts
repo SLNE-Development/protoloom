@@ -17,9 +17,14 @@ import {
   repository,
 } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
-import { applyCleanup, planCleanup, runAllCleanups, type CleanupCandidate } from "./cleanup.js";
-import type { Coordinate } from "./coordinates.js";
-import { createStoreSetFromEnv, getBuffer, putBuffer, type StoreSet } from "./storage/index.js";
+import { createAssetService } from "../content/assets.js";
+import type { Coordinate } from "../coordinates.js";
+import { deriveSecretKey } from "../crypto.js";
+import { createRepoService } from "../repos/index.js";
+import { createStoreSetFromEnv, getBuffer, putBuffer, type StoreSet } from "../storage/index.js";
+import { protoCleanup } from "./proto.js";
+import { runAllCleanups, runRepoCleanup } from "./runner.js";
+import type { CleanupCandidate, CleanupDeps } from "./types.js";
 
 const DAY = 86_400_000;
 const NOW = new Date("2026-10-21T03:00:00Z");
@@ -39,6 +44,7 @@ describe("cleanup", () => {
   let testDb: Awaited<ReturnType<typeof startTestDb>>;
   let blobDir: string;
   let stores: StoreSet;
+  let deps: CleanupDeps;
 
   const repoIds = new Map<string, string>();
 
@@ -126,13 +132,32 @@ describe("cleanup", () => {
     throw new Error("no session started waiting for an advisory lock");
   }
 
-  const summary = (candidates: CleanupCandidate[]) =>
-    candidates.map((x) => `${x.coordinate.name}:${x.coordinate.version}#${x.buildNumber ?? "all"}`);
+  /** `<name>:<version>#<build|all>` of each candidate, from its `proto:<group>:<name>:<version>#<build|all>` key. */
+  const summary = (candidates: CleanupCandidate[]) => candidates.map((x) => x.key.split(":").slice(2).join(":"));
+
+  /** Runs the proto cleanup the way the runner does: with the repository's enabled policies in createdAt order. */
+  async function runProto(repoName: string, dryRun: boolean): Promise<CleanupCandidate[]> {
+    const repo = await deps.repos.get(repoName);
+    const policies = await testDb.db
+      .select()
+      .from(cleanupPolicy)
+      .where(and(eq(cleanupPolicy.repositoryId, repo!.id), eq(cleanupPolicy.enabled, true)))
+      .orderBy(asc(cleanupPolicy.createdAt), asc(cleanupPolicy.id));
+    return protoCleanup.run(deps, repo!, policies, NOW, { dryRun });
+  }
+  const plan = (repoName: string) => runProto(repoName, true);
+  const apply = (repoName: string) => runProto(repoName, false);
 
   beforeAll(async () => {
     testDb = await startTestDb();
     blobDir = await mkdtemp(join(tmpdir(), "weaver-cleanup-"));
     stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir });
+    deps = {
+      db: testDb.db,
+      stores,
+      assets: createAssetService({ db: testDb.db, stores }),
+      repos: createRepoService({ db: testDb.db, stores, secretKey: deriveSecretKey("proto-cleanup-test-secret") }),
+    };
   }, 120_000);
 
   afterAll(async () => {
@@ -152,17 +177,21 @@ describe("cleanup", () => {
       await seed("snapshots", coord("acme", "money", "1.0.0-SNAPSHOT"), { builds: 5 });
       await addPolicy("snapshots", { kind: "keep_last_snapshot_builds", value: 2 });
 
-      const plan = await planCleanup(testDb.db, "snapshots", NOW);
-      expect(summary(plan)).toEqual(["money:1.0.0-SNAPSHOT#1", "money:1.0.0-SNAPSHOT#2", "money:1.0.0-SNAPSHOT#3"]);
-      expect(plan[0]).toMatchObject({ repository: "snapshots", coordinate: coord("acme", "money", "1.0.0-SNAPSHOT") });
-      expect(plan[0]!.reason).toMatch(/keep last 2/);
+      const planned = await plan("snapshots");
+      expect(summary(planned)).toEqual(["money:1.0.0-SNAPSHOT#1", "money:1.0.0-SNAPSHOT#2", "money:1.0.0-SNAPSHOT#3"]);
+      expect(planned[0]).toMatchObject({
+        repository: "snapshots",
+        key: "proto:acme:money:1.0.0-SNAPSHOT#1",
+        label: "acme:money:1.0.0-SNAPSHOT build 1",
+      });
+      expect(planned[0]!.reason).toMatch(/keep last 2/);
     });
 
     it("treats a value below 1 as 1, so the newest build always stays", async () => {
       await seed("snapshots", coord("acme", "money", "1.0.0-SNAPSHOT"), { builds: 3 });
       await addPolicy("snapshots", { kind: "keep_last_snapshot_builds", value: 0 });
 
-      expect(summary(await planCleanup(testDb.db, "snapshots", NOW))).toEqual([
+      expect(summary(await plan("snapshots"))).toEqual([
         "money:1.0.0-SNAPSHOT#1",
         "money:1.0.0-SNAPSHOT#2",
       ]);
@@ -171,7 +200,7 @@ describe("cleanup", () => {
     it("never touches releases", async () => {
       await seed("snapshots", coord("acme", "money", "1.0.0"));
       await addPolicy("snapshots", { kind: "keep_last_snapshot_builds", value: 1 });
-      expect(await planCleanup(testDb.db, "snapshots", NOW)).toEqual([]);
+      expect(await plan("snapshots")).toEqual([]);
     });
   });
 
@@ -182,7 +211,9 @@ describe("cleanup", () => {
       await seed("snapshots", coord("acme", "ancient", "1.0.0"), { updatedAt: daysAgo(400) });
       await addPolicy("snapshots", { kind: "delete_stale_snapshots", value: 30 });
 
-      expect(summary(await planCleanup(testDb.db, "snapshots", NOW))).toEqual(["old:1.0.0-SNAPSHOT#all"]);
+      const planned = await plan("snapshots");
+      expect(summary(planned)).toEqual(["old:1.0.0-SNAPSHOT#all"]);
+      expect(planned[0]).toMatchObject({ key: "proto:acme:old:1.0.0-SNAPSHOT#all", label: "acme:old:1.0.0-SNAPSHOT" });
     });
   });
 
@@ -200,7 +231,7 @@ describe("cleanup", () => {
 
     it("skips releases unless the rule includes them, and falls back to createdAt when never downloaded", async () => {
       await addPolicy("snapshots", { kind: "delete_not_downloaded", value: 90 });
-      expect(summary(await planCleanup(testDb.db, "snapshots", NOW))).toEqual([
+      expect(summary(await plan("snapshots"))).toEqual([
         "never:1.0.0-SNAPSHOT#all",
         "unused:1.0.0-SNAPSHOT#all",
       ]);
@@ -208,7 +239,7 @@ describe("cleanup", () => {
 
     it("includes releases when the rule says so", async () => {
       await addPolicy("snapshots", { kind: "delete_not_downloaded", value: 90, includeReleases: true });
-      expect(summary(await planCleanup(testDb.db, "snapshots", NOW))).toEqual([
+      expect(summary(await plan("snapshots"))).toEqual([
         "never:1.0.0-SNAPSHOT#all",
         "release:1.0.0#all",
         "unused:1.0.0-SNAPSHOT#all",
@@ -222,7 +253,7 @@ describe("cleanup", () => {
     await seed("snapshots", coord("dev.surfboard", "c", "1.0.0-SNAPSHOT"), { updatedAt: daysAgo(60) });
     await addPolicy("snapshots", { kind: "delete_stale_snapshots", value: 30, groupPrefix: "dev.surf" });
 
-    expect(summary(await planCleanup(testDb.db, "snapshots", NOW))).toEqual(["a:1.0.0-SNAPSHOT#all", "b:1.0.0-SNAPSHOT#all"]);
+    expect(summary(await plan("snapshots"))).toEqual(["a:1.0.0-SNAPSHOT#all", "b:1.0.0-SNAPSHOT#all"]);
   });
 
   it("plans nothing for disabled policies", async () => {
@@ -230,7 +261,7 @@ describe("cleanup", () => {
     await addPolicy("snapshots", { kind: "keep_last_snapshot_builds", value: 1, enabled: false });
     await addPolicy("snapshots", { kind: "delete_stale_snapshots", value: 30, enabled: false });
 
-    expect(await planCleanup(testDb.db, "snapshots", NOW)).toEqual([]);
+    expect(await plan("snapshots")).toEqual([]);
   });
 
   it("collapses build candidates into a whole-version candidate of the same version", async () => {
@@ -238,7 +269,7 @@ describe("cleanup", () => {
     await addPolicy("snapshots", { kind: "keep_last_snapshot_builds", value: 1 });
     await addPolicy("snapshots", { kind: "delete_stale_snapshots", value: 30 });
 
-    expect(summary(await planCleanup(testDb.db, "snapshots", NOW))).toEqual(["money:1.0.0-SNAPSHOT#all"]);
+    expect(summary(await plan("snapshots"))).toEqual(["money:1.0.0-SNAPSHOT#all"]);
   });
 
   it("excludes a candidate that a retained version in any repository depends on", async () => {
@@ -249,7 +280,7 @@ describe("cleanup", () => {
     await seed("other", coord("acme", "order", "1.0.0-SNAPSHOT"), { updatedAt: daysAgo(60), dependsOn: [money] });
     await addPolicy("snapshots", { kind: "delete_stale_snapshots", value: 30 });
 
-    expect(summary(await planCleanup(testDb.db, "snapshots", NOW))).toEqual(["unused:1.0.0-SNAPSHOT#all"]);
+    expect(summary(await plan("snapshots"))).toEqual(["unused:1.0.0-SNAPSHOT#all"]);
   });
 
   it("keeps a dependency chain whose head is retained, and deletes a chain that is removed completely", async () => {
@@ -265,21 +296,23 @@ describe("cleanup", () => {
     await seed("snapshots", coord("acme", "leaf", "1.0.0-SNAPSHOT"), { updatedAt: daysAgo(60), dependsOn: [root] });
     await addPolicy("snapshots", { kind: "delete_stale_snapshots", value: 30 });
 
-    expect(summary(await planCleanup(testDb.db, "snapshots", NOW))).toEqual([
+    expect(summary(await plan("snapshots"))).toEqual([
       "leaf:1.0.0-SNAPSHOT#all",
       "root:1.0.0-SNAPSHOT#all",
     ]);
-    const applied = await applyCleanup(testDb.db, stores, "snapshots", NOW);
+    const applied = await apply("snapshots");
     expect(summary(applied)).toEqual(["leaf:1.0.0-SNAPSHOT#all", "root:1.0.0-SNAPSHOT#all"]);
     expect(await buildNumbers("snapshots", root)).toEqual([]);
     expect(await buildNumbers("snapshots", base)).toEqual([1]);
   });
 
   it("throws not_found for an unknown repository", async () => {
-    await expect(planCleanup(testDb.db, "nope", NOW)).rejects.toMatchObject({ code: "not_found" });
+    await expect(runRepoCleanup(deps, { proto: protoCleanup }, "nope", NOW, { dryRun: true })).rejects.toMatchObject({
+      code: "not_found",
+    });
   });
 
-  describe("applyCleanup", () => {
+  describe("applying", () => {
     it("deletes rows and blobs and audits each deletion as the system", async () => {
       const money = coord("acme", "money", "1.0.0-SNAPSHOT");
       const stale = coord("acme", "stale", "1.0.0-SNAPSHOT");
@@ -288,7 +321,7 @@ describe("cleanup", () => {
       await addPolicy("snapshots", { kind: "keep_last_snapshot_builds", value: 2 });
       await addPolicy("snapshots", { kind: "delete_stale_snapshots", value: 30 });
 
-      const applied = await applyCleanup(testDb.db, stores, "snapshots", NOW);
+      const applied = await apply("snapshots");
       expect(summary(applied)).toEqual([
         "money:1.0.0-SNAPSHOT#1",
         "money:1.0.0-SNAPSHOT#2",
@@ -316,7 +349,7 @@ describe("cleanup", () => {
         { actorType: "system", action: "cleanup.delete", target: "snapshots/acme:stale:1.0.0-SNAPSHOT" },
       ]);
 
-      expect(await applyCleanup(testDb.db, stores, "snapshots", NOW)).toEqual([]);
+      expect(await apply("snapshots")).toEqual([]);
     });
 
     it("records a tombstone for each release it deletes, and none for snapshots", async () => {
@@ -325,7 +358,7 @@ describe("cleanup", () => {
       await seed("snapshots", coord("acme", "unused", "1.0.0-SNAPSHOT"), { lastDownloadedAt: daysAgo(120) });
       await addPolicy("snapshots", { kind: "delete_not_downloaded", value: 90, includeReleases: true });
 
-      expect(summary(await applyCleanup(testDb.db, stores, "snapshots", NOW))).toEqual([
+      expect(summary(await apply("snapshots"))).toEqual([
         "release:1.0.0#all",
         "unused:1.0.0-SNAPSHOT#all",
       ]);
@@ -351,7 +384,7 @@ describe("cleanup", () => {
       const holder = await testDb.db.$client.connect();
       try {
         await holder.query("select pg_advisory_lock(hashtext($1))", ["snapshots:acme:money:1.0.0-SNAPSHOT"]);
-        const applying = applyCleanup(testDb.db, stores, "snapshots", NOW);
+        const applying = apply("snapshots");
         await waitForLockWaiter();
         await testDb.db.update(version).set({ updatedAt: NOW });
         await holder.query("select pg_advisory_unlock(hashtext($1))", ["snapshots:acme:money:1.0.0-SNAPSHOT"]);
@@ -370,7 +403,7 @@ describe("cleanup", () => {
       const holder = await testDb.db.$client.connect();
       try {
         await holder.query("select pg_advisory_lock(hashtext($1))", ["snapshots:acme:money:1.0.0-SNAPSHOT"]);
-        const applying = applyCleanup(testDb.db, stores, "snapshots", NOW);
+        const applying = apply("snapshots");
         await waitForLockWaiter();
         await seed("other", coord("acme", "order", "1.0.0"), { dependsOn: [money] });
         await holder.query("select pg_advisory_unlock(hashtext($1))", ["snapshots:acme:money:1.0.0-SNAPSHOT"]);
@@ -389,7 +422,7 @@ describe("cleanup", () => {
       await addPolicy("snapshots", { kind: "keep_last_snapshot_builds", value: 1 });
       await addPolicy("other", { kind: "keep_last_snapshot_builds", value: 1 });
 
-      expect(await runAllCleanups(testDb.db, stores, NOW)).toBe(3);
+      expect(await runAllCleanups(deps, { proto: protoCleanup }, NOW)).toBe(3);
       expect(await buildNumbers("snapshots", coord("acme", "money", "1.0.0-SNAPSHOT"))).toEqual([3]);
       expect(await buildNumbers("other", coord("acme", "order", "1.0.0-SNAPSHOT"))).toEqual([2]);
     });
@@ -401,13 +434,13 @@ describe("cleanup", () => {
       const holder = await testDb.db.$client.connect();
       try {
         await holder.query("select pg_advisory_lock(727001)");
-        expect(await runAllCleanups(testDb.db, stores, NOW)).toBe(0);
+        expect(await runAllCleanups(deps, { proto: protoCleanup }, NOW)).toBe(0);
         expect(await buildNumbers("snapshots", coord("acme", "money", "1.0.0-SNAPSHOT"))).toEqual([1, 2, 3]);
       } finally {
         await holder.query("select pg_advisory_unlock(727001)");
         holder.release();
       }
-      expect(await runAllCleanups(testDb.db, stores, NOW)).toBe(2);
+      expect(await runAllCleanups(deps, { proto: protoCleanup }, NOW)).toBe(2);
     });
 
     it("destroys the lock connection when unlocking fails, so the session lock cannot leak", async () => {
@@ -433,7 +466,7 @@ describe("cleanup", () => {
       }) as typeof pool.connect);
       const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       try {
-        expect(await runAllCleanups(testDb.db, stores, NOW)).toBe(1);
+        expect(await runAllCleanups(deps, { proto: protoCleanup }, NOW)).toBe(1);
         expect(warn).toHaveBeenCalledOnce();
       } finally {
         spy.mockRestore();
@@ -443,7 +476,7 @@ describe("cleanup", () => {
       // The destroyed connection took its session lock with it: the next run gets the lock.
       await seed("other", coord("acme", "order", "1.0.0-SNAPSHOT"), { builds: 2 });
       await addPolicy("other", { kind: "keep_last_snapshot_builds", value: 1 });
-      expect(await runAllCleanups(testDb.db, stores, NOW)).toBe(1);
+      expect(await runAllCleanups(deps, { proto: protoCleanup }, NOW)).toBe(1);
     });
   });
 });

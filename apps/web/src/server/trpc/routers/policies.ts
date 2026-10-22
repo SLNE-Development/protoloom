@@ -1,16 +1,17 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { isValidGroup, planCleanup, recordAudit } from "@weaver/core";
+import { createAssetService, isValidGroup, recordAudit, runRepoCleanup, type CleanupKind } from "@weaver/core";
 import { cleanupPolicy } from "@weaver/db";
 import { enqueueCleanup, getJobState, type CleanupJobStatus } from "@weaver/jobs";
+import { cleanupRegistry } from "../../cleanups";
 import { adminProcedure, router, type TrpcContext } from "../init";
-import { audited, coordinateText, notFound, repositoryName, requireRepository } from "../helpers";
+import { audited, notFound, repositoryName, requireRepository } from "../helpers";
 
 /** A cleanup rule of a repository. */
 export interface CleanupPolicy {
   id: string;
-  kind: "keep_last_snapshot_builds" | "delete_stale_snapshots" | "delete_not_downloaded";
+  kind: CleanupKind;
   /** N builds to keep, or X days, depending on `kind`. */
   value: number;
   includeReleases: boolean;
@@ -19,11 +20,11 @@ export interface CleanupPolicy {
   createdAt: Date;
 }
 
-/** What a cleanup run would delete: one snapshot build, or a whole version when `buildNumber` is null. */
+/** What a cleanup run would delete: `key` is stable per item, `label` names it for display. */
 export interface CleanupPreviewItem {
   repository: string;
-  coordinate: string;
-  buildNumber: number | null;
+  key: string;
+  label: string;
   reason: string;
 }
 
@@ -68,12 +69,11 @@ function requireQueue(ctx: TrpcContext) {
 export const policiesRouter = router({
   list: adminProcedure.input(z.object({ repository: repositoryName })).query(async ({ ctx, input }): Promise<CleanupPolicy[]> => {
     const repo = await requireRepository(ctx.db, input.repository, PROTO_ONLY);
-    // The row type also lists the npm/docker kinds; the API stays proto-only until those formats get policies.
-    return (await ctx.db
+    return ctx.db
       .select(policyColumns)
       .from(cleanupPolicy)
       .where(eq(cleanupPolicy.repositoryId, repo.id))
-      .orderBy(asc(cleanupPolicy.createdAt), asc(cleanupPolicy.id))) as CleanupPolicy[];
+      .orderBy(asc(cleanupPolicy.createdAt), asc(cleanupPolicy.id));
   }),
 
   /** Creates a policy, or updates the one with `id`; `NOT_FOUND` when `id` is not a policy of the repository. */
@@ -101,7 +101,7 @@ export const policiesRouter = router({
               .insert(cleanupPolicy)
               .values({ ...fields, kind, value, repositoryId: repo.id })
               .returning(policyColumns)
-          )[0]! as CleanupPolicy;
+          )[0]!;
         }
         const matches = and(eq(cleanupPolicy.id, id), eq(cleanupPolicy.repositoryId, repo.id));
         const [updated] =
@@ -109,7 +109,7 @@ export const policiesRouter = router({
             ? await tx.select(policyColumns).from(cleanupPolicy).where(matches)
             : await tx.update(cleanupPolicy).set(fields).where(matches).returning(policyColumns);
         if (!updated) throw notFound(`Cleanup policy ${id} was not found in ${repoName}`);
-        return updated as CleanupPolicy;
+        return updated;
       },
     );
   }),
@@ -127,8 +127,8 @@ export const policiesRouter = router({
     .input(z.object({ repository: repositoryName }))
     .query(async ({ ctx, input }): Promise<CleanupPreviewItem[]> => {
       await requireRepository(ctx.db, input.repository, PROTO_ONLY);
-      const candidates = await planCleanup(ctx.db, input.repository, new Date());
-      return candidates.map((c) => ({ ...c, coordinate: coordinateText(c.coordinate) }));
+      const deps = { db: ctx.db, stores: ctx.stores, repos: ctx.repos, assets: createAssetService({ db: ctx.db, stores: ctx.stores }) };
+      return runRepoCleanup(deps, cleanupRegistry(), input.repository, new Date(), { dryRun: true });
     }),
 
   /**

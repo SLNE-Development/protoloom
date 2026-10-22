@@ -66,7 +66,7 @@ Gradle couldn't find a URL. Set `WEAVER_URL={{url}}`, or `weaver { url = "…" }
 
 ### Mirror loop detected
 
-Mirrors forward requests to each other and the hop count (`x-weaver-hops`) passed 4. Check the upstream URLs for a cycle, such as A mirroring B while B mirrors A, and point one of them at a hosted repository.
+Mirrors forward requests to each other and the hop count (`x-weaver-hops`) passed 4. Weaver then answers `404 not_found` with the message `Mirror loop detected`, so clients report the artifact as missing. Check the upstream URLs for a cycle, such as A mirroring B while B mirrors A, and point one of them at a hosted repository.
 
 ### upstream_unavailable
 

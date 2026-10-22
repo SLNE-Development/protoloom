@@ -18,6 +18,7 @@ import {
   type VersionInfo,
   type VersionSummary,
 } from "@weaver/core";
+import { streamOf } from "./bytes.js";
 import type { ProtoMirrorSource } from "./mirror-source.js";
 
 /** What a proto archive read returns, for any repository kind. */
@@ -98,16 +99,6 @@ function memoize<T>(load: (key: string) => Promise<T>): (key: string) => Promise
   };
 }
 
-/** A whole buffer as a single-chunk byte stream. */
-function streamOf(data: Buffer): ReadableStream<Uint8Array> {
-  return new ReadableStream({
-    start(controller) {
-      controller.enqueue(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
-      controller.close();
-    },
-  });
-}
-
 /**
  * Creates the kind-aware proto service. Entries a principal cannot use (unknown, not
  * `format = "proto"`, or unreadable for the coordinate's group) are skipped by `resolve` and
@@ -165,16 +156,35 @@ export function createProtoService(deps: ProtoServiceDeps): ProtoService {
       const getRepo = memoize((name) => repos.get(name));
       const getMembers = memoize((groupId) => repos.members(groupId));
       const names = [...new Set(repositories)];
+      // A coordinate only a failing mirror could have had counts as missing, so a version the graph
+      // supersedes later does not fail the resolution; if it stays missing, the failure is reported.
+      const unavailable = new Map<string, RegistryError>();
       const lookup: Lookup = async (c) => {
         const entries = (await Promise.all(names.map(getRepo))).filter(
           (r): r is Repo => r !== null && r.format === "proto" && canAccess(p, r, c.group, "read"),
         );
-        return firstOf(entries, async (entry) => {
-          const node = await firstOf(await sourcesOf(entry, getMembers), (repo) => nodeIn(repo, c, hops));
-          return node && { ...node, repository: entry.name };
-        });
+        try {
+          return await firstOf(entries, async (entry) => {
+            const node = await firstOf(await sourcesOf(entry, getMembers), (repo) => nodeIn(repo, c, hops));
+            return node && { ...node, repository: entry.name };
+          });
+        } catch (error) {
+          if (!isUnavailable(error)) throw error;
+          unavailable.set(formatCoordinate(c), error);
+          return null;
+        }
       };
-      return resolveGraph(roots, lookup, options);
+      try {
+        return await resolveGraph(roots, lookup, options);
+      } catch (error) {
+        if (error instanceof RegistryError && error.code === "not_found") {
+          const path = (error.details as { path?: unknown } | undefined)?.path;
+          const missing = Array.isArray(path) ? (path.at(-1) as unknown) : undefined;
+          const failure = typeof missing === "string" ? unavailable.get(missing) : undefined;
+          if (failure) throw failure;
+        }
+        throw error;
+      }
     },
 
     async listVersions(p, repository, group, name, hops) {
