@@ -242,7 +242,7 @@
       "name": "hub",
       "format": "docker",
       "kind": "mirror",
-      "visibility": "private",
+      "visibility": "public",
       "dockerRoot": true,
       "config": {
         "cache": {

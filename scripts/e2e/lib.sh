@@ -37,9 +37,12 @@ fresh_dir() {
 # Requests <method> <url> with curl (extra curl args allowed) and asserts the status code.
 # The body lands in $WORK/last.body, the headers in $WORK/last.headers.
 expect_status() {
-  local want="$1" method="$2" url="$3" got
+  local want="$1" method="$2" url="$3" got verb
   shift 3
-  got="$(curl -sS -o "$WORK/last.body" -D "$WORK/last.headers" -w '%{http_code}' -X "$method" "$@" "$url")" ||
+  # `-X HEAD` would make curl wait for a body the server never sends; --head does not.
+  verb=(-X "$method")
+  [ "$method" = "HEAD" ] && verb=(--head)
+  got="$(curl -sS -o "$WORK/last.body" -D "$WORK/last.headers" -w '%{http_code}' "${verb[@]}" "$@" "$url")" ||
     fail "$method $url: curl failed"
   [ "$got" = "$want" ] || fail "$method $url: expected $want, got $got: $(head -c 600 "$WORK/last.body")"
 }
