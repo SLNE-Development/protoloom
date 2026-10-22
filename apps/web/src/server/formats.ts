@@ -1,3 +1,4 @@
+import { createDockerHandler } from "@weaver/docker";
 import { getSettings, recordUsage, type FormatFactory, type FormatHandler } from "@weaver/core";
 import { env } from "@/env";
 import { handle } from "./http";
@@ -14,7 +15,7 @@ export type FormatMount = "maven" | "npm" | "docker";
 export const FACTORIES: Record<FormatMount, FormatFactory | undefined> = {
   maven: undefined,
   npm: undefined,
-  docker: undefined,
+  docker: createDockerHandler,
 };
 
 /** The 501 answer of a mount whose format is not installed. */

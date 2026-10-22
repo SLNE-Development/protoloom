@@ -35,5 +35,14 @@ describe("parseRoute", () => {
   });
   it("returns null for an empty reference", () => expect(parseRoute("a/manifests/")).toBeNull());
   it("returns null for an invalid tag", () => expect(parseRoute("a/manifests/-bad")).toBeNull());
+  it("returns null for a trailing slash on a manifest path", () => expect(parseRoute("a/manifests/latest/")).toBeNull());
+  it("returns null for a 129-char tag", () => expect(parseRoute(`a/manifests/${"t".repeat(129)}`)).toBeNull());
+  it("accepts a 128-char tag", () => expect(parseRoute(`a/manifests/${"t".repeat(128)}`)).not.toBeNull());
+  it("parses a sha512 manifest reference", () => {
+    const ref = `sha512:${"b".repeat(128)}`;
+    expect(parseRoute(`a/manifests/${ref}`)).toEqual({ kind: "manifest", name: "a", reference: ref });
+  });
+  it("starts an upload without a trailing slash", () =>
+    expect(parseRoute("hosted/a/blobs/uploads")).toEqual({ kind: "upload-start", name: "hosted/a" }));
   it("returns null for unknown paths", () => expect(parseRoute("nothing/here")).toBeNull());
 });
