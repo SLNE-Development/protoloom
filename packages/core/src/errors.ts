@@ -3,6 +3,7 @@ export type ErrorCode =
   | "unauthorized"
   | "forbidden"
   | "not_found"
+  | "method_not_allowed"
   | "immutable"
   | "has_dependents"
   | "payload_too_large"
@@ -14,6 +15,7 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   unauthorized: 401,
   forbidden: 403,
   not_found: 404,
+  method_not_allowed: 405,
   immutable: 409,
   has_dependents: 409,
   payload_too_large: 413,

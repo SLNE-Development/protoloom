@@ -133,16 +133,17 @@ beforeAll(async () => {
   auth = createAuth(db, authEnv);
   blobDir = await mkdtemp(join(tmpdir(), "weaver-api-"));
   const stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir });
+  const repos = createRepoService({ db, stores, secretKey: deriveSecretKey(authEnv.BETTER_AUTH_SECRET) });
   holder.ctx = {
     db,
     stores,
     auth,
-    registry: createRegistry({ db, stores }),
+    registry: createRegistry({ db, stores, repos }),
     // Not used by the artifact routes under test.
     assets: undefined as unknown as ServerContext["assets"],
     mirror: undefined as unknown as ServerContext["mirror"],
     secretKey: deriveSecretKey(authEnv.BETTER_AUTH_SECRET),
-    repos: createRepoService({ db, stores, secretKey: deriveSecretKey(authEnv.BETTER_AUTH_SECRET) }),
+    repos,
   };
   keys.maintainer = await createKey("maintainer", [
     { repository: "releases", access: "write" },

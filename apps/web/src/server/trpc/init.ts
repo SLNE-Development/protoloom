@@ -74,6 +74,7 @@ const TRPC_CODE_BY_REGISTRY_CODE: Record<ErrorCode, TRPC_ERROR_CODE_KEY> = {
   unauthorized: "UNAUTHORIZED",
   forbidden: "FORBIDDEN",
   not_found: "NOT_FOUND",
+  method_not_allowed: "METHOD_NOT_SUPPORTED",
   immutable: "CONFLICT",
   has_dependents: "CONFLICT",
   payload_too_large: "PAYLOAD_TOO_LARGE",

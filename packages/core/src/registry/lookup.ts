@@ -2,9 +2,9 @@ import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
 import { protoArtifact, protoBuild, protoBuildFile, protoDependency, protoVersion, repository, type Db, type Tx } from "@weaver/db";
 import type { ProtoFile } from "../archive.js";
 import { formatCoordinate, type Coordinate } from "../coordinates.js";
-import { RegistryError } from "../errors.js";
-import { canAccess, type Principal } from "../permissions.js";
+import { canAccess, canReadThroughGroup, type Principal } from "../permissions.js";
 import { readRepositoryConfig, type ProtoHostedConfig } from "../repos/config.js";
+import type { Repo, RepoService } from "../repos/service.js";
 import type { Lookup, ResolvedNode } from "../resolution.js";
 import type { StoreId, StoreSet } from "../storage/index.js";
 import type { validateProtos } from "../validation.js";
@@ -14,6 +14,8 @@ export interface RegistryContext {
   db: Db;
   /** Proto archives are written to `stores.primary` and read from the store their build names. */
   stores: StoreSet;
+  /** Loads repositories, their groups and group members. */
+  repos: RepoService;
   validate: typeof validateProtos;
 }
 
@@ -31,21 +33,9 @@ export interface BlobRef {
   storageKey: string;
 }
 
-/**
- * The settings of a hosted proto repository, read from `repo.config` with defaults filled in.
- * Mirrors and groups accept no publishes; `invalid_request` for them.
- */
-export function hostedProtoConfig(repo: Pick<RepositoryRow, "name" | "kind" | "config">): ProtoHostedConfig {
-  if (repo.kind !== "hosted") {
-    throw new RegistryError("invalid_request", `Repository ${repo.name} is a ${repo.kind}; publish to a hosted repository`);
-  }
-  return readRepositoryConfig({ name: repo.name, format: "proto", kind: "hosted", config: repo.config });
-}
-
-/** The `resolutionPriority` of a proto repository; mirrors and groups have none and rank at the default 100. */
-function resolutionPriority(repo: RepositoryRow): number {
-  if (repo.kind !== "hosted") return 100;
-  return readRepositoryConfig({ name: repo.name, format: "proto", kind: "hosted", config: repo.config }).resolutionPriority;
+/** The settings of a hosted proto repository; the caller has checked `repo.kind === "hosted"`. */
+export function hostedProtoConfig(repo: Repo): ProtoHostedConfig {
+  return repo.config as ProtoHostedConfig;
 }
 
 /**
@@ -66,7 +56,7 @@ export async function deleteBlobLogged(stores: StoreSet, blob: BlobRef): Promise
   }
 }
 
-/** Loads a proto repository by name; null when no proto repository has that name. */
+/** Loads a proto repository row by name; null when no proto repository has that name. */
 export async function findRepository(db: Queryable, name: string): Promise<RepositoryRow | null> {
   const [row] = await db
     .select()
@@ -75,33 +65,72 @@ export async function findRepository(db: Queryable, name: string): Promise<Repos
   return row ?? null;
 }
 
-/** Loads the named proto repositories in the given order, skipping unknown names and duplicates. */
-export async function findRepositories(db: Queryable, names: string[]): Promise<RepositoryRow[]> {
-  const unique = [...new Set(names)];
-  if (unique.length === 0) return [];
-  const rows = await db
-    .select()
-    .from(repository)
-    .where(and(inArray(repository.name, unique), eq(repository.format, "proto")));
-  const byName = new Map(rows.map((r) => [r.name, r]));
-  return unique.flatMap((n) => byName.get(n) ?? []);
+/** A hosted proto repository row as a {@link Repo}, its config read leniently. */
+function hostedRepo(row: RepositoryRow): Repo {
+  return {
+    id: row.id,
+    name: row.name,
+    format: row.format,
+    kind: row.kind,
+    description: row.description,
+    visibility: row.visibility,
+    dockerRoot: row.dockerRoot,
+    config: readRepositoryConfig(row),
+  };
 }
 
 /**
- * Repositories consulted when resolving the dependencies of a publish: the target repository
- * first, then every other proto repository by ascending `resolutionPriority`, then name. A lower
- * `resolutionPriority` wins: a dependency found in a priority-5 repository is used over the same
- * coordinate in a priority-10 repository.
+ * Whether the principal may read `repo` for at least one proto group by its own permissions: a
+ * public repository, a user, or a key with an entry for it (whose group prefix the lookup then
+ * checks per coordinate).
  */
-export async function publishRepositoryOrder(db: Queryable, target: RepositoryRow): Promise<RepositoryRow[]> {
-  const others = await db
+function mayReadSomeGroup(p: Principal, repo: Repo): boolean {
+  if (canAccess(p, repo, "", "read")) return true;
+  return p.kind === "apikey" && p.permissions.some((entry) => entry.repositoryId === repo.id);
+}
+
+/** The repositories a publish resolves its dependencies in, and which of them the publisher reads through a group. */
+export interface PublishSources {
+  /** The target first, then the other readable hosted proto repositories (see {@link publishRepositoryOrder}). */
+  repositories: Repo[];
+  /** Ids of the repositories readable through a group the publisher can read; read without further checks. */
+  groupGranted: Set<string>;
+}
+
+/**
+ * The repositories and group grants behind {@link publishRepositoryOrder}. A hosted repository is
+ * kept when the publisher may read it directly (for some group) or through a group containing it
+ * that the publisher can read; groups add access, not order.
+ */
+export async function publishSources(db: Queryable, repos: RepoService, p: Principal, target: Repo): Promise<PublishSources> {
+  const rows = await db
     .select()
     .from(repository)
-    .where(and(ne(repository.id, target.id), eq(repository.format, "proto")))
+    .where(and(eq(repository.format, "proto"), eq(repository.kind, "hosted"), ne(repository.id, target.id)))
     .orderBy(asc(repository.name));
-  // A stable sort keeps the database's name order within equal priorities.
-  others.sort((a, b) => resolutionPriority(a) - resolutionPriority(b));
-  return [target, ...others];
+  // A stable sort keeps the name order within equal priorities. Sorting the leniently read config
+  // (instead of casting the JSON in SQL) also ranks a damaged stored value at the default.
+  const others = rows.map(hostedRepo).sort((a, b) => hostedProtoConfig(a).resolutionPriority - hostedProtoConfig(b).resolutionPriority);
+
+  const groupGranted = new Set<string>();
+  const repositories: Repo[] = [];
+  for (const repo of [target, ...others]) {
+    const groups = await repos.groupsContaining(repo.id);
+    if (groups.some((g) => canReadThroughGroup(p, g))) groupGranted.add(repo.id);
+    if (repo === target || groupGranted.has(repo.id) || mayReadSomeGroup(p, repo)) repositories.push(repo);
+  }
+  return { repositories, groupGranted };
+}
+
+/**
+ * Hosted proto repositories consulted for a publish's dependencies, in order: the target first,
+ * then every other hosted proto repository the publisher can read (directly or through a readable
+ * group) by ascending `resolutionPriority`, then name. A lower `resolutionPriority` wins: a
+ * dependency found in a priority-5 repository is used over the same coordinate in a priority-10
+ * repository. Mirrors and groups are never consulted.
+ */
+export async function publishRepositoryOrder(db: Queryable, repos: RepoService, p: Principal, target: Repo): Promise<Repo[]> {
+  return (await publishSources(db, repos, p, target)).repositories;
 }
 
 /**
@@ -156,6 +185,17 @@ export async function loadFiles(db: Queryable, buildIds: string[]): Promise<Map<
   return out;
 }
 
+/** The resolved node of build `found` of `c` in `repo`. */
+export async function nodeOf(db: Queryable, repo: Pick<Repo, "name">, c: Coordinate, found: BuildRow): Promise<ResolvedNode> {
+  return {
+    coordinate: { group: c.group, name: c.name, version: c.version },
+    repository: repo.name,
+    buildNumber: found.buildNumber,
+    sha256: found.sha256,
+    dependencies: await loadDependencies(db, found.id),
+  };
+}
+
 /** A {@link Lookup} plus the build id behind every coordinate it found, keyed by `group:name:version`. */
 export interface RegistryLookup {
   lookup: Lookup;
@@ -163,26 +203,25 @@ export interface RegistryLookup {
 }
 
 /**
- * Builds a {@link Lookup} over `repositories` in order for a principal. Repositories the principal
- * can't read for the coordinate's group are skipped, so hidden artifacts look exactly like missing
- * ones. Snapshot versions resolve to their newest build.
+ * Builds a {@link Lookup} over `repositories` in order for a principal. Repositories in
+ * `groupGranted` (read through a group) are read without further checks; the others are skipped
+ * when the principal can't read them for the coordinate's group, so hidden artifacts look exactly
+ * like missing ones. Snapshot versions resolve to their newest build.
  */
-export function createLookup(db: Queryable, p: Principal, repositories: RepositoryRow[]): RegistryLookup {
+export function createLookup(
+  db: Queryable,
+  p: Principal,
+  repositories: Repo[],
+  groupGranted: ReadonlySet<string> = new Set(),
+): RegistryLookup {
   const buildIds = new Map<string, string>();
   const lookup: Lookup = async (c) => {
     for (const repo of repositories) {
-      if (!canAccess(p, repo, c.group, "read")) continue;
+      if (!groupGranted.has(repo.id) && !canAccess(p, repo, c.group, "read")) continue;
       const found = await findLatestBuild(db, repo.id, c);
       if (!found) continue;
       buildIds.set(formatCoordinate(c), found.id);
-      const node: ResolvedNode = {
-        coordinate: { group: c.group, name: c.name, version: c.version },
-        repository: repo.name,
-        buildNumber: found.buildNumber,
-        sha256: found.sha256,
-        dependencies: await loadDependencies(db, found.id),
-      };
-      return node;
+      return nodeOf(db, repo, c, found);
     }
     return null;
   };
