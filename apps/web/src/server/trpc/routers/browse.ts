@@ -15,20 +15,6 @@ import {
   type RepositoryRow,
 } from "../helpers";
 
-/** Most matches `browse.search` returns. */
-export const SEARCH_LIMIT_MAX = 20;
-
-/** Rows scanned per search before the permission filter and the limit apply. */
-const SEARCH_SCAN = 200;
-
-/** One artifact found by `browse.search`. */
-export interface SearchResult {
-  repository: string;
-  group: string;
-  name: string;
-  latestVersion: string;
-}
-
 /** A repository as browsers see it: no config or upstreams, which only admins also receive. */
 export interface BrowseRepo {
   name: string;
@@ -104,45 +90,6 @@ async function versionsByArtifact(db: Db, artifactIds: string[]) {
   return out;
 }
 
-/** Artifacts matching `query` (case-insensitive, on group, name or `group:name`) in the repositories. */
-export async function searchArtifacts(
-  db: Db,
-  p: Principal,
-  repos: RepositoryRow[],
-  query: string,
-  limit: number,
-): Promise<SearchResult[]> {
-  if (repos.length === 0) return [];
-  const pattern = `%${escapeLike(query)}%`;
-  const byId = new Map(repos.map((r) => [r.id, r]));
-  const rows = await db
-    .select({ id: protoArtifact.id, repositoryId: protoArtifact.repositoryId, group: protoArtifact.group, name: protoArtifact.name })
-    .from(protoArtifact)
-    .innerJoin(repository, eq(repository.id, protoArtifact.repositoryId))
-    .where(
-      and(
-        inArray(protoArtifact.repositoryId, [...byId.keys()]),
-        or(
-          ilike(protoArtifact.group, pattern),
-          ilike(protoArtifact.name, pattern),
-          ilike(sql`${protoArtifact.group} || ':' || ${protoArtifact.name}`, pattern),
-        ),
-      ),
-    )
-    .orderBy(asc(protoArtifact.group), asc(protoArtifact.name), asc(repository.name))
-    .limit(SEARCH_SCAN);
-  const readable = rows.filter((row) => canReadGroup(p, byId.get(row.repositoryId)!, row.group));
-  const versions = await versionsByArtifact(db, readable.map((row) => row.id));
-  const results: SearchResult[] = [];
-  for (const row of readable) {
-    const latestVersion = newest((versions.get(row.id) ?? []).map((v) => v.version));
-    if (latestVersion === null) continue;
-    results.push({ repository: byId.get(row.repositoryId)!.name, group: row.group, name: row.name, latestVersion });
-    if (results.length === limit) break;
-  }
-  return results;
-}
-
 /** Read-only browsing of repositories, artifacts, versions and files, scoped to what the caller may read. */
 export const browseRouter = router({
   /** Repositories the caller may browse, by name, with format, kind and (proto) artifact and version counts. */
@@ -183,17 +130,6 @@ export const browseRouter = router({
     const isAdmin = ctx.principal.kind === "user" && ctx.principal.role === "admin";
     return isAdmin ? { ...reduced, id: repo.id, config: repo.config } : reduced;
   }),
-
-  /**
-   * Artifacts whose group, name or `group:name` contains `query` (case-insensitive) across every
-   * repository the caller may browse, with their latest version. Used by the command dialog.
-   */
-  search: browseProcedure
-    .input(z.object({ query: z.string().trim().min(1).max(200), limit: z.number().int().min(1).max(SEARCH_LIMIT_MAX).default(10) }))
-    .query(async ({ ctx, input }): Promise<SearchResult[]> => {
-      const repos = await browsableRepositories(ctx.db, ctx.principal);
-      return searchArtifacts(ctx.db, ctx.principal, repos, input.query, input.limit);
-    }),
 
   /** The artifacts of a proto repository (`BAD_REQUEST` for other formats), optionally filtered by a case-insensitive `search` on group or name. */
   artifacts: browseProcedure

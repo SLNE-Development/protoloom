@@ -62,8 +62,10 @@ async function locateDependencies(dependencies: string[]): Promise<Map<string, s
   const located = await Promise.all(
     dependencies.map(async (dep) => {
       const [group, name] = parts(dep);
-      const results = await api.browse.search({ query: `${group}:${name}`, limit: 20 }).catch(() => []);
-      return [dep, results.find((r) => r.group === group && r.name === name)?.repository ?? null] as const;
+      const { hits } = await api.search.query({ q: `${group}:${name}`, format: "proto", limit: 20 }).catch(() => ({ hits: [] }));
+      // Only a repository the visitor reads directly has an artifact page of its own.
+      const hit = hits.find((h) => h.namespace === group && h.name === name && h.via === null);
+      return [dep, hit?.repository ?? null] as const;
     }),
   );
   return new Map(located);

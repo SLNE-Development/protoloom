@@ -298,16 +298,36 @@ describe("browse", () => {
     expect(file.content).toContain("message Money");
   });
 
-  it("searches group, name and group:name case-insensitively across browsable repositories", async () => {
-    const byName = await call(viewer()).browse.search({ query: "MONEY" });
-    expect(byName).toEqual([{ repository: "shared", group: "acme", name: "money", latestVersion: "1.1.0" }]);
-    const byCoordinate = await call(viewer()).browse.search({ query: "acme:ord" });
-    expect(byCoordinate.map((r) => r.name)).toEqual(["order"]);
-    const byGroup = await call(viewer()).browse.search({ query: "corp.SEC" });
-    expect(byGroup).toEqual([{ repository: "internal", group: "corp.secret", name: "vault", latestVersion: "2.0.0" }]);
-    expect(await call(anonymous, anonymousViewOn).browse.search({ query: "vault" })).toEqual([]);
-    expect(await call(viewer()).browse.search({ query: "a", limit: 1 })).toHaveLength(1);
-    expect(await call(viewer()).browse.search({ query: "100%_" })).toEqual([]);
+  it("search.query returns only readable packages for a key-less session viewer", async () => {
+    const labels = async (caller: ReturnType<typeof call>, q: string) =>
+      (await caller.search.query({ q })).hits.map((h) => `${h.repository}/${h.label}`);
+    expect(await labels(call(viewer()), "MONEY")).toEqual(["shared/acme:money"]);
+    // "acme:ord" is also tried as "acme" (a trailing segment may be a version); the closer match ranks first.
+    expect((await labels(call(viewer()), "acme:ord"))[0]).toBe("shared/acme:order");
+    expect(await labels(call(viewer()), "corp.SEC")).toEqual(["internal/corp.secret:vault"]);
+    expect(await labels(call(anonymous, anonymousViewOn), "vault")).toEqual([]);
+    expect(await labels(call(anonymous, anonymousViewOn), "acme")).toEqual(["shared/acme:money", "shared/acme:order"]);
+    expect((await call(viewer()).search.query({ q: "100%_" })).hits).toEqual([]);
+
+    const page = await call(viewer()).search.query({ q: "acme", limit: 1 });
+    expect(page.hasMore).toBe(true);
+    expect(page.hits).toHaveLength(1);
+    expect(page.hits[0]).toMatchObject({ repository: "shared", via: null, format: "proto", kind: "hosted", latestVersion: expect.any(String) });
+    // Hits name the repository, never its config or id.
+    expect(Object.keys(page.hits[0]!).sort()).toEqual(
+      ["downloads", "format", "kind", "label", "latestVersion", "name", "namespace", "repository", "updatedAt", "versionCount", "via"].sort(),
+    );
+    expect((await call(viewer()).search.query({ q: "money", format: "maven" })).hits).toEqual([]);
+  });
+
+  it("search.query: anonymous with anonymousView off → UNAUTHORIZED", async () => {
+    expect(await codeOf(call(anonymous).search.query({ q: "money" }))).toBe("UNAUTHORIZED");
+  });
+
+  it("search.query: q of one character → BAD_REQUEST", async () => {
+    expect(await codeOf(call(viewer()).search.query({ q: "m" }))).toBe("BAD_REQUEST");
+    expect(await codeOf(call(viewer()).search.query({ q: " : " }))).toBe("BAD_REQUEST");
+    expect(await codeOf(call(viewer()).search.query({ q: "money", limit: 51 }))).toBe("BAD_REQUEST");
   });
 
   it("scopes dashboard stats to what the caller can see", async () => {
@@ -1009,8 +1029,8 @@ describe("review follow-ups", () => {
       expect(repos.shared).toMatchObject({ artifactCount: 1, versionCount: 1 });
 
       expect((await caller.browse.artifacts({ repository: "internal" })).map((a) => a.group)).toEqual(["corp.secret"]);
-      expect(await caller.browse.search({ query: "corp" })).toEqual([
-        { repository: "internal", group: "corp.secret", name: "vault", latestVersion: "2.1.0" },
+      expect((await caller.search.query({ q: "corp" })).hits).toEqual([
+        expect.objectContaining({ repository: "internal", namespace: "corp.secret", name: "vault", latestVersion: "2.1.0", versionCount: 2 }),
       ]);
 
       const stats = await caller.dashboard.stats();

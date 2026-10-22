@@ -6,6 +6,13 @@ import { api } from "@/trpc/server";
 import { MavenView } from "./maven-view";
 import { ProtoArtifactList } from "./proto-artifact-list";
 
+/**
+ * The package page link of each format (`BROWSE_LINKS`) and of a search hit (`packageHref`).
+ * They live in `./links` so client components can import them without this module's server
+ * imports; a format with a package page adds its builder there.
+ */
+export { BROWSE_LINKS, packageHref } from "./links";
+
 /** The proto browse view: the repository's artifacts with a `?q=` filter. */
 async function ProtoRepositoryView({ repo }: { repo: Repo }) {
   const artifacts = await api.browse.artifacts({ repository: repo.name });

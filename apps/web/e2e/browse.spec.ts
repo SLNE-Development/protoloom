@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { count, eq } from "drizzle-orm";
-import { createDb, protoArtifact as artifact, protoVersion as version, repository, setting } from "@weaver/db";
+import { count, eq, inArray } from "drizzle-orm";
+import { component, createDb, protoArtifact as artifact, protoVersion as version, repository, setting } from "@weaver/db";
 import { STATE_FILE, USERS } from "./fixtures";
 import { loginAs } from "./helpers";
 
@@ -235,5 +235,67 @@ test.describe("artifact browser", () => {
     await page.keyboard.press("Control+K");
     await page.getByRole("dialog").getByRole("option", { name: "Copy coordinate" }).click();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("dev.example:demo:1.0.0");
+  });
+});
+
+/** The repositories and packages the package search tests seed; removed again afterwards. */
+const SEARCH_REPOS = [
+  { name: "search-maven", format: "maven", namespace: "org.example", package: "commons-lib", version: "1.0" },
+  { name: "search-npm", format: "npm", namespace: "", package: "left-lib", version: "2.0.0" },
+  { name: "search-docker", format: "docker", namespace: "", package: "team/lib-app", version: "1.0" },
+] as const;
+
+test.describe("package search", () => {
+  test.beforeAll(async () => {
+    await withDb(async (db) => {
+      const rows = await db
+        .insert(repository)
+        .values(SEARCH_REPOS.map((r) => ({ name: r.name, format: r.format, kind: "hosted" as const, visibility: "private" as const })))
+        .returning({ id: repository.id, name: repository.name });
+      const idOf = new Map(rows.map((r) => [r.name, r.id]));
+      await db
+        .insert(component)
+        .values(SEARCH_REPOS.map((r) => ({ repositoryId: idOf.get(r.name)!, namespace: r.namespace, name: r.package, version: r.version })));
+    });
+  });
+
+  test.afterAll(async () => {
+    await withDb((db) => db.delete(repository).where(inArray(repository.name, SEARCH_REPOS.map((r) => r.name))));
+  });
+
+  test("the header box searches packages and the format chips filter them", async ({ page }) => {
+    await loginAs(page, USERS.admin.id);
+    await page.goto("/dashboard");
+    const box = page.getByRole("searchbox", { name: "Search packages" });
+    await box.fill("lib");
+    await box.press("Enter");
+    await expect(page).toHaveURL("/search?q=lib");
+
+    const results = page.getByRole("list", { name: "Search results" });
+    await expect(results.getByRole("link", { name: /org\.example:commons-lib/ })).toBeVisible();
+    await expect(results.getByRole("link", { name: /left-lib/ })).toBeVisible();
+    await expect(results.locator("li[data-format=maven]")).toHaveCount(1);
+    await expect(results.locator("li[data-format=npm]")).toHaveCount(1);
+
+    await page.getByRole("radio", { name: "Docker" }).click();
+    await expect(page).toHaveURL("/search?q=lib&format=docker");
+    await expect(results.getByRole("link", { name: /team\/lib-app/ })).toBeVisible();
+    await expect(results.locator("li:not([data-format=docker])")).toHaveCount(0);
+
+    await page.goto("/search?q=zzz-nothing");
+    await expect(page.getByText('No packages match "zzz-nothing"')).toBeVisible();
+  });
+
+  test("Ctrl+K lists packages under Packages and Enter opens the package page", async ({ page }) => {
+    await loginAs(page, USERS.admin.id);
+    await page.goto("/dashboard");
+    await page.keyboard.press("ControlOrMeta+K");
+    const dialog = page.getByRole("dialog");
+    await dialog.getByPlaceholder(/Search/).fill("left-lib");
+    const group = dialog.getByRole("group", { name: "Packages" });
+    const option = group.getByRole("option", { name: /left-lib/ });
+    await expect(option).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL("/browse/search-npm/-/npm/left-lib");
   });
 });

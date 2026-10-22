@@ -8,6 +8,7 @@ import { keysRouter } from "./routers/keys";
 import { mavenRouter } from "./routers/maven";
 import { policiesRouter } from "./routers/policies";
 import { repositoriesRouter } from "./routers/repositories";
+import { searchRouter } from "./routers/search";
 import { settingsRouter } from "./routers/settings";
 import { usersRouter } from "./routers/users";
 import { versionsRouter } from "./routers/versions";
@@ -15,6 +16,7 @@ import { versionsRouter } from "./routers/versions";
 /** The tRPC API of the management UI. */
 export const appRouter = router({
   browse: browseRouter,
+  search: searchRouter,
   dashboard: dashboardRouter,
   maven: mavenRouter,
   repositories: repositoriesRouter,
