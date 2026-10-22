@@ -89,3 +89,7 @@ With `local`, archives go to the `storage-data` volume.
 ## Upgrade
 
 Redeploy the resource. The new `weaver` container applies migrations before serving, and the worker waits for it. Back up the `postgres-data` and `seaweedfs-data` (or `storage-data`) volumes first.
+
+## Upgrading from Protoloom
+
+Weaver was called Protoloom before. The Postgres volume of an existing install was initialized with the database `protoloom`, and `POSTGRES_DB` only applies on first init. Before you redeploy, set the environment variable `POSTGRES_DB=protoloom` on the resource so the existing database, and your users with it, is kept. A fresh install uses `weaver`.

@@ -141,3 +141,14 @@ docker compose -f docker-compose.prod.yml logs -f app worker
 ```
 
 The image runs as the unprivileged `node` user. The worker logs `weaver-worker: processing cleanup jobs` when it is ready.
+
+## Upgrading from Protoloom
+
+Weaver was called Protoloom before. The Postgres volume of an existing install was initialized with the database `protoloom` and the user `protoloom`, and `POSTGRES_DB` and `POSTGRES_USER` only apply on first init. To keep that database, and your users with it, add these to `.env` before you start the new version:
+
+```
+POSTGRES_DB=protoloom
+POSTGRES_USER=protoloom
+```
+
+A fresh install uses `weaver` for both.
