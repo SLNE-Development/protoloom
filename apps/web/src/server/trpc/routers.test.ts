@@ -57,6 +57,8 @@ let liveQueue: CleanupQueue;
 let deadQueue: CleanupQueue;
 
 const people = { admin: "", maintainer: "", viewer: "" };
+/** Ids of the fixture repositories, refreshed before every test. */
+const repoIds = { shared: "", internal: "" };
 
 const anonymous: Principal = { kind: "anonymous" };
 const asUser = (userId: string, role: Role): Principal => ({ kind: "user", userId, role });
@@ -71,8 +73,8 @@ const publisher = (): Principal => ({
   userId: people.maintainer,
   role: "admin",
   permissions: [
-    { repository: "shared", groupPrefix: null, access: "write" },
-    { repository: "internal", groupPrefix: null, access: "write" },
+    { repositoryId: repoIds.shared, repository: "shared", groupPrefix: null, access: "write" },
+    { repositoryId: repoIds.internal, repository: "internal", groupPrefix: null, access: "write" },
   ],
 });
 
@@ -157,6 +159,9 @@ beforeEach(async () => {
   people.viewer = (await createUser("viewer", "Vic Viewer")).id;
   await call(admin()).repositories.create({ name: "shared", visibility: "public", description: "Public contracts" });
   await call(admin()).repositories.create({ name: "internal", visibility: "private" });
+  for (const row of await db.select({ id: repository.id, name: repository.name }).from(repository)) {
+    if (row.name === "shared" || row.name === "internal") repoIds[row.name] = row.id;
+  }
 });
 
 describe("createTrpcContext", () => {
@@ -358,8 +363,8 @@ describe("keys", () => {
       userId: people.maintainer,
       ownerName: "Max Maintainer",
       permissions: expect.arrayContaining([
-        { repository: "shared", groupPrefix: "acme", access: "write" },
-        { repository: "internal", groupPrefix: null, access: "read" },
+        { repositoryId: repoIds.shared, repository: "shared", groupPrefix: "acme", access: "write" },
+        { repositoryId: repoIds.internal, repository: "internal", groupPrefix: null, access: "read" },
       ]),
     });
     expect(listed[0]!.expiresAt).toBeInstanceOf(Date);
@@ -624,7 +629,9 @@ describe("review follow-ups", () => {
 
     await call(admin()).repositories.create({ name: "internal", visibility: "private" });
     const [key] = await call(maintainer()).keys.list();
-    expect(key!.permissions).toEqual([{ repository: "shared", groupPrefix: null, access: "read" }]);
+    expect(key!.permissions).toEqual([
+      { repositoryId: repoIds.shared, repository: "shared", groupPrefix: null, access: "read" },
+    ]);
   });
 
   it("updates only the policy fields that were sent", async () => {
@@ -690,7 +697,7 @@ describe("review follow-ups", () => {
       keyId: "scoped-key",
       userId: people.viewer,
       role: "viewer",
-      permissions: [{ repository: "internal", groupPrefix: "corp.secret", access: "read" }],
+      permissions: [{ repositoryId: repoIds.internal, repository: "internal", groupPrefix: "corp.secret", access: "read" }],
     });
 
     beforeEach(async () => {

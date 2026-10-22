@@ -60,6 +60,7 @@ export const keysRouter = router({
           : await ctx.db
               .select({
                 apiKeyId: repoPermission.apiKeyId,
+                repositoryId: repoPermission.repositoryId,
                 repository: repository.name,
                 groupPrefix: repoPermission.groupPrefix,
                 access: repoPermission.access,
@@ -78,7 +79,12 @@ export const keysRouter = router({
         enabled: key.enabled ?? true,
         permissions: permissions
           .filter((p) => p.apiKeyId === key.id)
-          .map(({ repository: repo, groupPrefix: prefix, access }) => ({ repository: repo, groupPrefix: prefix, access })),
+          .map(({ repositoryId, repository: repo, groupPrefix: prefix, access }) => ({
+            repositoryId,
+            repository: repo,
+            groupPrefix: prefix,
+            access,
+          })),
       }));
     }),
 

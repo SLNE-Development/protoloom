@@ -211,6 +211,7 @@ export async function resolve(
 
 /** A dependent plus its repository's visibility, so callers can filter by read access. */
 export interface DependentRow extends Dependent {
+  repositoryId: string;
   visibility: "public" | "private";
 }
 
@@ -223,6 +224,7 @@ export async function listDependents(db: Queryable, c: Coordinate): Promise<Depe
 export async function findDependents(db: Queryable, c: Coordinate): Promise<DependentRow[]> {
   const rows = await db
     .selectDistinct({
+      repositoryId: repository.id,
       repository: repository.name,
       visibility: repository.visibility,
       group: protoArtifact.group,
@@ -239,6 +241,7 @@ export async function findDependents(db: Queryable, c: Coordinate): Promise<Depe
     )
     .orderBy(asc(repository.name), asc(protoArtifact.group), asc(protoArtifact.name), asc(protoVersion.version));
   return rows.map((r) => ({
+    repositoryId: r.repositoryId,
     repository: r.repository,
     visibility: r.visibility,
     coordinate: { group: r.group, name: r.name, version: r.version },
@@ -260,7 +263,7 @@ export function assertNoDependents(
   if (dependents.length === 0) return false;
   if (!force) {
     const visible = dependents
-      .filter((d) => canAccess(p, { name: d.repository, visibility: d.visibility }, d.coordinate.group, "read"))
+      .filter((d) => canAccess(p, { id: d.repositoryId, name: d.repository, visibility: d.visibility }, d.coordinate.group, "read"))
       .map(({ repository: repo, coordinate }) => ({ repository: repo, coordinate }));
     throw new RegistryError(
       "has_dependents",

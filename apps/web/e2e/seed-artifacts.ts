@@ -15,10 +15,10 @@ function proto(path: string, body: string, imports: string[] = []): ProtoFile {
  * `dev.example:demo:1.1.0-SNAPSHOT` and `dev.example:scratch:0.1.0`, which a test deletes.
  */
 export async function seedArtifacts(db: Db): Promise<void> {
-  await db.insert(repository).values([
+  const rows = await db.insert(repository).values([
     { name: ARTIFACTS.releases, format: "proto", kind: "hosted", description: "Released contracts", visibility: "public" },
     { name: ARTIFACTS.snapshots, format: "proto", kind: "hosted", description: "Snapshot builds", visibility: "private" },
-  ]);
+  ]).returning({ id: repository.id, name: repository.name });
 
   const stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: serverEnv().STORAGE_LOCAL_PATH });
   const registry = createRegistry({ db, stores });
@@ -28,8 +28,9 @@ export async function seedArtifacts(db: Db): Promise<void> {
     keyId: "e2e-seed-key",
     userId: USERS.admin.id,
     role: "admin",
-    permissions: [ARTIFACTS.releases, ARTIFACTS.snapshots].map((repo) => ({
-      repository: repo,
+    permissions: rows.map((repo) => ({
+      repositoryId: repo.id,
+      repository: repo.name,
       groupPrefix: null,
       access: "write" as const,
     })),
