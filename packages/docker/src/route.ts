@@ -30,6 +30,7 @@ export function parseRoute(rest: string): Route | null {
   if (rest === "") return { kind: "base" };
   if (rest === "token") return { kind: "token" };
   let m: RegExpMatchArray | null;
+  if ((m = rest.match(/^(.+)\/blobs\/uploads$/))) return { kind: "upload-start", name: checkName(m[1]!) };
   if ((m = rest.match(/^(.+)\/blobs\/uploads\/([^/]*)$/))) {
     const name = checkName(m[1]!);
     return m[2] === "" ? { kind: "upload-start", name } : { kind: "upload", name, uploadId: m[2]! };
