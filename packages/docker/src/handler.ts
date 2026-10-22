@@ -1,17 +1,13 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  RegistryError,
-  canAccess,
-  type FormatDeps,
-  type FormatFactory,
-  type FormatHandler,
-  type Principal,
-} from "@weaver/core";
+import { RegistryError, type FormatDeps, type FormatFactory, type FormatHandler } from "@weaver/core";
+import { challenge, identify, requireAccess, scopeChallenge, scopeFor } from "./auth/authorize.js";
+import type { DockerAction } from "./auth/jwt.js";
+import { handleToken } from "./auth/token-endpoint.js";
 import { DockerError, errorResponse } from "./errors.js";
 import { isDigest } from "./media-types.js";
 import { parseRoute, type Route } from "./route.js";
-import { resolveTarget } from "./target.js";
+import { resolveTarget, type Target } from "./target.js";
 
 /** Settings of a docker handler. */
 export interface DockerOptions {
@@ -23,14 +19,6 @@ export interface DockerOptions {
 
 const UPLOAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** The 401 error telling a client where to fetch a bearer token. */
-function challenge(publicUrl: string): DockerError {
-  const host = new URL(publicUrl).host;
-  return new DockerError(401, "UNAUTHORIZED", "authentication required", undefined, {
-    "www-authenticate": `Bearer realm="${publicUrl}/v2/token",service="${host}"`,
-  });
-}
-
 /** Maps a thrown value to an OCI error response; unexpected errors are logged and become 500 `UNKNOWN`. */
 function toResponse(err: unknown, publicUrl: string): Response {
   if (err instanceof DockerError) return errorResponse(err);
@@ -38,6 +26,10 @@ function toResponse(err: unknown, publicUrl: string): Response {
     switch (err.code) {
       case "unauthorized":
         return errorResponse(challenge(publicUrl));
+      case "invalid_request":
+        return errorResponse(new DockerError(400, "UNSUPPORTED", err.message));
+      case "payload_too_large":
+        return errorResponse(new DockerError(413, "SIZE_INVALID", err.message));
       case "forbidden":
         return errorResponse(new DockerError(403, "DENIED", err.message));
       case "not_found":
@@ -70,36 +62,48 @@ function invalidReference(rest: string): DockerError | null {
     : new DockerError(400, "MANIFEST_INVALID", "invalid manifest reference", { reference });
 }
 
-/** Builds the docker handler for the `/v2` mount: routing, authentication challenge, authorization and error mapping. */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- uploads arrive with the upload routes
-export function createDockerHandlerWith(deps: FormatDeps, _opts: DockerOptions): FormatHandler {
+/** The docker action a request method needs: reads pull, DELETE deletes, everything else pushes. */
+function actionOf(method: string): DockerAction {
+  if (method === "GET" || method === "HEAD") return "pull";
+  return method === "DELETE" ? "delete" : "push";
+}
+
+/** Builds the docker handler for the `/v2` mount: routing, token endpoint, authentication challenge, authorization and error mapping. */
+export function createDockerHandlerWith(deps: FormatDeps, opts: DockerOptions): FormatHandler {
   async function dispatch(req: Request, rest: string): Promise<Response> {
     const route = parseRoute(rest);
     if (!route) {
       throw invalidReference(rest) ?? new DockerError(404, "UNSUPPORTED", "unknown route");
     }
     validate(route);
-    const principal: Principal = await deps.principal(req);
+    const now = opts.now?.() ?? new Date();
 
+    if (route.kind === "token") return handleToken(deps, req, now);
     if (route.kind === "base") {
-      if (principal.kind === "anonymous") throw challenge(deps.publicUrl);
+      const caller = await identify(deps, req, { now });
+      if (caller.principal.kind === "anonymous" && !caller.claims) throw challenge(deps.publicUrl);
       return new Response("{}", {
         status: 200,
         headers: { "content-type": "application/json", "docker-distribution-api-version": "registry/2.0" },
       });
     }
-    if (route.kind === "token") throw new DockerError(501, "UNSUPPORTED", "token endpoint is not available yet");
 
-    const target = await resolveTarget(deps.repos, route.name);
+    const action = actionOf(req.method);
+    const scope = scopeFor(route.name, action);
+    const caller = await identify(deps, req, { now, scope });
+    const anonymous = caller.principal.kind === "anonymous";
+    let target: Target | null;
+    try {
+      target = await resolveTarget(deps.repos, route.name);
+    } catch (err) {
+      if (anonymous) throw scopeChallenge(deps, caller, scope);
+      throw err;
+    }
     if (!target) {
-      if (principal.kind === "anonymous") throw challenge(deps.publicUrl);
+      if (anonymous) throw scopeChallenge(deps, caller, scope);
       throw new DockerError(404, "NAME_UNKNOWN", "repository name not known to registry", { name: route.name });
     }
-    const access = req.method === "GET" || req.method === "HEAD" ? "read" : "write";
-    if (!canAccess(principal, target.repo, "", access)) {
-      if (principal.kind === "anonymous") throw challenge(deps.publicUrl);
-      throw new DockerError(403, "DENIED", "requested access to the resource is denied", { name: route.name });
-    }
+    requireAccess(deps, caller, target, action);
     throw new DockerError(501, "UNSUPPORTED", `${route.kind} is not implemented yet`);
   }
 

@@ -16,6 +16,7 @@ import {
   type KeyPermission,
   type Principal,
   type Repo,
+  type Role,
   type ServerSettings,
 } from "@weaver/core";
 import { startTestDb } from "@weaver/db/testing";
@@ -35,8 +36,8 @@ export interface DockerTestRegistry {
   ): Promise<Response>;
   /** Creates a repository as an admin. */
   createRepo(input: CreateRepoInput): Promise<Repo>;
-  /** Issues a test token that acts as an API key holding `perms` on the named repositories. */
-  tokenFor(perms: Array<{ repo: string; access: Access }>): string;
+  /** Issues a test token that acts as an API key holding `perms` on the named repositories, owned by a `role` user (default maintainer). */
+  tokenFor(perms: Array<{ repo: string; access: Access }>, opts?: { role?: Role }): string;
   /** Stops the database and removes the temporary directories. */
   stop(): Promise<void>;
 }
@@ -53,7 +54,7 @@ export async function startDockerTestRegistry(opts: { fetchImpl?: typeof fetch }
   const assets = createAssetService({ db: testDb.db, stores });
   const settings = (): Promise<ServerSettings> => Promise.resolve({ anonymousView: false, defaultCacheStore: "local" });
   const mirror = createMirrorEngine({ db: testDb.db, stores, repos, assets, settings, fetchImpl: opts.fetchImpl });
-  const tokens = new Map<string, Array<{ repo: string; access: Access }>>();
+  const tokens = new Map<string, { perms: Array<{ repo: string; access: Access }>; role: Role }>();
 
   const deps: FormatDeps = {
     db: testDb.db,
@@ -68,14 +69,14 @@ export async function startDockerTestRegistry(opts: { fetchImpl?: typeof fetch }
     async principal(req) {
       const token = extractToken(req.headers);
       if (token === null) return { kind: "anonymous" };
-      const perms = tokens.get(token);
-      if (!perms) throw new RegistryError("unauthorized", "Invalid API key");
+      const entry = tokens.get(token);
+      if (!entry) throw new RegistryError("unauthorized", "Invalid API key");
       const permissions: KeyPermission[] = [];
-      for (const p of perms) {
+      for (const p of entry.perms) {
         const repo = await repos.get(p.repo);
         if (repo) permissions.push({ repositoryId: repo.id, repository: repo.name, groupPrefix: null, access: p.access });
       }
-      return { kind: "apikey", keyId: token, userId: "test-user", role: "maintainer", permissions };
+      return { kind: "apikey", keyId: token, userId: "test-user", role: entry.role, permissions };
     },
   };
   const handler = createDockerHandlerWith(deps, { uploadDir: join(dir, "uploads") });
@@ -89,9 +90,9 @@ export async function startDockerTestRegistry(opts: { fetchImpl?: typeof fetch }
       return handler(new Request(`http://weaver.test/v2/${rest}`, { method, headers, body: init.body }), rest);
     },
     createRepo: (input) => repos.create(ADMIN, input),
-    tokenFor(perms) {
+    tokenFor(perms, opts = {}) {
       const token = `test-token-${tokens.size + 1}`;
-      tokens.set(token, perms);
+      tokens.set(token, { perms, role: opts.role ?? "maintainer" });
       return token;
     },
     async stop() {
