@@ -296,6 +296,18 @@ describe("npm audit", () => {
     expect(encoded.status).toBe(415);
   });
 
+  it("a quick audit through a mirror with rules fails instead of leaking names", async () => {
+    const before = fake.hits.length;
+    for (const repo of ["npm-rules", "npm-allow"]) {
+      for (const path of ["audits/quick", "audits"]) {
+        const res = await h.call("POST", `${repo}/-/npm/v1/security/${path}`, { body: "{}", headers: { "content-type": "application/json" } });
+        expect(res.status).toBe(502);
+        expect(await res.json()).toHaveProperty("error");
+      }
+    }
+    expect(fake.hits.length).toBe(before);
+  });
+
   it("a quick audit through a group with hosted members fails instead of leaking names", async () => {
     const before = fake.hits.length;
     for (const path of ["audits/quick", "audits"]) {

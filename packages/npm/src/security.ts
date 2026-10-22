@@ -103,13 +103,20 @@ async function forwardBulk(
   return forwardAudit(deps, mirror, req, "advisories/bulk", body);
 }
 
+/** The 502 for a full or quick audit whose dependency tree could carry names the upstream must not learn. */
+async function unfilterable(req: Request, path: string, where: string): Promise<Response> {
+  await req.body?.cancel().catch(() => undefined);
+  return npmError(502, `${path} is not forwarded from ${where}; npm audit uses advisories/bulk`);
+}
+
 /**
  * `POST -/npm/v1/security/{advisories/bulk,audits,audits/quick}`: hosted repositories know no advisories (`{}` for
  * bulk, {@link NO_ADVISORIES_QUICK} for audits). Mirrors forward the request upstream; a bulk request to a mirror
  * with rules leaves out the names its rules exclude. Groups forward to their first mirror member, or give the hosted
  * answer without one: a bulk request leaves out names any hosted member serves and names the mirror's rules
- * exclude; the full and quick audits, whose dependency trees are not filtered, answer 502 when the group has hosted
- * members, so npm reports the audit as failed instead of sending private names upstream or reporting it clean.
+ * exclude. The full and quick audits, whose dependency trees are not filtered, answer 502 without forwarding through
+ * a mirror with allow or deny rules and through a group with hosted members or such a mirror member, so npm reports
+ * the audit as failed instead of sending private names upstream or reporting it clean.
  * Other paths answer 404, other methods 405. The caller has checked read access.
  */
 export async function handleSecurity(deps: FormatDeps, repo: Repo, req: Request, path: string): Promise<Response> {
@@ -117,7 +124,10 @@ export async function handleSecurity(deps: FormatDeps, repo: Repo, req: Request,
   if (req.method.toUpperCase() !== "POST") return npmError(405, "method not allowed", { allow: "POST" });
   const bulk = path === "advisories/bulk";
   if (repo.kind === "mirror") {
-    if (bulk && hasRules(repo)) return forwardBulk(deps, repo, req, () => Promise.resolve(new Set()));
+    if (hasRules(repo)) {
+      if (bulk) return forwardBulk(deps, repo, req, () => Promise.resolve(new Set()));
+      return unfilterable(req, path, `mirror ${repo.name}, which has allow or deny rules`);
+    }
     return forwardAudit(deps, repo, req, path, await readBody(req, MAX_AUDIT_BYTES));
   }
   if (repo.kind === "group") {
@@ -126,10 +136,8 @@ export async function handleSecurity(deps: FormatDeps, repo: Repo, req: Request,
     const hostedIds = members.filter((m) => m.kind === "hosted").map((m) => m.id);
     if (mirror) {
       if (bulk) return forwardBulk(deps, mirror, req, (names) => createNpmStore(deps.db).existing(hostedIds, names));
-      if (hostedIds.length > 0) {
-        await req.body?.cancel().catch(() => undefined);
-        return npmError(502, `${path} is not forwarded from group ${repo.name}, which has hosted members; npm audit uses advisories/bulk`);
-      }
+      if (hostedIds.length > 0) return unfilterable(req, path, `group ${repo.name}, which has hosted members`);
+      if (hasRules(mirror)) return unfilterable(req, path, `group ${repo.name}, whose mirror member has allow or deny rules`);
       return forwardAudit(deps, mirror, req, path, await readBody(req, MAX_AUDIT_BYTES));
     }
   }
