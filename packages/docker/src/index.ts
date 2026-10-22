@@ -24,3 +24,5 @@ export {
 } from "./hosted/blobs.js";
 export { cancelUpload, finishUpload, patchUpload, startUpload, uploadStatus } from "./hosted/uploads.js";
 export { appendToSpool } from "./hosted/spool.js";
+export { createHubAuth, parseChallenge, type BearerChallenge, type HubAuth } from "./mirror/hub-auth.js";
+export { mirrorBlob, mirrorManifest, mirrorReferrers, mirrorTags, upstreamImage, type MirrorCtx } from "./mirror/mirror.js";

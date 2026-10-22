@@ -6,11 +6,14 @@ import type { DockerAction } from "./auth/jwt.js";
 import { handleToken } from "./auth/token-endpoint.js";
 import { DockerError, errorResponse } from "./errors.js";
 import { deleteHostedBlob, serveHostedBlob, type HostedCtx } from "./hosted/blobs.js";
-import { deleteManifest, putManifest, serveManifest } from "./hosted/manifests.js";
+import { blobUnknown } from "./hosted/blobs.js";
+import { deleteManifest, manifestUnknown, putManifest, serveManifest } from "./hosted/manifests.js";
 import { serveReferrers } from "./hosted/referrers.js";
 import { serveTags } from "./hosted/tags.js";
 import { cancelUpload, finishUpload, patchUpload, startUpload, uploadStatus } from "./hosted/uploads.js";
 import { isDigest } from "./media-types.js";
+import { createHubAuth } from "./mirror/hub-auth.js";
+import { mirrorBlob, mirrorManifest, mirrorReferrers, mirrorTags, type MirrorCtx } from "./mirror/mirror.js";
 import { parseRoute, type Route } from "./route.js";
 import { resolveTarget, type Target } from "./target.js";
 
@@ -127,8 +130,38 @@ function dispatchHostedBlobs(ctx: HostedCtx, req: Request, route: Route): Promis
   }
 }
 
+/** A route that names an image. */
+type NamedRoute = Exclude<Route, { kind: "base" } | { kind: "token" }>;
+
+/** The `404` a read answers when no repository has the item. */
+function notFound(route: NamedRoute): DockerError {
+  switch (route.kind) {
+    case "manifest":
+      return manifestUnknown(route.reference);
+    case "blob":
+      return blobUnknown(route.digest);
+    default:
+      return new DockerError(404, "NAME_UNKNOWN", "repository name not known to registry", { name: route.name });
+  }
+}
+
+/** Serves the read routes of a mirror repository (writes were refused by `requireAccess`). */
+async function dispatchMirror(ctx: MirrorCtx, req: Request, route: NamedRoute): Promise<Response> {
+  const { method } = req;
+  const read = method === "GET" || method === "HEAD";
+  let served: Response | null;
+  if (route.kind === "manifest" && read) served = await mirrorManifest(ctx, req, route.reference);
+  else if (route.kind === "blob" && read) served = await mirrorBlob(ctx, req, route.digest);
+  else if (route.kind === "tags" && method === "GET") served = await mirrorTags(ctx, req);
+  else if (route.kind === "referrers" && method === "GET") served = await mirrorReferrers(ctx, req, route.digest);
+  else throw methodNotAllowed(method);
+  if (!served) throw notFound(route);
+  return served;
+}
+
 /** Builds the docker handler for the `/v2` mount: routing, token endpoint, authentication challenge, authorization and error mapping. */
 export function createDockerHandlerWith(deps: FormatDeps, opts: DockerOptions): FormatHandler {
+  const hub = createHubAuth(fetch, () => opts.now?.() ?? new Date());
   async function dispatch(req: Request, rest: string): Promise<Response> {
     const route = parseRoute(rest);
     if (!route) {
@@ -167,6 +200,7 @@ export function createDockerHandlerWith(deps: FormatDeps, opts: DockerOptions): 
       const served = dispatchHosted({ deps, opts, caller, target }, req, route);
       if (served) return served;
     }
+    if (target.repo.kind === "mirror") return dispatchMirror({ deps, caller, target, hub }, req, route);
     throw new DockerError(501, "UNSUPPORTED", `${route.kind} is not implemented yet`);
   }
 
