@@ -25,6 +25,8 @@ import { createNpmHandler } from "../handler.js";
 /** A running npm handler over a throwaway database and a local store, with fixed principals keyed by token. */
 export interface Harness {
   db: Db;
+  /** Connection URL of the test database, for extra pools. */
+  url: string;
   deps: FormatDeps;
   handler: FormatHandler;
   publicUrl: "https://weaver.slne.dev";
@@ -96,6 +98,7 @@ export async function createHarness(): Promise<Harness> {
 
   return {
     db,
+    url: testDb.url,
     deps,
     handler,
     publicUrl: PUBLIC_URL,

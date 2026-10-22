@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
-import { asset, component } from "@weaver/db";
+import { createAssetService, recordUsage } from "@weaver/core";
+import { asset, component, createDb } from "@weaver/db";
+import { createNpmHandler } from "./handler.js";
 import { createNpmStore, formatRev } from "./store.js";
 import { createHarness, type Harness } from "./test/harness.js";
 import { digestsOf, makeTarball, publishBody } from "./test/fixtures.js";
@@ -134,6 +136,32 @@ describe("hosted npm", () => {
     expect(Buffer.from(await served.arrayBuffer()).equals(winner)).toBe(true);
   });
 
+  it("publishes more packages at once than the pool has connections", async () => {
+    const small = createDb(h.url, { max: 2, connectionTimeoutMillis: 10_000 });
+    try {
+      const assets = createAssetService({ db: small, stores: h.deps.stores });
+      const handler = createNpmHandler({ ...h.deps, db: small, assets, usage: (input) => recordUsage(small, input) });
+      const names = Array.from({ length: 8 }, (_, i) => `pool-${i}`);
+      const tarballs = await Promise.all(names.map((n) => makeTarball(n, "1.0.0")));
+      const responses = await Promise.all(
+        names.map((n, i) =>
+          handler(
+            new Request(`${h.publicUrl}/npm/npm-hosted/${n}`, {
+              method: "PUT",
+              headers: { authorization: `Bearer ${h.tokens.writer}`, "content-type": "application/json" },
+              body: JSON.stringify(publishBody(n, "1.0.0", tarballs[i]!)),
+            }),
+            `npm-hosted/${n}`,
+          ),
+        ),
+      );
+      expect(responses.map((r) => r.status)).toEqual(names.map(() => 201));
+      expect(await h.db.select().from(asset)).toHaveLength(8);
+    } finally {
+      await small.$client.end();
+    }
+  }, 60_000);
+
   it("integrity mismatch is rejected", async () => {
     const body = publishBody("@acme/bad", "1.0.0", tarball) as { versions: Record<string, { dist: { shasum: string } }> };
     body.versions["1.0.0"]!.dist.shasum = "0".repeat(40);
@@ -156,6 +184,49 @@ describe("hosted npm", () => {
     } finally {
       await h.db.execute(sql`ALTER TABLE npm_package DROP CONSTRAINT npm_test_fail`);
     }
+  });
+
+  it("a failed publish keeps a component it did not create", async () => {
+    const [repo] = await h.db.execute<{ id: string }>(sql`SELECT id FROM repository WHERE name = 'npm-hosted'`).then((r) => r.rows);
+    await h.db.insert(component).values({ repositoryId: repo!.id, namespace: "acme", name: "fail", version: "1.0.0", metadata: { kept: true } });
+    await h.db.execute(sql`ALTER TABLE npm_package ADD CONSTRAINT npm_test_fail CHECK (name <> '@acme/fail')`);
+    try {
+      const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const res = await publish("@acme/fail", "1.0.0", await makeTarball("@acme/fail", "1.0.0"));
+      spy.mockRestore();
+      expect(res.status).toBe(500);
+      const rows = await h.db.select().from(component);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.metadata).toEqual({ kept: true });
+      expect(await h.db.select().from(asset)).toHaveLength(0);
+    } finally {
+      await h.db.execute(sql`ALTER TABLE npm_package DROP CONSTRAINT npm_test_fail`);
+    }
+  });
+
+  it("treats blank digests as absent and only logs a wrong attachment length", async () => {
+    const body = publishBody("blank", "1.0.0", tarball) as {
+      versions: Record<string, { dist: Record<string, unknown> }>;
+      _attachments: Record<string, { length: number }>;
+    };
+    body.versions["1.0.0"]!.dist = { integrity: "", shasum: "  " };
+    body._attachments["blank-1.0.0.tgz"]!.length = 1;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const res = await h.call("PUT", "npm-hosted/blank", { token: h.tokens.writer, json: body });
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+    expect(res.status).toBe(201);
+    const m = (await (await h.call("GET", "npm-hosted/blank/1.0.0")).json()) as { dist: Record<string, string> };
+    expect(m.dist).toMatchObject(digestsOf(tarball));
+  });
+
+  it("refuses a version differing only in build metadata", async () => {
+    expect((await publish("@acme/ui", "1.0.0+a", tarball)).status).toBe(201);
+    const res = await publish("@acme/ui", "1.0.0+b", tarball);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "You cannot publish over the previously published versions: 1.0.0+b." });
+    expect((await publish("@acme/ui", "1.0.0", tarball)).status).toBe(409);
+    expect((await publish("@acme/ui", "1.0.1", tarball)).status).toBe(201);
   });
 
   it("validates the publish body", async () => {

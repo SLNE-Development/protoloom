@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
-import { eq } from "drizzle-orm";
-import { RegistryError, type AssetRow, type FormatDeps, type Principal, type Repo } from "@weaver/core";
-import { component } from "@weaver/db";
+import { RegistryError, type CommittedAsset, type FormatDeps, type Principal, type Repo } from "@weaver/core";
 import { npmError, npmJson } from "./http.js";
 import { isValidNewPackageName, tarballFile, type PackageName } from "./names.js";
 import {
@@ -156,7 +154,8 @@ function parsePublish(name: PackageName, body: unknown) {
   const tarball = Buffer.from(attachment["data"], "base64");
   if (tarball.length === 0) throw new RegistryError("invalid_request", "empty attachment");
   if (typeof attachment["length"] === "number" && attachment["length"] !== tarball.length) {
-    throw new RegistryError("invalid_request", "attachment length mismatch");
+    // The digests are verified anyway; a wrong length is a client quirk, not a reason to refuse.
+    console.warn(`weaver: npm publish of ${name.full}@${version}: attachment length ${attachment["length"]} differs from ${tarball.length} decoded bytes`);
   }
   const tags = body["dist-tags"];
   const distTags: Record<string, string> = {};
@@ -186,10 +185,12 @@ export async function publish(ctx: HostedContext, name: PackageName, req: Reques
   const sha1 = createHash("sha1").update(tarball).digest();
   const sha512 = createHash("sha512").update(tarball).digest();
   const dist = isRecord(manifest["dist"]) ? manifest["dist"] : {};
-  if (dist["shasum"] !== undefined && (typeof dist["shasum"] !== "string" || dist["shasum"].toLowerCase() !== sha1.toString("hex"))) {
+  const shasum = present(dist["shasum"]);
+  if (shasum !== undefined && (typeof shasum !== "string" || shasum.toLowerCase() !== sha1.toString("hex"))) {
     throw new RegistryError("invalid_request", "integrity mismatch");
   }
-  if (dist["integrity"] !== undefined && (typeof dist["integrity"] !== "string" || !integrityMatches(dist["integrity"], { sha1, sha512 }))) {
+  const integrity = present(dist["integrity"]);
+  if (integrity !== undefined && (typeof integrity !== "string" || !integrityMatches(integrity, { sha1, sha512 }))) {
     throw new RegistryError("invalid_request", "integrity mismatch");
   }
 
@@ -202,8 +203,9 @@ export async function publish(ctx: HostedContext, name: PackageName, req: Reques
     dist: { ...dist, shasum: sha1.toString("hex"), integrity: `sha512-${sha512.toString("base64")}`, tarball: path },
   };
   const { deps, repo, store } = ctx;
-  const written: { asset?: AssetRow } = {};
-  let result: { rev: number; document: Packument };
+  // Streamed to the store before the package lock is taken, so a publish holds one pool connection at a time.
+  const staged = await deps.assets.stage({ repo, body: Readable.from([tarball]), origin: "hosted", contentLength: tarball.length });
+  let result: { rev: number; document: Packument; committed: CommittedAsset };
   try {
     result = await store.locked(repo.id, name.full, async (tx) => {
       const current = await store.get(repo.id, name.full, tx);
@@ -213,7 +215,7 @@ export async function publish(ctx: HostedContext, name: PackageName, req: Reques
       doc["dist-tags"] = isRecord(doc["dist-tags"]) ? doc["dist-tags"] : {};
       doc.versions = isRecord(doc.versions) ? doc.versions : {};
       doc.time = isRecord(doc.time) ? doc.time : {};
-      if (Object.hasOwn(doc.versions, version) || Object.hasOwn(doc.time, version)) {
+      if (publishedBefore(doc, version)) {
         throw new RegistryError("immutable", `You cannot publish over the previously published versions: ${version}.`);
       }
       for (const [tag, target] of Object.entries(distTags)) {
@@ -222,13 +224,9 @@ export async function publish(ctx: HostedContext, name: PackageName, req: Reques
         }
       }
 
-      written.asset = await deps.assets.put({
-        repo,
+      const committed = await deps.assets.commit(tx, staged, {
         path,
-        body: Readable.from([tarball]),
         contentType: "application/octet-stream",
-        origin: "hosted",
-        contentLength: tarball.length,
         component: { namespace: name.scope, name: name.bare, version, metadata: stored },
       });
 
@@ -245,24 +243,39 @@ export async function publish(ctx: HostedContext, name: PackageName, req: Reques
       if (typeof description === "string") doc.description = description;
       if (Array.isArray(manifest["keywords"])) doc["keywords"] = manifest["keywords"];
       const rev = await store.save(tx, repo.id, name.full, doc, current?.rev ?? null);
-      return { rev, document: doc };
+      return { rev, document: doc, committed };
     });
   } catch (error) {
-    if (written.asset) await discard(deps, written.asset);
+    // The transaction rolled back the asset row and any component it created; only the object is left.
+    await deps.assets.discard(staged);
     throw error;
   }
+  await result.committed.finish();
 
-  const asset = written.asset!;
+  const asset = result.committed.asset;
   await deps.usage({ repositoryId: repo.id, assetId: asset.id, path, action: "upload", bytes: tarball.length, principal: ctx.principal });
   return npmJson({ ok: true, id: name.full, rev: formatRev(result.rev, result.document) }, { status: 201 });
 }
 
-/** Removes a tarball written by a publish whose document was not saved, with the component it created. */
-async function discard(deps: FormatDeps, asset: AssetRow): Promise<void> {
-  try {
-    await deps.assets.delete(asset);
-    if (asset.componentId) await deps.db.delete(component).where(eq(component.id, asset.componentId));
-  } catch (error) {
-    console.warn(`weaver: failed to discard npm tarball ${asset.path}`, error);
-  }
+/** A digest field the client sent, or undefined when it is missing, null or blank. */
+function present(value: unknown): unknown {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "string" && value.trim() === "") return undefined;
+  return value;
+}
+
+/** The version without build metadata (`1.0.0+b` is `1.0.0`). */
+function withoutBuild(version: string): string {
+  const plus = version.indexOf("+");
+  return plus < 0 ? version : version.slice(0, plus);
+}
+
+/**
+ * Whether the version, or one differing from it only in build metadata, is or was published: present in
+ * `versions` or left as a tombstone in `time`.
+ */
+function publishedBefore(doc: Packument, version: string): boolean {
+  const base = withoutBuild(version);
+  const keys = [...Object.keys(doc.versions), ...Object.keys(doc.time).filter((k) => k !== "created" && k !== "modified")];
+  return keys.some((k) => withoutBuild(k) === base);
 }
