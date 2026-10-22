@@ -62,6 +62,9 @@ importers:
       '@weaver/npm':
         specifier: workspace:*
         version: link:../../packages/npm
+      '@weaver/proto':
+        specifier: workspace:*
+        version: link:../../packages/proto
       '@weaver/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -470,6 +473,37 @@ importers:
       tar:
         specifier: 7.5.22
         version: 7.5.22
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: 5.0.5
+        version: 5.0.5(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+
+  packages/proto:
+    dependencies:
+      '@weaver/core':
+        specifier: workspace:*
+        version: link:../core
+      '@weaver/db':
+        specifier: workspace:*
+        version: link:../db
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: 26.6.5
+        version: 26.6.5
+      '@weaver/config':
+        specifier: workspace:*
+        version: link:../config
+      eslint:
+        specifier: 10.13.0
+        version: 10.13.0(jiti@2.7.0)
+      testcontainers:
+        specifier: 12.2.1
+        version: 12.2.1
       typescript:
         specifier: 6.0.3
         version: 6.0.3
