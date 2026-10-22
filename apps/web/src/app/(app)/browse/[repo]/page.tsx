@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
-import { BoxesIcon } from "lucide-react";
+import Link from "next/link";
+import { BarChart3Icon, BoxesIcon } from "lucide-react";
+import { Button } from "@weaver/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@weaver/ui/components/empty";
 import { BROWSE_VIEWS } from "@/components/browse/registry";
 import { PageContainer, PageHeader, VisibilityBadge } from "@/components/browse-ui";
@@ -41,6 +43,14 @@ export default async function RepositoryPage({ params }: { params: Promise<Param
           </span>
         }
         meta={repo.description ? <span className="text-sm">{repo.description}</span> : undefined}
+        actions={
+          <Button asChild variant="outline" size="sm">
+            <Link href={`${repositoryHref(repo.name)}/stats`}>
+              <BarChart3Icon />
+              Stats
+            </Link>
+          </Button>
+        }
       />
       {View ? (
         <View repo={repo} />
