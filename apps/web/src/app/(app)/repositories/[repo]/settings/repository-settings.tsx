@@ -36,6 +36,14 @@ import { GeneralSettingsForm } from "../../repository-form";
 import { CleanupPolicies } from "./cleanup-policies";
 
 type Repository = RouterOutputs["repositories"]["get"];
+
+/** What the cleanup policies of a hosted repository delete, per format. */
+const CLEANUP_DESCRIPTIONS: Record<Repository["format"], string> = {
+  proto: "Rules that delete old builds and versions.",
+  maven: "Rules that delete old snapshot builds and versions.",
+  npm: "Rules that delete old package versions.",
+  docker: "Rules that delete old tags and untagged manifests.",
+};
 type Patch = RouterInputs["repositories"]["update"]["patch"];
 
 /** A titled settings section; its heading names the region for assistive technology and tests. */
@@ -54,17 +62,17 @@ function Section({ title, description, children }: { title: string; description:
   );
 }
 
-/** One-line summary under the title: stored files and size, and the cleanup policies of a proto repository. */
+/** One-line summary under the title: stored files and size, and the cleanup policies of a hosted repository. */
 function summary(repo: Repository): string {
   const parts = [`${repo.assetCount} ${repo.assetCount === 1 ? "file" : "files"}`, formatBytes(repo.storageBytes)];
-  if (repo.format === "proto" && repo.kind === "hosted") parts.push(`${repo.policyCount} cleanup policies`);
+  if (repo.kind === "hosted") parts.push(`${repo.policyCount} cleanup policies`);
   return parts.join(" · ");
 }
 
 /**
  * The settings of one repository. Only what applies to its format and kind is shown: general
- * settings for all, then the hosted options of its format (and cleanup policies for proto), the
- * mirror settings, or the group members, and finally deletion.
+ * settings for all, then the hosted options and cleanup policies of its format, the mirror
+ * settings (whose cache eviction replaces cleanup), or the group members, and finally deletion.
  */
 export function RepositorySettings({ name }: { name: string }) {
   const trpc = useTRPC();
@@ -153,18 +161,19 @@ export function RepositorySettings({ name }: { name: string }) {
         </Section>
       )}
 
-      {data.kind === "hosted" && data.format === "proto" && (
+      {data.kind === "hosted" && (
         <Section
           title="Cleanup policies"
-          description="Rules that delete old builds and versions. They run every night at 03:00 server time; preview them first."
+          description={`${CLEANUP_DESCRIPTIONS[data.format]} They run every night at 03:00 server time; preview them first.`}
         >
-          <CleanupPolicies repository={name} />
+          <CleanupPolicies repository={name} format={data.format} />
         </Section>
       )}
 
       {data.kind === "mirror" && (
         <Section title="Mirror" description={`Where this mirror gets ${format} content from, and what it keeps.`}>
           <MirrorSettings repo={data} submitting={update.isPending} onSave={save} />
+          <p className="text-sm text-muted-foreground">Mirror caches are cleaned up by the eviction settings above.</p>
         </Section>
       )}
 

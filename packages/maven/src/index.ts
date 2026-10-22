@@ -9,3 +9,4 @@ export * from "./generate.js";
 export * from "./hosted.js";
 export * from "./listing.js";
 export * from "./mirror.js";
+export * from "./cleanup.js";

@@ -91,7 +91,7 @@ export async function requireBrowsableRepository(
 
 /**
  * A repository by name for admin procedures; `NOT_FOUND` when missing, `BAD_REQUEST` when `format`
- * is given and the repository has another one (e.g. cleanup policies exist for proto only). With
+ * is given and the repository has another one (e.g. a proto-only listing). With
  * `forUpdate` (inside a transaction) the row stays locked, which also blocks concurrent inserts of
  * artifacts into it.
  */
