@@ -22,7 +22,6 @@ import {
 
 export { manifestSchema, type Manifest, type PublishInput, type PublishResult } from "./publish.js";
 export type { BuildSelector, Dependent, VersionInfo, VersionSummary } from "./read.js";
-export { protoSettings, type ProtoSettings } from "./lookup.js";
 
 /** The registry service: publishing, reading, resolving and deleting artifact versions. */
 export interface Registry {

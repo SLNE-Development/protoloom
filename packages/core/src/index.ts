@@ -11,3 +11,4 @@ export * from "./audit.js";
 export * from "./cleanup.js";
 export * from "./settings.js";
 export * from "./crypto.js";
+export * from "./repos/index.js";

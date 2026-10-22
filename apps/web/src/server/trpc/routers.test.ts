@@ -9,12 +9,15 @@ import { ValkeyContainer, type StartedValkeyContainer } from "@testcontainers/va
 import { eq, sql } from "drizzle-orm";
 import {
   createRegistry,
+  createRepoService,
   createStoreSetFromEnv,
+  deriveSecretKey,
   type StoreSet,
   packArchive,
   type Principal,
   type ProtoFile,
   type Registry,
+  type RepoService,
   type Role,
 } from "@weaver/core";
 import {
@@ -53,6 +56,7 @@ let db: Db;
 let auth: Auth;
 let registry: Registry;
 let stores: StoreSet;
+let repos: RepoService;
 let blobDir: string;
 let valkey: StartedValkeyContainer;
 let liveQueue: CleanupQueue;
@@ -85,6 +89,7 @@ function contextFor(principal: Principal, overrides: Partial<TrpcContext> = {}):
     db,
     registry,
     stores,
+    repos,
     auth,
     principal,
     settings: { anonymousView: false, defaultCacheStore: "local" },
@@ -145,6 +150,7 @@ beforeAll(async () => {
   blobDir = await mkdtemp(join(tmpdir(), "weaver-trpc-"));
   stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir });
   registry = createRegistry({ db, stores });
+  repos = createRepoService({ db, stores, secretKey: deriveSecretKey(authEnv.BETTER_AUTH_SECRET) });
   liveQueue = createQueue(producerConnection(valkey.getConnectionUrl()));
   deadQueue = createQueue(producerConnection("redis://127.0.0.1:1"), { onError: () => undefined });
 });
@@ -171,7 +177,7 @@ beforeEach(async () => {
 describe("createTrpcContext", () => {
   it("builds an anonymous context with the stored settings and the public URL", async () => {
     await call(admin()).settings.update({ anonymousView: true });
-    const ctx = await createTrpcContext({ headers: new Headers() }, { db, registry, auth, stores });
+    const ctx = await createTrpcContext({ headers: new Headers() }, { db, registry, repos, auth, stores });
     expect(ctx.principal).toEqual({ kind: "anonymous" });
     expect(ctx.settings).toEqual({ anonymousView: true, defaultCacheStore: "local" });
     expect(ctx.publicUrl).toBe(BASE);
@@ -179,7 +185,7 @@ describe("createTrpcContext", () => {
   });
 
   it("refuses invalid credentials with UNAUTHORIZED", async () => {
-    const context = createTrpcContext({ headers: new Headers({ authorization: "Bearer nope" }) }, { db, registry, auth, stores });
+    const context = createTrpcContext({ headers: new Headers({ authorization: "Bearer nope" }) }, { db, registry, repos, auth, stores });
     const error = await context.catch((e: unknown) => e);
     expect(error).toBeInstanceOf(TRPCError);
     expect((error as TRPCError).code).toBe("UNAUTHORIZED");

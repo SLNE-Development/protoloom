@@ -12,7 +12,7 @@ import type { KeyPermission, Principal, Role } from "../permissions.js";
 import { createStoreSetFromEnv, getBuffer, type ObjectStore, type StoreSet } from "../storage/index.js";
 import { validateProtos } from "../validation.js";
 import { createRegistry, type Manifest, type Registry } from "./index.js";
-import type { ProtoSettings } from "./lookup.js";
+import type { ProtoHostedConfig } from "../repos/config.js";
 
 const anonymous: Principal = { kind: "anonymous" };
 
@@ -30,6 +30,7 @@ const repoIds: Record<string, string> = {
   other: "00000000-0000-4000-8000-000000000006",
   hidden: "00000000-0000-4000-8000-000000000007",
   private: "00000000-0000-4000-8000-000000000008",
+  everything: "00000000-0000-4000-8000-000000000009",
 };
 
 const write = (repo: string): KeyPermission => ({ repositoryId: repoIds[repo]!, repository: repo, groupPrefix: null, access: "write" });
@@ -37,6 +38,7 @@ const read = (repo: string): KeyPermission => ({ repositoryId: repoIds[repo]!, r
 
 const maintainer = key("maintainer", [write("releases"), write("snapshots"), read("shared")]);
 const admin = key("admin", [write("releases"), write("snapshots")], "key-admin");
+const maintainerWith = (...permissions: KeyPermission[]) => key("maintainer", permissions, "key-extra");
 
 const coord = (group: string, name: string, version: string): Coordinate => ({ group, name, version });
 
@@ -76,12 +78,12 @@ describe("registry", () => {
   ];
 
   /** Inserts a hosted proto repository with the given proto settings in its config. */
-  async function insertRepo(name: string, settings: Partial<ProtoSettings> = {}) {
+  async function insertRepo(name: string, settings: Partial<ProtoHostedConfig> = {}) {
     await testDb.db.insert(repository).values({ id: repoIds[name], name, format: "proto", kind: "hosted", config: settings });
   }
 
   /** Merges proto settings into a repository's config. */
-  async function updateSettings(name: string, settings: Partial<ProtoSettings>) {
+  async function updateSettings(name: string, settings: Partial<ProtoHostedConfig>) {
     await testDb.db
       .update(repository)
       .set({ config: sql`${repository.config} || ${JSON.stringify(settings)}::jsonb` })
@@ -340,6 +342,14 @@ describe("registry", () => {
   it("rejects version kinds the repository does not accept", async () => {
     await expectError(publishMoney(maintainer, "releases", "1.0.0-SNAPSHOT"), "invalid_request");
     await expectError(publishMoney(maintainer, "snapshots", "1.0.0"), "invalid_request");
+  });
+
+  it("rejects publishing to a proto group", async () => {
+    await testDb.db.insert(repository).values({ id: repoIds.everything, name: "everything", format: "proto", kind: "group" });
+    const key = maintainerWith(write("everything"));
+    // Groups are read-only in the permission model, so the write check refuses before the kind check.
+    const error = await expectError(publishMoney(key, "everything"), "forbidden");
+    expect(error.message).toContain("everything");
   });
 
   it("rejects an invalid manifest", async () => {
