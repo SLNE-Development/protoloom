@@ -31,6 +31,10 @@ import {
   repoPermission,
   repository,
   session,
+  storageSnapshot,
+  usageDaily,
+  usageDailyToken,
+  usageEvent,
   user,
   type Db,
 } from "@weaver/db";
@@ -1020,5 +1024,104 @@ describe("review follow-ups", () => {
       const full = Object.fromEntries((await call(viewer()).browse.repositories()).map((r) => [r.name, r]));
       expect(full.internal).toMatchObject({ artifactCount: 2, versionCount: 3 });
     });
+  });
+});
+
+describe("stats", () => {
+  const today = new Date().toISOString().slice(0, 10);
+
+  async function hosted(name: string, visibility: "public" | "private" = "private") {
+    await call(admin()).repositories.create({ name, format: "maven", kind: "hosted", visibility });
+    return (await repos.get(name))!.id;
+  }
+
+  async function downloads(repositoryId: string, namespace: string, name: string, count: number) {
+    await db.insert(usageDaily).values({ day: today, repositoryId, namespace, name, action: "download", count, bytes: count * 10 });
+  }
+
+  it("overview is admin only", async () => {
+    expect(await codeOf(call(maintainer()).stats.overview({ days: 30 }))).toBe("FORBIDDEN");
+    expect(await codeOf(call(anonymous).stats.overview({}))).toBe("UNAUTHORIZED");
+  });
+
+  it("overview lists series, top packages with labels, storage, mirror hit rates and named tokens", async () => {
+    const lib = await hosted("libs");
+    await downloads(lib, "org.acme", "core", 5);
+    await db.insert(usageDailyToken).values([
+      { day: today, apiKeyId: "gone", userId: people.maintainer, repositoryId: lib, action: "download", count: 2, bytes: 0 },
+    ]);
+
+    const overview = await call(admin()).stats.overview({ days: 7 });
+
+    expect(overview.series).toHaveLength(7);
+    expect(overview.series.at(-1)).toEqual({ day: today, downloads: 5, uploads: 0, bytes: 50 });
+    expect(overview.topPackages).toEqual([
+      { repositoryId: lib, repository: "libs", namespace: "org.acme", name: "core", label: "org.acme:core", downloads: 5 },
+    ]);
+    expect(overview.storage.map((s) => s.repository).sort()).toEqual(["internal", "libs", "shared"]);
+    expect(overview.hitRates).toEqual([]);
+    expect(overview.tokens).toEqual([
+      expect.objectContaining({ apiKeyId: "gone", keyName: "Deleted key", ownerName: "Max Maintainer", downloads: 2 }),
+    ]);
+  });
+
+  it("repository stats of a private repo the viewer cannot read are NOT_FOUND", async () => {
+    await downloads(repoIds.internal, "corp", "vault", 3);
+    expect(await codeOf(call(anonymous, anonymousViewOn).stats.repository({ repository: "internal" }))).toBe("NOT_FOUND");
+    const outsider: Principal = { kind: "apikey", keyId: "k", userId: people.viewer, role: "viewer", permissions: [] };
+    expect(await codeOf(call(outsider).stats.repository({ repository: "internal" }))).toBe("NOT_FOUND");
+    expect(await codeOf(call(viewer()).stats.repository({ repository: "nope" }))).toBe("NOT_FOUND");
+
+    const stats = await call(viewer()).stats.repository({ repository: "internal" });
+    expect(stats.series.at(-1)?.downloads).toBe(3);
+    expect(stats.hitRate).toBeNull();
+  });
+
+  it("group stats aggregate member downloads", async () => {
+    const a = await hosted("team-a");
+    const b = await hosted("team-b");
+    await call(admin()).repositories.create({ name: "everything", format: "maven", kind: "group", visibility: "public", members: ["team-a", "team-b"] });
+    await downloads(a, "org.acme", "core", 4);
+    await downloads(b, "org.acme", "util", 6);
+    await downloads(repoIds.shared, "acme", "money", 100);
+    const takenAt = new Date("2026-06-01T00:00:00Z");
+    await db.insert(storageSnapshot).values([
+      { day: today, repositoryId: a, hostedBytes: 10, cacheBytes: 0, assetCount: 1, takenAt },
+      { day: today, repositoryId: b, hostedBytes: 20, cacheBytes: 0, assetCount: 2, takenAt },
+      { day: today, repositoryId: repoIds.shared, hostedBytes: 999, cacheBytes: 0, assetCount: 9, takenAt },
+    ]);
+
+    const stats = await call(anonymous, anonymousViewOn).stats.repository({ repository: "everything", days: 7 });
+
+    expect(stats.series.at(-1)?.downloads).toBe(10);
+    expect(stats.topPackages.map((p) => [p.repository, p.label, p.downloads])).toEqual([
+      ["team-b", "org.acme:util", 6],
+      ["team-a", "org.acme:core", 4],
+    ]);
+    expect(stats.storage).toEqual({ hostedBytes: 30, cacheBytes: 0, assetCount: 3, takenAt });
+    expect(stats.hitRate).toBeNull();
+  });
+
+  it("tokenActivity: owner gets it, another maintainer gets NOT_FOUND, admin gets it", async () => {
+    const created = await call(maintainer()).keys.create({ name: "ci", permissions: [{ repository: "shared", access: "read" }] });
+    for (let i = 0; i < 3; i++) {
+      await db.insert(usageEvent).values({ repositoryId: repoIds.shared, path: `p${i}`, action: "download", apiKeyId: created.id, userId: people.maintainer });
+    }
+    await db.insert(usageDailyToken).values({ day: today, apiKeyId: created.id, userId: people.maintainer, repositoryId: repoIds.shared, action: "download", count: 3, bytes: 0 });
+    const other = asUser((await createUser("maintainer", "Other")).id, "maintainer");
+
+    const own = await call(maintainer()).stats.tokenActivity({ keyId: created.id, limit: 2 });
+    expect(own.key).toEqual({ id: created.id, name: "ci" });
+    expect(own.series.at(-1)?.downloads).toBe(3);
+    expect(own.events.map((e) => e.path)).toEqual(["p2", "p1"]);
+    expect(own.nextBefore).toBe(own.events[1]!.id);
+    const rest = await call(maintainer()).stats.tokenActivity({ keyId: created.id, limit: 2, before: own.nextBefore! });
+    expect(rest.events.map((e) => e.path)).toEqual(["p0"]);
+    expect(rest.nextBefore).toBeNull();
+
+    expect(await codeOf(call(other).stats.tokenActivity({ keyId: created.id }))).toBe("NOT_FOUND");
+    expect((await call(admin()).stats.tokenActivity({ keyId: created.id })).events).toHaveLength(3);
+    expect((await call(admin()).stats.tokenActivity({ keyId: "deleted" })).key).toEqual({ id: "deleted", name: "Deleted key" });
+    expect(await codeOf(call(maintainer()).stats.tokenActivity({ keyId: "deleted" }))).toBe("NOT_FOUND");
   });
 });
