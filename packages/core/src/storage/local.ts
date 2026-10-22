@@ -3,7 +3,7 @@ import { mkdir, open, rename, rm, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
-import { assertContentLength, HashingStream, toReadable } from "./hashing.js";
+import { HashingStream, toReadable } from "./hashing.js";
 import { resolveRange, type ObjectStore } from "./object-store.js";
 
 /**
@@ -38,11 +38,12 @@ export function createLocalStore(root: string): ObjectStore {
       opts.signal?.throwIfAborted();
       await mkdir(dirname(target), { recursive: true });
       const tmp = `${target}.tmp-${randomUUID()}`;
-      const hasher = new HashingStream();
+      const hasher = new HashingStream(opts.contentLength);
       try {
         await pipeline(toReadable(body), hasher, createWriteStream(tmp), { signal: opts.signal });
         const result = hasher.result();
-        assertContentLength(result, opts.contentLength);
+        // An abort that lands after the last write must still leave no object.
+        opts.signal?.throwIfAborted();
         await rename(tmp, target);
         return result;
       } catch (error) {

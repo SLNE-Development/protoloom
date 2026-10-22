@@ -26,9 +26,10 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@weaver/config": "workspace:*",
     "@types/node": "26.6.5",
+    "@weaver/config": "workspace:*",
     "eslint": "10.13.0",
+    "testcontainers": "12.2.1",
     "typescript": "6.0.3",
     "vitest": "5.0.5"
   },
