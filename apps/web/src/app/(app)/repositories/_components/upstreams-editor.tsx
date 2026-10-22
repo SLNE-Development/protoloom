@@ -7,7 +7,7 @@ import { Button } from "@weaver/ui/components/button";
 import { FormControl, FormField, FormItem, FormLabel, FormMessage } from "@weaver/ui/components/form";
 import { Input } from "@weaver/ui/components/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@weaver/ui/components/select";
-import { EMPTY_UPSTREAM, UPSTREAM_EXAMPLES, type MirrorSettingsValues } from "@/lib/repository-settings";
+import { EMPTY_UPSTREAM, UPSTREAM_EXAMPLES, keepsStoredSecret, type MirrorSettingsValues } from "@/lib/repository-settings";
 
 const AUTH_TYPES = [
   { value: "none", label: "No auth" },
@@ -33,8 +33,10 @@ function UpstreamRow({
   onMove: (to: number) => void;
   onRemove: () => void;
 }) {
-  const authType = useWatch({ control: form.control, name: `upstreams.${index}.authType` });
-  const hasSecret = useWatch({ control: form.control, name: `upstreams.${index}.hasSecret` });
+  const row = useWatch({ control: form.control, name: `upstreams.${index}` });
+  const authType = row.authType;
+  // Once the URL, auth type or username changes, the server drops the stored secret.
+  const hasSecret = keepsStoredSecret(row);
   const position = index + 1;
 
   return (

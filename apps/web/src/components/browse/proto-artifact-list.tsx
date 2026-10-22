@@ -8,21 +8,23 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@w
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@weaver/ui/components/input-group";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@weaver/ui/components/table";
 import { KindBadge, Panel, RelativeTime } from "@/components/browse-ui";
-import { artifactHref, repositoryHref } from "@/lib/browse";
+import type { Kind } from "@weaver/core";
+import { artifactHref, filterArtifacts, repositoryHref } from "@/lib/browse";
 import type { RouterOutputs } from "@/trpc/client";
 
 type Artifact = RouterOutputs["browse"]["artifacts"][number];
 
-/** Whether `a` matches the filter `q` (case-insensitive, on group, name or `group:name`). */
-function matches(a: Artifact, q: string): boolean {
-  const needle = q.toLowerCase();
-  return `${a.group}:${a.name}`.toLowerCase().includes(needle);
-}
+/** What an empty repository of each kind says. */
+const EMPTY_TEXT: Record<Kind, string> = {
+  hosted: "Publish to this repository from Gradle with publishProtos.",
+  mirror: "Artifacts show up here once they have been fetched through this mirror.",
+  group: "None of this group's members has artifacts yet.",
+};
 
 /** The artifacts of a proto repository, filtered by `?q=` on group or name. */
-export function ProtoArtifactList({ repository, artifacts }: { repository: string; artifacts: Artifact[] }) {
+export function ProtoArtifactList({ repository, kind, artifacts }: { repository: string; kind: Kind; artifacts: Artifact[] }) {
   const q = useSearchParams().get("q")?.trim() ?? "";
-  const shown = q ? artifacts.filter((a) => matches(a, q)) : artifacts;
+  const shown = filterArtifacts(artifacts, q);
   const groups = new Set(shown.map((a) => a.group)).size;
 
   return (
@@ -53,7 +55,7 @@ export function ProtoArtifactList({ repository, artifacts }: { repository: strin
                   <Link href={repositoryHref(repository)}>Clear the filter</Link>
                 </>
               ) : (
-                "Publish to this repository from Gradle with publishProtos."
+                EMPTY_TEXT[kind]
               )}
             </EmptyDescription>
           </EmptyHeader>

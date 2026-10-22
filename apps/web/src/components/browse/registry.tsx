@@ -12,7 +12,7 @@ async function ProtoRepositoryView({ repo }: { repo: Repo }) {
         {artifacts.length} artifacts · {artifacts.reduce((sum, a) => sum + a.versionCount, 0)} versions
       </p>
       <Suspense>
-        <ProtoArtifactList repository={repo.name} artifacts={artifacts} />
+        <ProtoArtifactList repository={repo.name} kind={repo.kind} artifacts={artifacts} />
       </Suspense>
     </>
   );

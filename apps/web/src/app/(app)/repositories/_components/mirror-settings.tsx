@@ -107,6 +107,10 @@ function MirrorForm({
                             {STORE_LABELS[id] ?? id}
                           </SelectItem>
                         ))}
+                        {/* A store chosen earlier that this server no longer configures. */}
+                        {field.value !== DEFAULT_STORE && !stores.includes(field.value) && (
+                          <SelectItem value={field.value}>{`${STORE_LABELS[field.value] ?? field.value} (not configured)`}</SelectItem>
+                        )}
                       </SelectContent>
                     </Select>
                   </SettingRow>

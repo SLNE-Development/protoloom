@@ -94,6 +94,21 @@ test("an admin creates an npm mirror with one upstream and turns caching on", as
 
   await page.reload();
   await expect(page.getByRole("region", { name: "Mirror" }).getByTestId("cache-status")).toHaveText("Caching on");
+
+  // A stored token is only kept while the upstream stays the same.
+  await choose(page, mirror, "Upstream 1 auth", "Bearer token");
+  await mirror.getByLabel("Token").fill("npm_secret_token");
+  await mirror.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Settings saved").first()).toBeVisible();
+  await page.reload();
+  const hint = mirror.getByText("Leave empty to keep the stored secret");
+  await expect(hint).toBeVisible();
+  await expect(mirror.getByLabel("Token")).toHaveAttribute("placeholder", "stored");
+  await mirror.getByLabel("Upstream 1 URL").fill("https://registry.example.com/npm");
+  await expect(hint).toBeHidden();
+  await expect(mirror.getByLabel("Token")).toHaveAttribute("placeholder", "");
+  await mirror.getByRole("button", { name: "Save changes" }).click();
+  await expect(mirror.getByText("Bearer auth needs a token")).toBeVisible();
   await page.goto("/repositories");
   await expect(page.getByTestId(`repository-${name}`)).toContainText("Mirror");
 });

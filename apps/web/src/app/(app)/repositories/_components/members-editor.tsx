@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownIcon, ArrowUpIcon, XIcon } from "lucide-react";
 import type { Repo } from "@weaver/core";
 import { Alert, AlertDescription, AlertTitle } from "@weaver/ui/components/alert";
@@ -34,6 +34,7 @@ export function MembersEditor({
   submitting: boolean;
 }) {
   const trpc = useTRPC();
+  const queryClient = useQueryClient();
   const members = useQuery(trpc.repositories.members.queryOptions({ name: repo.name }));
   const candidates = useQuery(trpc.repositories.candidates.queryOptions({ format: repo.format }));
   const [draft, setDraft] = useState<string[] | null>(null);
@@ -59,6 +60,12 @@ export function MembersEditor({
   async function save() {
     try {
       await onSave(list);
+      // Show the saved order right away instead of the old one until the refetch lands.
+      const byName = new Map([...candidates.data!, ...members.data!].map((r) => [r.name, r]));
+      queryClient.setQueryData(
+        trpc.repositories.members.queryKey({ name: repo.name }),
+        list.flatMap((name) => byName.get(name) ?? []),
+      );
       setDraft(null);
     } catch {
       // The caller reports the error; keep the draft.

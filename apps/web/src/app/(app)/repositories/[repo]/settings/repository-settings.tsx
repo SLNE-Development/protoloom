@@ -25,7 +25,7 @@ import { Spinner } from "@weaver/ui/components/spinner";
 import { PageBody, PageHeader } from "@/components/manage/page-header";
 import { VisibilityBadge } from "@/components/manage/visibility-badge";
 import { formatBytes } from "@/lib/browse";
-import { formatLabel, toGeneralPatch } from "@/lib/repository-settings";
+import { deleteBlocked, formatLabel, toGeneralPatch } from "@/lib/repository-settings";
 import { errorCode, errorMessage } from "@/lib/trpc-error";
 import { useTRPC, type RouterInputs, type RouterOutputs } from "@/trpc/client";
 import { FormatBadge, KindLabel } from "../../_components/format-badge";
@@ -179,7 +179,7 @@ export function RepositorySettings({ name }: { name: string }) {
   );
 }
 
-/** Deleting the repository after typing its name; a proto repository only while it holds no artifacts. */
+/** Deleting the repository after typing its name; a proto hosted repository only while it holds no artifacts. */
 function DangerZone({ repo }: { repo: Repository }) {
   const trpc = useTRPC();
   const router = useRouter();
@@ -195,10 +195,10 @@ function DangerZone({ repo }: { repo: Repository }) {
       onError: (error) => toast.error("Couldn't delete the repository", { description: errorMessage(error) }),
     }),
   );
-  // Proto artifacts can be dependencies of other repositories, so they have to go first.
-  const blocked = repo.format === "proto" && repo.assetCount > 0;
+  // The same rule as the server's delete guard.
+  const blocked = deleteBlocked(repo, repo.artifactCount);
   const explanation = blocked
-    ? `It still holds ${repo.assetCount} builds. Delete its artifacts first.`
+    ? `It still holds ${repo.artifactCount} artifacts. Delete them first.`
     : repo.kind === "group"
       ? "Removes the group and API key permissions on it. Its members are not touched."
       : repo.assetCount > 0

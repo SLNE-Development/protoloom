@@ -89,6 +89,7 @@ export const createRepositorySchema = z
     }
   });
 
+/** The values of the create dialog, as {@link createRepositorySchema} validates them. */
 export type CreateRepositoryValues = z.infer<typeof createRepositorySchema>;
 
 /** The empty create dialog. */
@@ -108,6 +109,7 @@ export const generalSettingsSchema = z.object({
   visibility: z.enum(["public", "private"]),
 });
 
+/** The values of the general settings form (description, visibility). */
 export type GeneralSettingsValues = z.infer<typeof generalSettingsSchema>;
 
 /** The update patch of the general settings; an empty description is stored as null. */
@@ -153,9 +155,12 @@ export const mirrorSettingsSchema = z
           url: z.string().trim().refine(isHttpUrl, "Enter an http or https URL"),
           authType: z.enum(["none", "basic", "bearer"]),
           username: z.string().trim().max(200),
-          /** Empty keeps the stored secret. */
+          /** Empty keeps the stored secret while {@link keepsStoredSecret} holds. */
           secret: z.string().max(4000),
-          hasSecret: z.boolean(),
+          /** The upstream as loaded from the server; null for a row added in the form. */
+          stored: z
+            .object({ url: z.string(), authType: z.enum(["none", "basic", "bearer"]), username: z.string(), hasSecret: z.boolean() })
+            .nullable(),
         }),
       )
       .min(1, "A mirror needs at least one upstream"),
@@ -164,6 +169,8 @@ export const mirrorSettingsSchema = z
     metadataTtlSeconds: z.number({ error: "Enter a number" }).int("Enter a whole number").min(0, "Must be 0 or more"),
     maxAgeDays: optionalPositive("Must be more than 0").refine((v) => v === null || Number.isInteger(v), "Enter a whole number"),
     maxSizeGib: optionalPositive("Must be more than 0"),
+    /** The stored max size in bytes, kept as is when the GiB field still shows it. */
+    storedMaxSizeBytes: z.number().nullable(),
     offline: z.boolean(),
     allow: z.string(),
     deny: z.string(),
@@ -175,13 +182,33 @@ export const mirrorSettingsSchema = z
       if (u.authType === "basic" && u.username.trim() === "") {
         ctx.addIssue({ code: "custom", path: ["upstreams", index, "username"], message: "Basic auth needs a username" });
       }
-      if (u.authType === "bearer" && u.secret === "" && !u.hasSecret) {
+      if (u.authType === "bearer" && u.secret === "" && !keepsStoredSecret(u)) {
         ctx.addIssue({ code: "custom", path: ["upstreams", index, "secret"], message: "Bearer auth needs a token" });
       }
     });
   });
 
+/** The values of the mirror settings form, as {@link mirrorSettingsSchema} validates them. */
 export type MirrorSettingsValues = z.infer<typeof mirrorSettingsSchema>;
+
+/** One upstream row of the mirror settings form. */
+export type UpstreamFormRow = MirrorSettingsValues["upstreams"][number];
+
+/**
+ * Whether saving `row` with an empty secret keeps the stored one. The server keeps it only for an
+ * upstream with the same URL, auth type and (for basic auth) username as the stored one.
+ */
+export function keepsStoredSecret(row: UpstreamFormRow): boolean {
+  const stored = row.stored;
+  return (
+    stored !== null &&
+    stored.hasSecret &&
+    row.authType !== "none" &&
+    stored.url === row.url.trim() &&
+    stored.authType === row.authType &&
+    (row.authType !== "basic" || stored.username === row.username.trim())
+  );
+}
 
 /** A new, empty upstream row. */
 export const EMPTY_UPSTREAM: MirrorSettingsValues["upstreams"][number] = {
@@ -189,8 +216,13 @@ export const EMPTY_UPSTREAM: MirrorSettingsValues["upstreams"][number] = {
   authType: "none",
   username: "",
   secret: "",
-  hasSecret: false,
+  stored: null,
 };
+
+/** The max size in GiB as the form shows it (two decimals). */
+function toGib(bytes: number | null): number | null {
+  return bytes === null ? null : Math.round((bytes / GIB) * 100) / 100;
+}
 
 /** One pattern per non-empty line, trimmed. */
 export function parsePatterns(text: string): string[] {
@@ -204,12 +236,19 @@ export function parsePatterns(text: string): string[] {
 export function toMirrorFormValues(repo: { config: unknown; dockerRoot: boolean }, upstreams: UpstreamView[]): MirrorSettingsValues {
   const config = repo.config as MirrorConfig;
   return {
-    upstreams: upstreams.map((u) => ({ url: u.url, authType: u.authType, username: u.username ?? "", secret: "", hasSecret: u.hasSecret })),
+    upstreams: upstreams.map((u) => ({
+      url: u.url,
+      authType: u.authType,
+      username: u.username ?? "",
+      secret: "",
+      stored: { url: u.url, authType: u.authType, username: u.username ?? "", hasSecret: u.hasSecret },
+    })),
     cacheEnabled: config.cache.enabled,
     cacheStore: config.cache.store ?? DEFAULT_STORE,
     metadataTtlSeconds: config.cache.metadataTtlSeconds,
     maxAgeDays: config.cache.maxAgeDays,
-    maxSizeGib: config.cache.maxSizeBytes === null ? null : Math.round((config.cache.maxSizeBytes / GIB) * 100) / 100,
+    maxSizeGib: toGib(config.cache.maxSizeBytes),
+    storedMaxSizeBytes: config.cache.maxSizeBytes,
     offline: config.offline,
     allow: config.rules.allow.join("\n"),
     deny: config.rules.deny.join("\n"),
@@ -242,7 +281,12 @@ export function toMirrorPatch(values: MirrorSettingsValues, format: Format) {
         store: values.cacheStore === DEFAULT_STORE ? null : (values.cacheStore as StoreId),
         metadataTtlSeconds: values.metadataTtlSeconds,
         maxAgeDays: values.maxAgeDays,
-        maxSizeBytes: values.maxSizeGib === null ? null : Math.round(values.maxSizeGib * GIB),
+        maxSizeBytes:
+          values.maxSizeGib === null
+            ? null
+            : values.maxSizeGib === toGib(values.storedMaxSizeBytes)
+              ? values.storedMaxSizeBytes
+              : Math.round(values.maxSizeGib * GIB),
       },
       offline: values.offline,
       rules: { allow: parsePatterns(values.allow), deny: parsePatterns(values.deny) },
@@ -250,6 +294,15 @@ export function toMirrorPatch(values: MirrorSettingsValues, format: Format) {
     },
     ...(docker ? { dockerRoot: values.dockerRoot } : {}),
   };
+}
+
+/**
+ * Whether deleting the repository is refused while it holds `artifactCount` artifacts: proto
+ * hosted repositories only, because artifacts in other repositories may depend on them. The
+ * server guard and the Delete button both use this.
+ */
+export function deleteBlocked(repo: { format: Format; kind: Kind }, artifactCount: number): boolean {
+  return repo.format === "proto" && repo.kind === "hosted" && artifactCount > 0;
 }
 
 /** Whether a key entry on a repository of this format and kind can be narrowed to a group prefix. */

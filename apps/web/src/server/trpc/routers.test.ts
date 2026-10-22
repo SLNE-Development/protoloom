@@ -490,7 +490,12 @@ describe("repositories", () => {
     const shared = list.find((r) => r.name === "shared")!;
     expect(shared.assetCount).toBe(1);
     expect(shared.storageBytes).toBeGreaterThan(0);
-    expect(await caller.repositories.get({ name: "shared" })).toMatchObject({ name: "shared", assetCount: 1, policyCount: 0 });
+    expect(await caller.repositories.get({ name: "shared" })).toMatchObject({
+      name: "shared",
+      assetCount: 1,
+      policyCount: 0,
+      artifactCount: 1,
+    });
     expect(await codeOf(caller.repositories.get({ name: "ghost" }))).toBe("NOT_FOUND");
     expect(await codeOf(call(maintainer()).repositories.list())).toBe("FORBIDDEN");
   });

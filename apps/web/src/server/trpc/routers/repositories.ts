@@ -2,7 +2,8 @@ import { TRPCError } from "@trpc/server";
 import { count, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { FORMATS, KINDS, RegistryError, type Format, type Kind, type Repo, type RepoService, type UpstreamView } from "@weaver/core";
-import { asset, cleanupPolicy, protoArtifact, protoBuild, protoVersion, type Db } from "@weaver/db";
+import { asset, cleanupPolicy, protoArtifact, protoBuild, protoVersion, type Db, type Tx } from "@weaver/db";
+import { deleteBlocked } from "@/lib/repository-settings";
 import { adminProcedure, router } from "../init";
 import { repositoryName } from "../helpers";
 
@@ -17,6 +18,8 @@ export type RepositoryListItem = Repo & {
 export type RepositoryDetails = RepositoryListItem & {
   /** Cleanup policies; only proto repositories have them. */
   policyCount: number;
+  /** Proto artifacts (group:name); 0 for other formats. */
+  artifactCount: number;
 };
 
 const formatInput = z.enum(FORMATS as [Format, ...Format[]]);
@@ -87,6 +90,12 @@ async function withStorage(db: Db, repos: Repo[]): Promise<RepositoryListItem[]>
   return repos.map((repo) => ({ ...repo, ...(storage.get(repo.id) ?? { assetCount: 0, storageBytes: 0 }) }));
 }
 
+/** How many proto artifacts the repository holds. */
+async function protoArtifactCount(db: Db | Tx, repositoryId: string): Promise<number> {
+  const [row] = await db.select({ count: count() }).from(protoArtifact).where(eq(protoArtifact.repositoryId, repositoryId));
+  return row?.count ?? 0;
+}
+
 /** Whether the service refused a name that is already taken. */
 function isNameTaken(error: unknown): boolean {
   const details = error instanceof RegistryError ? (error.details as { field?: unknown; reason?: unknown } | undefined) : undefined;
@@ -114,11 +123,12 @@ export const repositoriesRouter = router({
   get: adminProcedure.input(z.object({ name: repositoryName })).query(async ({ ctx, input }): Promise<RepositoryDetails> => {
     const repo = await ctx.repos.get(input.name);
     if (!repo) throw notFound(input.name);
-    const [[details], [policies]] = await Promise.all([
+    const [[details], [policies], artifacts] = await Promise.all([
       withStorage(ctx.db, [repo]),
       ctx.db.select({ count: count() }).from(cleanupPolicy).where(eq(cleanupPolicy.repositoryId, repo.id)),
+      protoArtifactCount(ctx.db, repo.id),
     ]);
-    return { ...details!, policyCount: policies?.count ?? 0 };
+    return { ...details!, policyCount: policies?.count ?? 0, artifactCount: artifacts };
   }),
 
   /**
@@ -141,20 +151,16 @@ export const repositoriesRouter = router({
     .mutation(({ ctx, input }): Promise<Repo> => ctx.repos.update(ctx.principal, input.name, input.patch)),
 
   /**
-   * Deletes a repository with all its content. A proto repository is refused with
-   * `PRECONDITION_FAILED` while it still holds artifacts (other repositories may depend on them);
-   * the check runs with the repository row locked, so nothing can be published in between.
+   * Deletes a repository with all its content. A proto hosted repository is refused with
+   * `PRECONDITION_FAILED` while it still holds artifacts (other repositories may depend on them;
+   * {@link deleteBlocked}); the check runs with the repository row locked, so nothing can be
+   * published in between.
    */
   delete: adminProcedure.input(z.object({ name: repositoryName })).mutation(async ({ ctx, input }) => {
     await ctx.repos.delete(ctx.principal, input.name, {
       guard: async (tx, repo) => {
-        if (repo.format !== "proto") return;
-        const [used] = await tx
-          .select({ id: protoArtifact.id })
-          .from(protoArtifact)
-          .where(eq(protoArtifact.repositoryId, repo.id))
-          .limit(1);
-        if (used) {
+        if (!deleteBlocked(repo, 1)) return;
+        if (deleteBlocked(repo, await protoArtifactCount(tx, repo.id))) {
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
             message: `Repository ${input.name} still contains artifacts; delete them first`,

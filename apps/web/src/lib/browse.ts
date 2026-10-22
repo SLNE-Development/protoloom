@@ -105,6 +105,13 @@ export function firstFile(nodes: FileTreeNode[]): string | null {
   return null;
 }
 
+/** The artifacts whose `group:name` contains `q` (case-insensitive); all of them for an empty `q`. */
+export function filterArtifacts<T extends { group: string; name: string }>(artifacts: T[], q: string): T[] {
+  const needle = q.trim().toLowerCase();
+  if (needle === "") return artifacts;
+  return artifacts.filter((a) => `${a.group}:${a.name}`.toLowerCase().includes(needle));
+}
+
 /** Human-readable size in binary units. */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

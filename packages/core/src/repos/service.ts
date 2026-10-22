@@ -73,7 +73,10 @@ export type UpdateRepoInput = Partial<Omit<CreateRepoInput, "name" | "format" | 
 
 /** Options of {@link RepoService.delete}. */
 export interface DeleteRepoOptions {
-  /** Checked with the repository row locked; throw to refuse the delete. */
+  /**
+   * A read-only check, run with the repository row locked before anything is deleted; throw to
+   * refuse the delete. It must not write: its queries share the delete's transaction.
+   */
   guard?: (tx: Tx, repo: Repo) => Promise<void>;
 }
 
