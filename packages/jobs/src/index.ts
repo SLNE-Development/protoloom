@@ -15,12 +15,19 @@ export const EVICT_SCHEDULER_ID = "evict-hourly";
 /** Cron pattern of the hourly cache eviction: minute 17 of every hour. */
 export const EVICT_PATTERN = "17 * * * *";
 
+/** Id of the job scheduler that sweeps expired npm login sessions every five minutes. */
+export const NPM_LOGIN_SWEEP_SCHEDULER_ID = "npm-login-sweep";
+
+/** Cron pattern of the npm login sweep: every five minutes. */
+export const NPM_LOGIN_SWEEP_PATTERN = "*/5 * * * *";
+
 /** Payload of a maintenance job; the worker dispatches on `kind`. Later features extend the union. */
 export type MaintenanceJobData =
   | { kind: "cleanup:all" }
   | { kind: "cleanup:repo"; repository: string }
   | { kind: "evict:all" }
-  | { kind: "docker:gc" };
+  | { kind: "docker:gc" }
+  | { kind: "npm:login-sweep" };
 
 /** Return value of a finished cleanup job. */
 export interface CleanupJobResult {
@@ -220,4 +227,9 @@ export function scheduleDailyCleanup(queue: MaintenanceQueue): Promise<void> {
 /** Creates or updates the hourly cache-eviction scheduler; calling it again never adds a second one. */
 export function scheduleHourlyEviction(queue: MaintenanceQueue): Promise<void> {
   return scheduleRepeating(queue, EVICT_SCHEDULER_ID, EVICT_PATTERN, { kind: "evict:all" });
+}
+
+/** Creates or updates the five-minute npm login sweep scheduler; calling it again never adds a second one. */
+export function scheduleNpmLoginSweep(queue: MaintenanceQueue): Promise<void> {
+  return scheduleRepeating(queue, NPM_LOGIN_SWEEP_SCHEDULER_ID, NPM_LOGIN_SWEEP_PATTERN, { kind: "npm:login-sweep" });
 }

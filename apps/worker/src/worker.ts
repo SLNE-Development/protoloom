@@ -10,11 +10,13 @@ import {
   type StoreSet,
 } from "@weaver/core";
 import type { Db } from "@weaver/db";
+import { sweepLoginSessions } from "@weaver/npm";
 import {
   createQueue,
   MAINTENANCE_QUEUE,
   scheduleDailyCleanup,
   scheduleHourlyEviction,
+  scheduleNpmLoginSweep,
   type MaintenanceJobData,
 } from "@weaver/jobs";
 import { cleanupRegistry } from "./cleanups.js";
@@ -67,13 +69,15 @@ export async function processMaintenanceJob(deps: WorkerDeps, data: MaintenanceJ
       // The docker format registers its garbage collection later; until then the job does nothing.
       console.log("weaver: docker:gc is not implemented yet; skipping");
       return { skipped: true };
+    case "npm:login-sweep":
+      return sweepLoginSessions(deps.db, now);
     default:
       throw new UnrecoverableError(`Unknown maintenance job kind ${JSON.stringify((data as { kind?: unknown }).kind)}`);
   }
 }
 
 /**
- * Upserts the `cleanup-daily` and `evict-hourly` schedulers (idempotent) and starts a worker that
+ * Upserts the `cleanup-daily`, `evict-hourly` and `npm-login-sweep` schedulers (idempotent) and starts a worker that
  * processes maintenance jobs one at a time.
  */
 export async function startWorker(deps: WorkerDeps): Promise<RunningWorker> {
@@ -81,6 +85,7 @@ export async function startWorker(deps: WorkerDeps): Promise<RunningWorker> {
   try {
     await scheduleDailyCleanup(queue);
     await scheduleHourlyEviction(queue);
+    await scheduleNpmLoginSweep(queue);
   } finally {
     await queue.close();
   }

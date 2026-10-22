@@ -14,6 +14,7 @@ import {
 } from "./hosted.js";
 import { serveGroup } from "./group.js";
 import { serveMirror } from "./mirror.js";
+import { handleWhoami, legacyLogin, pollWebLogin, startWebLogin } from "./login.js";
 import { handleSearch } from "./search.js";
 import { handleSecurity } from "./security.js";
 import { parseNpmPath, type NpmRoute } from "./route.js";
@@ -68,7 +69,8 @@ async function serveHosted(ctx: HostedContext, route: NpmRoute, req: Request, me
 /**
  * Creates the handler of the `/npm` mount: parses the path, loads the repository (format `npm`, else 404), refuses
  * package writes to mirrors and groups with 405 before authentication, authorizes, then dispatches by repository and
- * route kind (hosted, mirror or group). Search (`GET`) and audit (`POST`) need read access on every kind.
+ * route kind (hosted, mirror or group). Search (`GET`) and audit (`POST`) need read access on every kind. `whoami`,
+ * web login (`/-/v1/login`, its `done` poll) and the legacy couchdb login work on every kind without repository access.
  */
 export const createNpmHandler: FormatFactory = (deps) => {
   const store = createNpmStore(deps.db);
@@ -84,6 +86,10 @@ export const createNpmHandler: FormatFactory = (deps) => {
 
       if (route.kind === "ping") return read ? npmJson({}) : methodNotAllowed("GET, HEAD");
       if (route.kind === "unsupported") return npmError(404, "not supported by Weaver");
+      if (route.kind === "whoami") return read ? await handleWhoami(deps, req) : methodNotAllowed("GET, HEAD");
+      if (route.kind === "login") return method === "POST" ? await startWebLogin(deps, repo, req) : methodNotAllowed("POST");
+      if (route.kind === "loginDone") return read ? await pollWebLogin(deps, repo, route.secret) : methodNotAllowed("GET, HEAD");
+      if (route.kind === "couchUser") return method === "PUT" ? await legacyLogin(deps, req, route.user) : methodNotAllowed("PUT");
       if (route.kind === "search") {
         if (!read) return methodNotAllowed("GET, HEAD");
         authorize(await deps.principal(req), repo, "read");
