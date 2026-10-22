@@ -11,6 +11,8 @@ loadEnvConfig(monorepoRoot, process.env.NODE_ENV !== "production", undefined, tr
 
 const config: NextConfig = {
   output: "standalone",
+  // Protocol clients (Maven, npm, Docker) address `/v2/` and `/maven/x/` exactly; never redirect them.
+  skipTrailingSlashRedirect: true,
   outputFileTracingRoot: monorepoRoot,
   transpilePackages: ["@weaver/ui"],
   serverExternalPackages: ["pg"],
