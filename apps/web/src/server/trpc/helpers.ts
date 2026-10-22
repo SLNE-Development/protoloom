@@ -49,7 +49,7 @@ export function canBrowseRepository(p: Principal, repo: RepoRef): boolean {
     case "user":
       return true;
     case "apikey":
-      return p.permissions.some((entry) => entry.repository === repo.name);
+      return p.permissions.some((entry) => entry.repositoryId === repo.id);
   }
 }
 

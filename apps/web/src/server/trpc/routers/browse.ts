@@ -212,7 +212,7 @@ export const browseRouter = router({
         names.length === 0
           ? []
           : await ctx.db
-              .select({ name: repository.name, visibility: repository.visibility })
+              .select({ id: repository.id, name: repository.name, visibility: repository.visibility })
               .from(repository)
               .where(inArray(repository.name, names));
       const byName = new Map(repos.map((r) => [r.name, r]));

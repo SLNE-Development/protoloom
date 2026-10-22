@@ -20,8 +20,20 @@ function key(role: Role, permissions: KeyPermission[], keyId = `key-${role}`): P
   return { kind: "apikey", keyId, userId: `user-${role}`, role, permissions };
 }
 
-const write = (repo: string): KeyPermission => ({ repository: repo, groupPrefix: null, access: "write" });
-const read = (repo: string): KeyPermission => ({ repository: repo, groupPrefix: null, access: "read" });
+/** Fixed repository ids, so principals can be built before the rows exist. */
+const repoIds: Record<string, string> = {
+  releases: "00000000-0000-4000-8000-000000000001",
+  snapshots: "00000000-0000-4000-8000-000000000002",
+  shared: "00000000-0000-4000-8000-000000000003",
+  alpha: "00000000-0000-4000-8000-000000000004",
+  zeta: "00000000-0000-4000-8000-000000000005",
+  other: "00000000-0000-4000-8000-000000000006",
+  hidden: "00000000-0000-4000-8000-000000000007",
+  private: "00000000-0000-4000-8000-000000000008",
+};
+
+const write = (repo: string): KeyPermission => ({ repositoryId: repoIds[repo]!, repository: repo, groupPrefix: null, access: "write" });
+const read = (repo: string): KeyPermission => ({ repositoryId: repoIds[repo]!, repository: repo, groupPrefix: null, access: "read" });
 
 const maintainer = key("maintainer", [write("releases"), write("snapshots"), read("shared")]);
 const admin = key("admin", [write("releases"), write("snapshots")], "key-admin");
@@ -65,7 +77,7 @@ describe("registry", () => {
 
   /** Inserts a hosted proto repository with the given proto settings in its config. */
   async function insertRepo(name: string, settings: Partial<ProtoSettings> = {}) {
-    await testDb.db.insert(repository).values({ name, format: "proto", kind: "hosted", config: settings });
+    await testDb.db.insert(repository).values({ id: repoIds[name], name, format: "proto", kind: "hosted", config: settings });
   }
 
   /** Merges proto settings into a repository's config. */

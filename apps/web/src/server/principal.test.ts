@@ -22,13 +22,14 @@ const env: AuthEnv = {
 let testDb: Awaited<ReturnType<typeof startTestDb>>;
 let db: Db;
 let auth: Auth;
+const repoIds = { main: "", public: "" };
 
 beforeAll(async () => {
   testDb = await startTestDb();
   db = testDb.db;
   auth = createAuth(db, env);
-  await insertRepository(db, "main", "private");
-  await insertRepository(db, "public", "public");
+  repoIds.main = await insertRepository(db, "main", "private");
+  repoIds.public = await insertRepository(db, "public", "public");
 });
 
 afterAll(async () => {
@@ -51,6 +52,11 @@ async function createKey(userId: string) {
     { repository: "public", groupPrefix: null, access: "read" },
   ]);
   return created;
+}
+
+function basic(user: string, key: string) {
+  const credentials = Buffer.from(`${user}:${key}`).toString("base64");
+  return new Request("http://localhost:3000/api/v1/x", { headers: { authorization: `Basic ${credentials}` } });
 }
 
 function bearer(key: string) {
@@ -82,11 +88,33 @@ describe("getPrincipal", () => {
       userId: owner.id,
       role: "maintainer",
       permissions: expect.arrayContaining([
-        { repository: "main", groupPrefix: "dev.surf", access: "write" },
-        { repository: "public", groupPrefix: null, access: "read" },
+        { repositoryId: repoIds.main, repository: "main", groupPrefix: "dev.surf", access: "write" },
+        { repositoryId: repoIds.public, repository: "public", groupPrefix: null, access: "read" },
       ]),
     });
     if (principal.kind === "apikey") expect(principal.permissions).toHaveLength(2);
+  });
+
+  it("resolves a basic-authenticated request (any user name, token as password) to the key's principal", async () => {
+    const owner = await createUser("maintainer");
+    const key = await createKey(owner.id);
+    for (const name of ["someone", ""]) {
+      expect(await getPrincipal(basic(name, key.key), { db, auth })).toMatchObject({
+        kind: "apikey",
+        keyId: key.id,
+        userId: owner.id,
+        role: "maintainer",
+      });
+    }
+    await expectUnauthorized(getPrincipal(basic("someone", "not-a-real-key"), { db, auth }));
+    await expectUnauthorized(getPrincipal(new Request("http://localhost/", { headers: { authorization: "Basic !!" } }), { db, auth }));
+  });
+
+  it("rejects a basic-authenticated key whose owner is banned", async () => {
+    const owner = await createUser("maintainer");
+    const key = await createKey(owner.id);
+    await db.update(user).set({ banned: true }).where(eq(user.id, owner.id));
+    await expectUnauthorized(getPrincipal(basic("ci", key.key), { db, auth }));
   });
 
   it("rejects garbage, empty, expired and revoked keys", async () => {
