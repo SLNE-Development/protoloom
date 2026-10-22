@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 
 export function generateMetadata(): Metadata {
   return pageMetadata({
-    title: "Weaver · Versioned .proto contracts for every build",
+    title: "Weaver · Self-hosted Maven, npm, Docker and proto registry",
     absoluteTitle: true,
     description: SITE_DESCRIPTION,
     path: "/",

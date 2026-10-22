@@ -208,7 +208,7 @@ export function OgCard({ eyebrow, title, subtitle, subtitleMono, footer, badge, 
           {footer}
         </div>
         <div style={{ display: "flex", gap: 28 }}>
-          {(meta ?? ["Self-hosted .proto registry"]).map((item) => (
+          {(meta ?? ["Self-hosted repository manager"]).map((item) => (
             <div key={item} style={{ display: "flex", color: meta ? OG_COLORS.text : OG_COLORS.muted }}>
               {item}
             </div>
