@@ -32,8 +32,11 @@ async function filesBelow(dir: string): Promise<string[]> {
 describe("hosted blob uploads", () => {
   let reg: DockerTestRegistry;
   let key: string;
+  let beforeBlobUpsert: ((digest: string, storageKey: string) => Promise<void>) | undefined;
   beforeAll(async () => {
-    reg = await startDockerTestRegistry();
+    reg = await startDockerTestRegistry({
+      dockerOptions: { beforeBlobUpsert: (digest, storageKey) => beforeBlobUpsert?.(digest, storageKey) ?? Promise.resolve() },
+    });
     await reg.createRepo({ name: "hosted", format: "docker", kind: "hosted" });
     await reg.createRepo({ name: "other", format: "docker", kind: "hosted" });
     key = reg.tokenFor([
@@ -146,6 +149,9 @@ describe("hosted blob uploads", () => {
     const res = await patch("hosted/ooo", id, data.subarray(2000), "2000-2999");
     expect(res.status).toBe(416);
     expect(res.headers.get("range")).toBe("0-999");
+    expect(res.headers.get("location")).toBe(`/v2/hosted/ooo/blobs/uploads/${id}`);
+    expect(res.headers.get("docker-upload-uuid")).toBe(id);
+    expect(res.headers.get("content-length")).not.toBe("0");
     expect(await codeOf(res)).toBe("RANGE_INVALID");
     const status = await reg.call("GET", `hosted/ooo/blobs/uploads/${id}`, { token: key });
     expect(status.headers.get("range")).toBe("0-999");
@@ -170,7 +176,10 @@ describe("hosted blob uploads", () => {
       },
     });
     const broken = await patch("hosted/resume", id, body);
-    expect(broken.status).toBeGreaterThanOrEqual(400);
+    expect(broken.status).toBe(400);
+    expect(broken.headers.get("range")).toBe("0-599");
+    expect(broken.headers.get("content-length")).not.toBe("0");
+    expect(await codeOf(broken)).toBe("BLOB_UPLOAD_INVALID");
     const status = await reg.call("GET", `hosted/resume/blobs/uploads/${id}`, { token: key });
     expect(status.status).toBe(204);
     expect(status.headers.get("range")).toBe("0-599");
@@ -251,10 +260,28 @@ describe("hosted blob uploads", () => {
     const b = await start("other/dup");
     expect((await patch("hosted/dup", a, data)).status).toBe(202);
     expect((await patch("other/dup", b, data)).status).toBe(202);
-    const [ra, rb] = await Promise.all([finish("hosted/dup", a, digest), finish("other/dup", b, digest)]);
-    expect(ra.status).toBe(201);
-    expect(rb.status).toBe(201);
-    expect(await blobRows(digest)).toHaveLength(1);
+    // Hold both finalizes after their object is stored and before the row upsert, so both race the
+    // unique key and exactly one takes the loser path (deleting its own object).
+    const keys: string[] = [];
+    let release!: () => void;
+    const bothStored = new Promise<void>((resolve) => (release = resolve));
+    beforeBlobUpsert = async (d, storageKey) => {
+      if (d !== digest) return;
+      keys.push(storageKey);
+      if (keys.length === 2) release();
+      await bothStored;
+    };
+    try {
+      const [ra, rb] = await Promise.all([finish("hosted/dup", a, digest), finish("other/dup", b, digest)]);
+      expect(ra.status).toBe(201);
+      expect(rb.status).toBe(201);
+    } finally {
+      beforeBlobUpsert = undefined;
+    }
+    expect(keys).toHaveLength(2);
+    const rows = await blobRows(digest);
+    expect(rows).toHaveLength(1);
+    expect(keys).toContain(rows[0]!.storageKey);
     expect(await storedObjects(digest)).toHaveLength(1);
     expect(await getBlob("hosted/dup", digest)).toEqual(data);
     expect(await getBlob("other/dup", digest)).toEqual(data);
