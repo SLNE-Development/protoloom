@@ -1,8 +1,13 @@
 import {
+  createAssetService,
+  createMirrorEngine,
   createRegistry,
   createRepoService,
   createStoreSetFromEnv,
   deriveSecretKey,
+  getSettings,
+  type AssetService,
+  type MirrorEngine,
   type Registry,
   type RepoService,
   type StoreSet,
@@ -23,6 +28,10 @@ export interface ServerContext {
   secretKey: Buffer;
   /** Repository management over `db`, `stores` and `secretKey`. */
   repos: RepoService;
+  /** Stored files of non-proto repositories. */
+  assets: AssetService;
+  /** Serves and caches mirror repositories from their upstreams. */
+  mirror: MirrorEngine;
 }
 
 // Kept on globalThis so dev-mode module reloads reuse the same pool instead of leaking one per reload.
@@ -35,13 +44,24 @@ export function getServerContext(): ServerContext {
     // The object stores read only the validated STORAGE_* / S3_* values.
     const stores = createStoreSetFromEnv(env);
     const secretKey = deriveSecretKey(env.BETTER_AUTH_SECRET);
+    const repos = createRepoService({ db, stores, secretKey });
+    const assets = createAssetService({ db, stores });
+    const mirror = createMirrorEngine({
+      db,
+      stores,
+      repos,
+      assets,
+      settings: () => getSettings(db, { primaryStore: stores.primary.id, configuredStores: stores.configured() }),
+    });
     globalForContext.__weaverServerContext = {
       db,
       stores,
       auth: createAuth(db),
       registry: createRegistry({ db, stores }),
       secretKey,
-      repos: createRepoService({ db, stores, secretKey }),
+      repos,
+      assets,
+      mirror,
     };
   }
   return globalForContext.__weaverServerContext;

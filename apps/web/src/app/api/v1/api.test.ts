@@ -138,6 +138,9 @@ beforeAll(async () => {
     stores,
     auth,
     registry: createRegistry({ db, stores }),
+    // Not used by the artifact routes under test.
+    assets: undefined as unknown as ServerContext["assets"],
+    mirror: undefined as unknown as ServerContext["mirror"],
     secretKey: deriveSecretKey(authEnv.BETTER_AUTH_SECRET),
     repos: createRepoService({ db, stores, secretKey: deriveSecretKey(authEnv.BETTER_AUTH_SECRET) }),
   };
