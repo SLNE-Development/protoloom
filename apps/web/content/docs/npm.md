@@ -33,7 +33,11 @@ To send only one scope to Weaver and keep everything else on the default registr
 //{{host}}/npm/npm-group/:_authToken=${WEAVER_TOKEN}
 ```
 
-pnpm and yarn classic read the same `.npmrc`.
+pnpm and yarn classic read the same `.npmrc`. Yarn classic sends the token for unscoped packages only when `always-auth` is set, so for a private repository add this line too (npm warns that it does not know the key, and ignores it):
+
+```ini
+//{{host}}/npm/npm-group/:always-auth=true
+```
 
 ### yarn berry
 
@@ -42,6 +46,7 @@ In `.yarnrc.yml`:
 ```yaml
 npmRegistryServer: "{{url}}/npm/npm-group/"
 npmAuthToken: "${WEAVER_TOKEN}"
+npmAlwaysAuth: true
 ```
 
 For one scope only:
@@ -51,7 +56,10 @@ npmScopes:
   acme:
     npmRegistryServer: "{{url}}/npm/npm-group/"
     npmAuthToken: "${WEAVER_TOKEN}"
+    npmAlwaysAuth: true
 ```
+
+Without `npmAlwaysAuth`, yarn berry sends the token only for scoped packages and every unscoped install from a private repository fails with `Invalid authentication`. On a plain-http address other than `localhost`, yarn berry also needs the host in `unsafeHttpWhitelist`.
 
 ### bun
 
