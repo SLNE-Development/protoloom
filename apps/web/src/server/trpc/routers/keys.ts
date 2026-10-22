@@ -1,13 +1,13 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { maxKeyAccess, recordAudit, type Format, type KeyPermission, type Kind } from "@weaver/core";
+import { recordAudit, type KeyPermission } from "@weaver/core";
 import { apikey, repoPermission, repository, user } from "@weaver/db";
 import { authedProcedure, router } from "../init";
-import { groupPrefix, notFound, repositoryName } from "../helpers";
+import { issueApiKey, issueKeyInput } from "../../api-keys";
+import { notFound } from "../helpers";
 
-/** Prefix of every API key secret Weaver issues, so leaked keys are recognisable. */
-export const API_KEY_PREFIX = "pl_";
+export { API_KEY_PREFIX } from "../../api-keys";
 
 /** An API key as listed: never the secret, only its first characters (`start`). */
 export interface ApiKeySummary {
@@ -22,29 +22,6 @@ export interface ApiKeySummary {
   lastUsedAt: Date | null;
   createdAt: Date;
   permissions: KeyPermission[];
-}
-
-const permissionInput = z.object({
-  repository: repositoryName,
-  groupPrefix,
-  access: z.enum(["read", "write"]),
-});
-
-/**
- * Why a key entry could never grant anything, or null when it can: groups are read-only, and group
- * prefixes narrow only proto hosted and proto mirror repositories (their artifacts have groups).
- */
-function uselessEntry(
-  repo: { name: string; format: Format; kind: Kind },
-  entry: { groupPrefix: string | null; access: "read" | "write" },
-): string | null {
-  if (entry.access === "write" && repo.kind === "group") {
-    return `${repo.name} is a group, and groups are read-only; grant write on its members instead`;
-  }
-  if (entry.groupPrefix !== null && (repo.format !== "proto" || repo.kind === "group")) {
-    return `A group prefix only applies to proto hosted and proto mirror repositories; remove it for ${repo.name}`;
-  }
-  return null;
 }
 
 /** Personal API keys: create (the secret is shown once), list, revoke. */
@@ -111,68 +88,8 @@ export const keysRouter = router({
    * can never grant anything (write on a group, a group prefix outside proto hosted/mirror) are `BAD_REQUEST`.
    */
   create: authedProcedure
-    .input(
-      z.object({
-        name: z.string().trim().min(1).max(32),
-        expiresInDays: z.number().int().min(1).max(365).optional(),
-        permissions: z.array(permissionInput).min(1).max(100),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const { principal } = ctx;
-      if (maxKeyAccess(principal.role) === "read" && input.permissions.some((p) => p.access === "write")) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Viewers can only create read-only keys" });
-      }
-      const names = [...new Set(input.permissions.map((p) => p.repository))];
-      const byName = new Map(
-        (
-          await ctx.db
-            .select({ id: repository.id, name: repository.name, format: repository.format, kind: repository.kind })
-            .from(repository)
-            .where(inArray(repository.name, names))
-        ).map((r) => [r.name, r]),
-      );
-      const unknown = names.filter((name) => !byName.has(name));
-      if (unknown.length > 0) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: `Unknown repositories: ${unknown.join(", ")}` });
-      }
-      for (const entry of input.permissions) {
-        const problem = uselessEntry(byName.get(entry.repository)!, entry);
-        if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
-      }
-
-      const created = await ctx.auth.api.createApiKey({
-        body: {
-          userId: principal.userId,
-          name: input.name,
-          prefix: API_KEY_PREFIX,
-          expiresIn: input.expiresInDays ? input.expiresInDays * 86_400 : null,
-        },
-      });
-      try {
-        await ctx.db.transaction(async (tx) => {
-          await tx.insert(repoPermission).values(
-            input.permissions.map(({ repository: name, groupPrefix: prefix, access }) => ({
-              apiKeyId: created.id,
-              repositoryId: byName.get(name)!.id,
-              groupPrefix: prefix,
-              access,
-            })),
-          );
-          await recordAudit(tx, {
-            actor: principal,
-            action: "key.create",
-            target: created.id,
-            details: { name: input.name, expiresInDays: input.expiresInDays ?? null, permissions: input.permissions },
-          });
-        });
-      } catch (error) {
-        // A key without its permission rows must not survive.
-        await ctx.db.delete(apikey).where(eq(apikey.id, created.id));
-        throw error;
-      }
-      return { id: created.id, key: created.key };
-    }),
+    .input(issueKeyInput)
+    .mutation(({ ctx, input }) => issueApiKey({ db: ctx.db, auth: ctx.auth }, ctx.principal, input)),
 
   /** Revokes (deletes) one of the caller's keys, or any key for admins; `NOT_FOUND` otherwise. */
   revoke: authedProcedure.input(z.object({ id: z.string().min(1).max(200) })).mutation(async ({ ctx, input }) => {
