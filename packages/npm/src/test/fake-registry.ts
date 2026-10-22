@@ -9,6 +9,8 @@ export interface FakeRegistry {
   url: string;
   /** Raw request URLs (path and query) received, in order. */
   hits: string[];
+  /** Every request received, in order, with its headers and the raw body bytes. */
+  requests: Array<{ method: string; url: string; headers: IncomingMessage["headers"]; body: Buffer }>;
   /** While down, every request answers 503. */
   setOffline(down: boolean): void;
   /** Stops the server. */
@@ -40,7 +42,7 @@ function splitPath(pathname: string): { name: string; rest: string[] } | null {
 
 /**
  * Starts a fake npm registry serving full and abbreviated packuments (chosen by Accept), tarballs at
- * `<name>/-/<bare>-<version>.tgz`, `GET /-/v1/search` and `POST /-/npm/v1/security/*` (audit). With `gzip`, JSON
+ * `<name>/-/<bare>-<version>.tgz`, `GET /-/v1/search` (paged by `size` and `from`) and `POST /-/npm/v1/security/*` (audit). With `gzip`, JSON
  * answers are gzip-encoded when the client accepts it.
  */
 export async function startFakeRegistry(
@@ -55,6 +57,7 @@ export async function startFakeRegistry(
     byName.set(p.name, { name: p.name, bare, versions: p.versions, tags: { latest: p.versions[p.versions.length - 1]!, ...p.tags }, tarballs });
   }
   const hits: string[] = [];
+  const requests: FakeRegistry["requests"] = [];
   let offline = false;
   let url = "";
 
@@ -87,16 +90,26 @@ export async function startFakeRegistry(
   const server = createServer((req, res) => {
     const raw = req.url ?? "/";
     hits.push(raw);
-    // Drain any request body before answering.
-    req.resume();
+    // Read the whole request body before answering.
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      requests.push({ method: req.method ?? "GET", url: raw, headers: req.headers, body: Buffer.concat(chunks) });
+      answer(req, res, raw);
+    });
+  });
+
+  function answer(req: IncomingMessage, res: ServerResponse, raw: string): void {
     if (offline) return sendJson(req, res, 503, { error: "service unavailable" });
     const { pathname, searchParams } = new URL(raw, "http://fake");
     if (pathname === "/-/v1/search") {
       const text = searchParams.get("text") ?? "";
-      const objects = [...byName.values()]
+      const size = Number(searchParams.get("size") ?? "20");
+      const from = Number(searchParams.get("from") ?? "0");
+      const all = [...byName.values()]
         .filter((p) => p.name.includes(text))
         .map((p) => ({ package: { name: p.name, version: p.tags["latest"] }, score: { final: 1 }, searchScore: 1 }));
-      return sendJson(req, res, 200, { objects, total: objects.length, time: new Date(0).toUTCString() });
+      return sendJson(req, res, 200, { objects: all.slice(from, from + size), total: all.length, time: new Date(0).toUTCString() });
     }
     if (pathname.startsWith("/-/npm/v1/security/")) {
       return req.method === "POST" ? sendJson(req, res, 200, {}) : sendJson(req, res, 405, { error: "method not allowed" });
@@ -116,13 +129,14 @@ export async function startFakeRegistry(
       return;
     }
     return sendJson(req, res, 404, { error: "Not found" });
-  });
+  }
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
   return {
     url,
     hits,
+    requests,
     setOffline(down) {
       offline = down;
     },

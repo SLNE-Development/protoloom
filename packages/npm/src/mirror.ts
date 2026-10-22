@@ -39,18 +39,27 @@ function unusable(res: MirrorResponse): boolean {
   return res.status === 401 || res.status === 403 || (res.status >= 300 && res.status < 400);
 }
 
-/** The cached copy at `key`, served as stale; null when caching is off or nothing readable is cached. */
+/**
+ * The cached copy at `key`, served as stale; null when caching is off or nothing readable is cached. A copy that
+ * cannot be opened or touched (store failure) counts as none, as in the mirror engine.
+ */
 async function staleCopy(deps: FormatDeps, repo: Repo, key: string, method: "GET" | "HEAD"): Promise<MirrorResponse | null> {
   if (!(repo.config as MirrorConfig).cache.enabled) return null;
   const row = await deps.assets.find(repo.id, key);
   if (!row) return null;
   let body: ReadableStream<Uint8Array> | null = null;
-  if (method === "GET") {
-    const read = await deps.assets.open(row);
-    if (!read) return null;
-    body = Readable.toWeb(read.body) as NodeReadableStream<Uint8Array> as unknown as ReadableStream<Uint8Array>;
+  try {
+    if (method === "GET") {
+      const read = await deps.assets.open(row);
+      if (!read) return null;
+      body = Readable.toWeb(read.body) as NodeReadableStream<Uint8Array> as unknown as ReadableStream<Uint8Array>;
+    }
+    await deps.assets.touch(row.id);
+  } catch (error) {
+    await body?.cancel().catch(() => undefined);
+    console.warn(`weaver: npm mirror ${repo.name} could not read its cached ${key}`, error);
+    return null;
   }
-  await deps.assets.touch(row.id);
   const headers = new Headers({ "content-length": String(row.size), etag: `"${row.sha256}"`, "last-modified": row.updatedAt.toUTCString() });
   if (row.contentType) headers.set("content-type", row.contentType);
   return { status: 200, headers, body, cache: "stale", asset: row, upstreamUrl: null };
@@ -102,7 +111,8 @@ async function readPackumentText(repo: Repo, body: ReadableStream<Uint8Array>): 
  * The full and the abbreviated packument are cached separately (`<name>/.packument`, `<name>/.corgi`). When the
  * abbreviated one was asked for but the upstream answered with a full document, it is abbreviated here. Every
  * tarball URL points to `${publicUrl}/npm/${servingRepo}`. Throws `upstream_unavailable` (502) when no upstream can
- * answer and nothing is cached, for an upstream 401/403, for a document over 128 MiB and for an invalid document.
+ * answer and nothing is cached, for an upstream 401/403, for a document over 128 MiB and for an invalid document
+ * (not an object, or a `versions` map with an entry that is not an object).
  */
 export async function mirrorPackument(
   deps: FormatDeps,
@@ -128,10 +138,11 @@ export async function mirrorPackument(
   } catch {
     throw new RegistryError("upstream_unavailable", `the upstream of ${repo.name} sent an invalid packument`);
   }
-  if (!isRecord(parsed) || !isRecord(parsed["versions"])) {
+  if (!isRecord(parsed) || !isRecord(parsed["versions"]) || !Object.values(parsed["versions"]).every(isRecord)) {
     throw new RegistryError("upstream_unavailable", `the upstream of ${repo.name} sent an invalid packument`);
   }
-  const doc = { ...parsed, name: typeof parsed["name"] === "string" ? parsed["name"] : name.full } as unknown as Packument;
+  // The requested name, not the upstream's claim, names the package and its tarball URLs.
+  const doc = { ...parsed, name: name.full } as unknown as Packument;
   const corgi = (res.headers.get("content-type") ?? "").toLowerCase().startsWith(ABBREVIATED_TYPE);
   const shaped: Packument | AbbreviatedPackument = abbreviated && !corgi ? abbreviate(doc) : doc;
   return { document: rewriteTarballs(shaped, `${deps.publicUrl}/npm/${servingRepo}`), cache: res.cache };
@@ -161,10 +172,26 @@ function forMethod(method: string, res: Response): Response {
   return method === "HEAD" ? new Response(null, { status: res.status, headers: res.headers }) : res;
 }
 
-/** Streams a mirrored tarball to the client; a GET records a download with the engine's cache result. */
+/** Streams a mirrored tarball to the client (404 when the mirror has none); a GET records a download with the engine's cache result. */
 async function serveMirrorTarball(deps: FormatDeps, repo: Repo, principal: Principal, name: PackageName, file: string, method: "GET" | "HEAD"): Promise<Response> {
   const res = await mirrorTarball(deps, repo, name, file, method);
   if (res === null) return npmError(404, "not found");
+  return streamMirrorTarball(deps, repo, principal, name, file, method, res);
+}
+
+/**
+ * Turns a tarball answer of {@link mirrorTarball} into the client response with the tarball headers; a GET records a
+ * download on `repo` with the engine's cache result (the body is cancelled when that fails).
+ */
+export async function streamMirrorTarball(
+  deps: FormatDeps,
+  repo: Repo,
+  principal: Principal,
+  name: PackageName,
+  file: string,
+  method: "GET" | "HEAD",
+  res: MirrorResponse,
+): Promise<Response> {
   const headers = new Headers();
   for (const header of TARBALL_HEADERS) {
     const value = res.headers.get(header);

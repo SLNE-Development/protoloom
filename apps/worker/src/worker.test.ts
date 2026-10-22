@@ -8,13 +8,14 @@ import { asc, eq, sql } from "drizzle-orm";
 import {
   asset,
   cleanupPolicy,
+  npmLoginSession,
   protoArtifact as artifact,
   protoBuild as build,
   protoVersion as version,
   repository,
 } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
-import { createStoreSetFromEnv, putBuffer, type StoreSet } from "@weaver/core";
+import { createStoreSetFromEnv, deriveSecretKey, putBuffer, type StoreSet } from "@weaver/core";
 import {
   createQueue,
   enqueueCleanup,
@@ -35,7 +36,12 @@ describe("worker", () => {
   const running: RunningWorker[] = [];
 
   async function start(): Promise<RunningWorker> {
-    const w = await startWorker({ db: testDb.db, stores, connection: redisConnection(valkey.getConnectionUrl()) });
+    const w = await startWorker({
+      db: testDb.db,
+      stores,
+      secretKey: deriveSecretKey("worker-test-secret"),
+      connection: redisConnection(valkey.getConnectionUrl()),
+    });
     running.push(w);
     return w;
   }
@@ -103,16 +109,40 @@ describe("worker", () => {
     expect(remaining.map((r) => r.n)).toEqual([3, 4]);
   });
 
-  it("registers one daily cleanup and one hourly eviction scheduler when started twice", async () => {
+  it("completes a cleanup:repo job for a proto repo with keep_last_snapshot_builds 1 and 3 builds", async () => {
+    const [repo] = await testDb.db.insert(repository).values({ name: "protos", format: "proto", kind: "hosted" }).returning();
+    await testDb.db.insert(cleanupPolicy).values({ repositoryId: repo!.id, kind: "keep_last_snapshot_builds", value: 1 });
+    const [art] = await testDb.db.insert(artifact).values({ repositoryId: repo!.id, group: "acme", name: "order" }).returning();
+    const [ver] = await testDb.db
+      .insert(version)
+      .values({ artifactId: art!.id, version: "2.0.0-SNAPSHOT", isSnapshot: true })
+      .returning();
+    for (let n = 1; n <= 3; n++) {
+      const storageKey = `protos/acme/order/2.0.0-SNAPSHOT/${randomUUID()}.tar.gz`;
+      await putBuffer(stores.primary, storageKey, Buffer.from(`build ${n}`));
+      await testDb.db
+        .insert(build)
+        .values({ versionId: ver!.id, buildNumber: n, store: stores.primary.id, storageKey, sha256: "0".repeat(64), sizeBytes: 7 });
+    }
+
+    await start();
+    const jobId = await enqueueCleanup(queue, "protos");
+    expect(await waitForFinish(jobId)).toEqual({ state: "completed", result: { deleted: 2 }, failedReason: null });
+    const remaining = await testDb.db.select({ n: build.buildNumber }).from(build);
+    expect(remaining.map((r) => r.n)).toEqual([3]);
+  });
+
+  it("registers the daily cleanup, hourly eviction and npm login sweep schedulers once when started twice", async () => {
     await start();
     await start();
 
     const schedulers = await queue.getJobSchedulers();
-    expect(schedulers).toHaveLength(2);
+    expect(schedulers).toHaveLength(3);
     expect(schedulers).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: "cleanup-daily", pattern: "0 3 * * *" }),
         expect.objectContaining({ key: "evict-hourly", pattern: "17 * * * *" }),
+        expect.objectContaining({ key: "npm-login-sweep", pattern: "*/5 * * * *" }),
       ]),
     );
   });
@@ -143,6 +173,24 @@ describe("worker", () => {
 
     expect(status).toEqual({ state: "completed", result: { repositories: 1, assetsDeleted: 1, bytesFreed: 3 }, failedReason: null });
     expect(await testDb.db.select().from(asset).where(eq(asset.repositoryId, repo!.id))).toHaveLength(0);
+  });
+
+  it("runs an npm:login-sweep job and deletes expired login sessions", async () => {
+    const [repo] = await testDb.db.insert(repository).values({ name: "npm", format: "npm", kind: "hosted" }).returning();
+    const session = (id: string, offsetMs: number) => ({
+      id,
+      pollHash: id.padEnd(64, "0"),
+      repositoryId: repo!.id,
+      expiresAt: new Date(Date.now() + offsetMs),
+    });
+    await testDb.db.insert(npmLoginSession).values([session("expired", -60_000), session("live", 600_000)]);
+
+    await start();
+    const job = await queue.add("npm:login-sweep", { kind: "npm:login-sweep" });
+    const status = await waitForFinish(job.id!);
+
+    expect(status).toEqual({ state: "completed", result: { sessions: 1, keys: 0 }, failedReason: null });
+    expect((await testDb.db.select({ id: npmLoginSession.id }).from(npmLoginSession)).map((r) => r.id)).toEqual(["live"]);
   });
 
   it("completes a docker:gc job as a no-op until the docker format handles it", async () => {

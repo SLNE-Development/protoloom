@@ -169,6 +169,42 @@ describe("mirror engine", () => {
     expect((await assets.find(repo.id, "a/b.jar"))!.lastAccessedAt).toBeInstanceOf(Date);
   });
 
+  it("evict waits for a pending cache write, then deletes the asset row and its object", async () => {
+    up.handler = serve({ "a/b.json": "<html>login</html>" }, "text/html");
+    const repo = await mirror(cached);
+    const res = await engine.fetch({ repo, path: "a/b.json", subject: "a/b.json", class: "metadata" });
+    expect(res!.cache).toBe("miss");
+    expect(await readText(res!)).toBe("<html>login</html>");
+    // No drain: evict itself must wait for the write the miss started.
+    await engine.evict(repo, "a/b.json");
+    expect(await assetRows()).toHaveLength(0);
+    expect(await filesIn(blobDir)).toEqual([]);
+    await engine.drain();
+    expect(await assetRows()).toHaveLength(0);
+
+    const again = await engine.fetch({ repo, path: "a/b.json", subject: "a/b.json", class: "metadata" });
+    expect(again!.cache).toBe("miss");
+    await readText(again!);
+    await engine.drain();
+    expect(await assetRows()).toHaveLength(1);
+    await engine.evict(repo, "a/b.json");
+    expect(await assetRows()).toHaveLength(0);
+    // Nothing cached under the key is not an error.
+    await engine.evict(repo, "a/b.json");
+  });
+
+  it("evict deletes the asset of a custom cache key only", async () => {
+    up.handler = serve({ "a/b.json": "{}" }, "application/json");
+    const repo = await mirror(cached);
+    for (const cacheKey of ["a/b.json#one", "a/b.json#two"]) {
+      const res = await engine.fetch({ repo, path: "a/b.json", cacheKey, subject: "a/b.json", class: "metadata" });
+      await readText(res!);
+    }
+    await engine.evict(repo, "a/b.json#one");
+    await engine.drain();
+    expect((await assetRows()).map((r) => r.path)).toEqual(["a/b.json#two"]);
+  });
+
   it("metadata expires after ttl and is refetched", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));

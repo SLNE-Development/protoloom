@@ -17,6 +17,10 @@
     "./coordinates": {
       "types": "./dist/coordinates.d.ts",
       "default": "./dist/coordinates.js"
+    },
+    "./cleanup-kinds": {
+      "types": "./dist/cleanup/kinds.d.ts",
+      "default": "./dist/cleanup/kinds.js"
     }
   },
   "scripts": {

@@ -4,6 +4,9 @@ import { formatCoordinate, parseCoordinate, type VersionInfo } from "@weaver/cor
 /** Header carrying how many Weaver mirrors a request has passed through; raised by one at every hop. */
 export const HOPS_HEADER = "x-weaver-hops";
 
+/** Response header carrying the SHA-256 of an archive. */
+export const SHA_HEADER = "x-weaver-sha256";
+
 /** Requests with more hops than this are refused as a mirror loop. */
 export const MAX_MIRROR_HOPS = 4;
 
@@ -20,6 +23,10 @@ function isCoordinate(s: string): boolean {
 const coordinateString = z.string().refine(isCoordinate, "expected group:name:version");
 const isoDate = z.iso.datetime({ offset: true });
 const count = z.number().int().nonnegative();
+
+/** Lowercase hex SHA-256 digests, as Weaver sends them. */
+export const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const sha256Hex = z.string().regex(SHA256_PATTERN);
 
 /** The `/api/v1` version list body: `{ versions: [{ version, isSnapshot, latestBuild, updatedAt }] }`, dates ISO. */
 export const versionsBodySchema: z.ZodType<{
@@ -48,14 +55,14 @@ export const manifestBodySchema: z.ZodType<VersionInfoJson> = z.object({
   repository: z.string(),
   coordinate: coordinateString,
   buildNumber: count,
-  sha256: z.string(),
+  sha256: sha256Hex,
   sizeBytes: count,
   dependencies: z.array(coordinateString),
   files: z.array(z.string()),
   publishedBy: z.string().nullable(),
   downloadCount: count,
   createdAt: isoDate,
-  builds: z.array(z.object({ buildNumber: count, createdAt: isoDate, sha256: z.string() })),
+  builds: z.array(z.object({ buildNumber: count, createdAt: isoDate, sha256: sha256Hex })),
 });
 
 /** Converts version metadata to its `/api/v1` JSON form. */
