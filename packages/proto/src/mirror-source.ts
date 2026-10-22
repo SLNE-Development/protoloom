@@ -1,7 +1,9 @@
 import type { z } from "zod";
 import {
   isSnapshot,
+  LIMITS,
   RegistryError,
+  sha256,
   type Coordinate,
   type MirrorEngine,
   type MirrorResponse,
@@ -10,7 +12,8 @@ import {
   type VersionInfo,
   type VersionSummary,
 } from "@weaver/core";
-import { HOPS_HEADER, manifestBodySchema, protoPath, versionInfoFromJson, versionsBodySchema } from "./wire.js";
+import { readAllLimited, streamOf } from "./bytes.js";
+import { HOPS_HEADER, manifestBodySchema, protoPath, SHA_HEADER, SHA256_PATTERN, versionInfoFromJson, versionsBodySchema } from "./wire.js";
 
 /** An archive a proto mirror served: the body to stream (null for HEAD) with its size and checksum when known. */
 export interface MirrorArchive {
@@ -77,7 +80,16 @@ export function createMirrorSource(deps: { mirror: MirrorEngine }): ProtoMirrorS
     throw notWeaver(repo);
   }
 
-  /** Fetches `path` as metadata and validates its JSON body against `schema`. */
+  /** Drops whatever the mirror cached at `path`, then answers the error for a non-Weaver upstream. */
+  async function rejectBody(repo: Repo, path: string): Promise<RegistryError> {
+    await deps.mirror.evict(repo, path);
+    return notWeaver(repo);
+  }
+
+  /**
+   * Fetches `path` as metadata and validates its JSON body against `schema`. A body that is not
+   * JSON or fails the schema is evicted from the cache, so it is never served again.
+   */
   async function fetchJson<T>(repo: Repo, path: string, group: string, name: string, hops: number, schema: z.ZodType<T>): Promise<T | null> {
     const response = await accepted(
       repo,
@@ -89,25 +101,27 @@ export function createMirrorSource(deps: { mirror: MirrorEngine }): ProtoMirrorS
     try {
       text = await new Response(response.body).text();
     } catch (error) {
+      await deps.mirror.evict(repo, path);
       throw new RegistryError("upstream_unavailable", `Upstream of ${repo.name} broke off ${path}: ${error instanceof Error ? error.message : String(error)}`);
     }
     let json: unknown;
     try {
       json = JSON.parse(text) as unknown;
     } catch {
-      throw notWeaver(repo);
+      throw await rejectBody(repo, path);
     }
     const parsed = schema.safeParse(json);
-    if (!parsed.success) throw notWeaver(repo);
+    if (!parsed.success) throw await rejectBody(repo, path);
     return parsed.data;
   }
 
   async function manifest(repo: Repo, c: Coordinate, hops: number, buildNumber?: number): Promise<VersionInfo | null> {
-    const body = await fetchJson(repo, protoPath("manifest", c, buildNumber), c.group, c.name, hops, manifestBodySchema);
+    const path = protoPath("manifest", c, buildNumber);
+    const body = await fetchJson(repo, path, c.group, c.name, hops, manifestBodySchema);
     if (body === null) return null;
     const info = versionInfoFromJson(body);
     const same = info.coordinate.group === c.group && info.coordinate.name === c.name && info.coordinate.version === c.version;
-    if (!same || (buildNumber !== undefined && info.buildNumber !== buildNumber)) throw notWeaver(repo);
+    if (!same || (buildNumber !== undefined && info.buildNumber !== buildNumber)) throw await rejectBody(repo, path);
     return { ...info, repository: repo.name };
   }
 
@@ -133,11 +147,12 @@ export function createMirrorSource(deps: { mirror: MirrorEngine }): ProtoMirrorS
     manifest,
 
     async archive(repo, c, buildNumber, hops, method) {
+      const path = protoPath("archive", c, buildNumber);
       const response = await accepted(
         repo,
         await deps.mirror.fetch({
           repo,
-          path: protoPath("archive", c, buildNumber),
+          path,
           subject: subject(c.group, c.name),
           class: isSnapshot(c.version) ? "metadata" : "immutable",
           method,
@@ -147,11 +162,33 @@ export function createMirrorSource(deps: { mirror: MirrorEngine }): ProtoMirrorS
         (status) => status === 200,
       );
       if (response === null) return null;
+      if (response.asset) {
+        // Served from the cache, which only keeps archives that matched their upstream checksum.
+        return { status: 200, body: response.body, size: response.asset.size, sha256: response.asset.sha256, cache: response.cache };
+      }
+      // A Weaver upstream always names the archive's checksum; anything else is not its proto API.
+      const expected = response.headers.get(SHA_HEADER);
+      if (expected === null || !SHA256_PATTERN.test(expected)) {
+        await cancelBody(response);
+        throw await rejectBody(repo, path);
+      }
+      if (response.cache === "miss") {
+        // The bytes are being cached as they stream; proto archives are small enough to check whole
+        // before serving, so a body that does not match its checksum is evicted instead of kept.
+        let data: Buffer;
+        try {
+          data = await readAllLimited(response.body, LIMITS.archiveBytes);
+        } catch {
+          throw await rejectBody(repo, path);
+        }
+        if (sha256(data) !== expected) throw await rejectBody(repo, path);
+        return { status: 200, body: streamOf(data), size: data.length, sha256: expected, cache: "miss" };
+      }
       return {
         status: 200,
         body: response.body,
-        size: response.asset?.size ?? parseLength(response.headers.get("content-length")),
-        sha256: response.asset?.sha256 ?? response.headers.get("x-weaver-sha256"),
+        size: parseLength(response.headers.get("content-length")),
+        sha256: expected,
         cache: response.cache,
       };
     },
