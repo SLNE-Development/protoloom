@@ -2,20 +2,24 @@ import { UnrecoverableError, Worker, type ConnectionOptions } from "bullmq";
 import {
   createAssetService,
   createRepoService,
+  dockerStorageBytes,
   evictCaches,
   RegistryError,
+  rollupUsage,
   runAllCleanups,
   runRepoCleanup,
+  toRepo,
   type CleanupDeps,
   type StoreSet,
 } from "@weaver/core";
-import type { Db } from "@weaver/db";
+import { repository, type Db } from "@weaver/db";
 import { sweepLoginSessions } from "@weaver/npm";
 import {
   createQueue,
   MAINTENANCE_QUEUE,
   scheduleDailyCleanup,
   scheduleHourlyEviction,
+  scheduleHourlyStatsRollup,
   scheduleNpmLoginSweep,
   type MaintenanceJobData,
 } from "@weaver/jobs";
@@ -71,13 +75,22 @@ export async function processMaintenanceJob(deps: WorkerDeps, data: MaintenanceJ
       return { skipped: true };
     case "npm:login-sweep":
       return sweepLoginSessions(deps.db, now);
+    case "stats:rollup":
+      return rollupUsage(
+        {
+          db: deps.db,
+          repos: { list: async () => (await deps.db.select().from(repository).orderBy(repository.name)).map(toRepo) },
+          storageProbes: { docker: dockerStorageBytes(deps.db) },
+        },
+        now,
+      );
     default:
       throw new UnrecoverableError(`Unknown maintenance job kind ${JSON.stringify((data as { kind?: unknown }).kind)}`);
   }
 }
 
 /**
- * Upserts the `cleanup-daily`, `evict-hourly` and `npm-login-sweep` schedulers (idempotent) and starts a worker that
+ * Upserts the `cleanup-daily`, `evict-hourly`, `npm-login-sweep` and `stats-hourly` schedulers (idempotent) and starts a worker that
  * processes maintenance jobs one at a time.
  */
 export async function startWorker(deps: WorkerDeps): Promise<RunningWorker> {
@@ -86,6 +99,7 @@ export async function startWorker(deps: WorkerDeps): Promise<RunningWorker> {
     await scheduleDailyCleanup(queue);
     await scheduleHourlyEviction(queue);
     await scheduleNpmLoginSweep(queue);
+    await scheduleHourlyStatsRollup(queue);
   } finally {
     await queue.close();
   }
