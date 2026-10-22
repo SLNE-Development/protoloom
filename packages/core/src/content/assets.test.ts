@@ -119,6 +119,44 @@ describe("asset service", () => {
     expect(await filesIn(blobDir)).toEqual([]);
   });
 
+  it("stage writes only the object; discard deletes it", async () => {
+    const staged = await assets.stage({ repo, body: Readable.from([Buffer.from("hello")]), origin: "hosted" });
+    expect(staged).toMatchObject({ repositoryId: repo.id, origin: "hosted", store: "local", size: 5, sha1: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d" });
+    expect(staged.storageKey).toMatch(new RegExp(`^${repo.id}/hosted/[0-9a-f-]{36}$`));
+    expect(await filesIn(blobDir)).toEqual([staged.storageKey]);
+    expect(await testDb.db.select().from(asset)).toHaveLength(0);
+    await assets.discard(staged);
+    expect(await filesIn(blobDir)).toEqual([]);
+  });
+
+  it("commit records the row and component in the caller's transaction and rolls back with it", async () => {
+    const ref = { namespace: "acme", name: "ui", version: "1.0.0", metadata: { a: 1 } };
+    const staged = await assets.stage({ repo, body: Readable.from([Buffer.from("abc")]), origin: "hosted" });
+    await expect(
+      testDb.db.transaction(async (tx) => {
+        const done = await assets.commit(tx, staged, { path: "p.tgz", component: ref });
+        expect(done.componentCreated).toBe(true);
+        throw new Error("roll back");
+      }),
+    ).rejects.toThrow("roll back");
+    expect(await testDb.db.select().from(asset)).toHaveLength(0);
+    expect(await testDb.db.select().from(component)).toHaveLength(0);
+
+    const committed = await testDb.db.transaction((tx) => assets.commit(tx, staged, { path: "p.tgz", contentType: "application/octet-stream", component: ref }));
+    await committed.finish();
+    expect(committed.componentCreated).toBe(true);
+    expect(committed.asset).toMatchObject({ path: "p.tgz", storageKey: staged.storageKey, size: 3, contentType: "application/octet-stream", origin: "hosted" });
+    expect(await assets.find(repo.id, "p.tgz")).toEqual(committed.asset);
+
+    const again = await assets.stage({ repo, body: Readable.from([Buffer.from("abcd")]), origin: "hosted" });
+    const replaced = await testDb.db.transaction((tx) => assets.commit(tx, again, { path: "p.tgz", component: ref }));
+    expect(replaced.componentCreated).toBe(false);
+    expect(replaced.asset.componentId).toBe(committed.asset.componentId);
+    expect((await filesIn(blobDir)).sort()).toEqual([staged.storageKey, again.storageKey].sort());
+    await replaced.finish();
+    expect(await filesIn(blobDir)).toEqual([again.storageKey]);
+  });
+
   it("touch sets lastAccessedAt", async () => {
     const row = await assets.put({ repo, path: "t.bin", body: Readable.from([Buffer.from("x")]), origin: "cache" });
     await assets.touch(row.id);

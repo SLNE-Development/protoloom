@@ -19,6 +19,15 @@ describe("createDb", () => {
     expect(consoleError).toHaveBeenCalledWith("weaver: idle postgres client error", failure);
     await db.$client.end();
   });
+
+  it("bounds the wait for a pool connection", async () => {
+    const db = createDb("postgres://user:pass@127.0.0.1:1/none");
+    expect(db.$client.options).toMatchObject({ max: 10, connectionTimeoutMillis: 30_000 });
+    await db.$client.end();
+    const small = createDb("postgres://user:pass@127.0.0.1:1/none", { max: 2, connectionTimeoutMillis: 500 });
+    expect(small.$client.options).toMatchObject({ max: 2, connectionTimeoutMillis: 500 });
+    await small.$client.end();
+  });
 });
 
 describe("schema exports", () => {
