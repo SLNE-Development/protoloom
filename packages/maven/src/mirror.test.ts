@@ -56,6 +56,12 @@ describe("maven mirror repositories", () => {
       upstreams,
       config: { rules: { allow: ["org.ex:lib"], deny: [] } },
     });
+    /** Creates a public mirror over the stub upstream with the given config. */
+    const mirror = (name: string, config: unknown) => fx.createRepo({ name, format: "maven", kind: "mirror", visibility: "public", upstreams, config });
+    await mirror("deny-group", { rules: { allow: [], deny: ["com.evil"] } });
+    await mirror("allow-lib-group", { rules: { allow: ["org.example.lib"], deny: [] } });
+    await mirror("allow-mycorp", { rules: { allow: ["io.mycorp.*"], deny: [] } });
+    await mirror("short-ttl", { cache: { enabled: true, metadataTtlSeconds: 0 } });
   }, 120_000);
 
   afterAll(async () => {
@@ -117,6 +123,32 @@ describe("maven mirror repositories", () => {
     expect(upstream.hits).toHaveLength(2);
   });
 
+  it("a pattern without a colon is a groupId pattern", async () => {
+    upstream.files.set("com/evil/1/evil-1.jar", "com-evil");
+    upstream.files.set("org/example/lib/1/lib-1.jar", "lib");
+    upstream.files.set("io/mycorp.evil/1/mycorp.evil-1.jar", "sneaky");
+    upstream.files.set("io/mycorp/a/1/a-1.jar", "a");
+    upstream.files.set("io/mycorp/sub/b/1/b-1.jar", "b");
+
+    // deny `com.evil` blocks group com.evil, but not artifact `evil` of group com.
+    expect((await get("deny-group/com/evil/x/1/x-1.jar")).status).toBe(404);
+    expect(upstream.hits).toEqual([]);
+    expect((await get("deny-group/com/evil/1/evil-1.jar")).status).toBe(200);
+
+    // allow `org.example.lib` names a group, not the artifact org.example:lib.
+    expect((await get("allow-lib-group/org/example/lib/1/lib-1.jar")).status).toBe(404);
+
+    // allow `io.mycorp.*` covers io.mycorp and its subgroups, not io:mycorp.evil.
+    expect((await get("allow-mycorp/io/mycorp.evil/1/mycorp.evil-1.jar")).status).toBe(404);
+    expect((await get("allow-mycorp/io/mycorp/a/1/a-1.jar")).status).toBe(200);
+    expect((await get("allow-mycorp/io/mycorp/sub/b/1/b-1.jar")).status).toBe(200);
+  });
+
+  it("a deny pattern `g.*` also covers group g itself", async () => {
+    expect((await get("ruled/com/evil/1/evil-1.jar")).status).toBe(200);
+    expect((await get("ruled/com/evil/sub/y/1/y-1.jar")).status).toBe(404);
+  });
+
   it("generates a checksum the upstream lacks from the cached file", async () => {
     expect(await (await get("cached/org/ex/x/1/x-1.jar")).text()).toBe("x-one");
     await fx.deps.mirror.drain();
@@ -127,6 +159,41 @@ describe("maven mirror repositories", () => {
 
   it("a missing checksum without a cached file answers 404", async () => {
     expect((await get("plain/org/ex/x/1/x-1.jar.sha1")).status).toBe(404);
+  });
+
+  it("generates a checksum from the cached file while the upstream is down", async () => {
+    upstream.files.set("org/ex/outage/1/outage-1.jar", "outage");
+    expect(await (await get("cached/org/ex/outage/1/outage-1.jar")).text()).toBe("outage");
+    await fx.deps.mirror.drain();
+    upstream.down = true;
+    const res = await get("cached/org/ex/outage/1/outage-1.jar.sha1");
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(createHash("sha1").update("outage").digest("hex"));
+    expect((await get("cached/org/ex/outage/1/outage-1.jar.asc.sha1")).status).toBe(502);
+  });
+
+  it("serves the cached copy when the upstream refuses with 401 or 403", async () => {
+    const path = "org/ex/stale/maven-metadata.xml";
+    upstream.files.set(path, "<metadata>stale</metadata>");
+    expect(await (await get(`short-ttl/${path}`)).text()).toBe("<metadata>stale</metadata>");
+    await fx.deps.mirror.drain();
+    for (const status of [401, 403]) {
+      upstream.statuses.set(path, status);
+      const res = await get(`short-ttl/${path}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("www-authenticate")).toBeNull();
+      expect(await res.text()).toBe("<metadata>stale</metadata>");
+    }
+    const head = await get(`short-ttl/${path}`, "HEAD");
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-length")).toBe(String("<metadata>stale</metadata>".length));
+  });
+
+  it("an upstream redirect answers 502 without a location", async () => {
+    upstream.statuses.set("org/ex/moved/1/moved-1.jar", 302);
+    const res = await get("plain/org/ex/moved/1/moved-1.jar");
+    expect(res.status).toBe(502);
+    expect(res.headers.get("location")).toBeNull();
   });
 
   it("upstream down without cache answers 502", async () => {
@@ -165,6 +232,19 @@ describe("maven mirror repositories", () => {
     expect(await mirrorMetadataXml(ctx, repo, "org/ex/lib")).toBe(xml);
     expect(await mirrorMetadataXml(ctx, repo, "org/ex/none")).toBeNull();
     upstream.down = true;
+    await expect(mirrorMetadataXml(ctx, repo, "org/ex/lib")).rejects.toMatchObject({ code: "upstream_unavailable" });
+  });
+
+  it("mirrorMetadataXml wraps a mid-stream error as upstream_unavailable", async () => {
+    const repo = (await fx.repos.get("plain"))!;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("<meta"));
+        controller.error(new Error("connection reset"));
+      },
+    });
+    const mirror = { ...fx.deps.mirror, fetch: async () => ({ status: 200, headers: new Headers(), body, cache: "bypass" as const, asset: null, upstreamUrl: upstream.url }) };
+    const ctx: MavenContext = { deps: { ...fx.deps, mirror }, principal: { kind: "anonymous" }, method: "GET" };
     await expect(mirrorMetadataXml(ctx, repo, "org/ex/lib")).rejects.toMatchObject({ code: "upstream_unavailable" });
   });
 });

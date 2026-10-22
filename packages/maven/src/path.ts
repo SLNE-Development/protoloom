@@ -168,7 +168,9 @@ export function classifyStoredPath(path: string): MavenPath {
  * is ambiguous (artifact, snapshot or group-level), so it yields every plausible reading:
  * `groupId:artifactId` (with a trailing version directory dropped) and the group-level
  * `<full.group.path>:*`. Other paths yield the path with `/` replaced by `.`.
- * A mirror request passes the rules if ANY returned candidate passes.
+ * A mirror request is allowed iff the allow list is empty or some candidate matches an allow
+ * pattern, and no candidate matches a deny pattern (the mirror reader adds groupId candidates
+ * for patterns without `:`).
  */
 export function mirrorSubjects(p: MavenPath): string[] {
   if (p.type === "file") return [`${p.groupId}:${p.artifactId}`];
