@@ -28,7 +28,9 @@ services:
       timeout: 5s
       retries: 15
 
-  # S3-compatible object storage for development (MinIO no longer publishes images).
+  # S3-compatible object storage for development (MinIO no longer publishes images), bucket "weaver".
+  # Dual storage (local primary + S3 for mirror caches): in .env keep STORAGE_DRIVER=local and
+  # STORAGE_LOCAL_PATH, and set S3_ENDPOINT=http://localhost:9000, S3_BUCKET=weaver, S3_REGION and the keys.
   seaweedfs:
     image: chrislusf/seaweedfs:4.48
     command: server -s3 -s3.port=9000 -dir=/data
