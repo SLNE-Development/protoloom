@@ -361,6 +361,51 @@ describe("docker mirrors", () => {
   });
 });
 
+describe("docker mirror negative cache", () => {
+  let reg: DockerTestRegistry;
+  let fake: FakeUpstream;
+  let clock = new Date("2026-10-22T10:00:00Z");
+  const late = manifestOf(Buffer.from("{}"), randomBlob(21, 10));
+
+  beforeAll(async () => {
+    fake = await startFakeUpstream();
+    fake.addManifest("library/late", "latest", late, OCI_MANIFEST);
+    reg = await startDockerTestRegistry({ dockerOptions: { now: () => clock } });
+    await reg.createRepo({
+      name: "hub",
+      format: "docker",
+      kind: "mirror",
+      visibility: "public",
+      upstreams: [{ url: fake.url, authType: "none" }],
+      config: { dockerHub: true },
+    });
+  });
+  afterAll(async () => {
+    await reg?.stop();
+    await fake?.close();
+  });
+
+  it("an image that appears upstream is served once the 60 s negative cache ends, despite a token issued while it was missing", async () => {
+    fake.missing.add("library/late");
+    const first = await reg.call("GET", "hub/late/manifests/latest");
+    expect(first.status).toBe(404);
+    await first.body?.cancel();
+    fake.missing.delete("library/late");
+
+    clock = new Date(clock.getTime() + 30_000);
+    const during = await reg.call("GET", "hub/late/manifests/latest");
+    expect(during.status).toBe(404);
+    await during.body?.cancel();
+    expect(fake.tokenRequests).toHaveLength(1);
+
+    clock = new Date(clock.getTime() + 31_000);
+    const after = await reg.call("GET", "hub/late/manifests/latest");
+    expect(after.status).toBe(200);
+    expect((await bytes(after)).equals(late)).toBe(true);
+    expect(fake.tokenRequests).toHaveLength(2);
+  });
+});
+
 describe("docker root mirror", () => {
   let reg: DockerTestRegistry;
   let fake: FakeUpstream;

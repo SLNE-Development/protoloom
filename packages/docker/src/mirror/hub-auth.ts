@@ -19,7 +19,10 @@ export interface HubAuth {
    * when it has some), caches it and resolves to `Bearer <token>`; null for a non-Bearer challenge or a failed fetch.
    */
   onChallenge(challenge: string, upstream: UpstreamWithSecret): Promise<string | null>;
-  /** Remembers for 60 s that the upstream denied `scope` despite a token (a missing or private image). */
+  /**
+   * Remembers for 60 s that the upstream denied `scope` despite a token (a missing or private image), and
+   * drops the cached token for it: its access was fixed when issued, so it would keep being refused.
+   */
   markMissing(upstream: UpstreamWithSecret, scope: string): void;
   /** Whether `scope` was marked missing for the upstream within the last 60 s; challenges for it are not answered meanwhile. */
   isMissing(upstream: UpstreamWithSecret, scope: string): boolean;
@@ -168,7 +171,9 @@ export function createHubAuth(fetchImpl: typeof fetch, now: () => Date): HubAuth
         for (const [k, until] of missing) if (until <= t) missing.delete(k);
         while (missing.size >= MAX_CACHED) missing.delete(missing.keys().next().value!);
       }
-      missing.set(keyOf(upstream, scope), t + MISSING_TTL_MS);
+      const key = keyOf(upstream, scope);
+      cache.delete(key);
+      missing.set(key, t + MISSING_TTL_MS);
     },
 
     isMissing,

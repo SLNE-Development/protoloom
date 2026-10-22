@@ -138,5 +138,8 @@ describe("hub auth", () => {
     clock = new Date(clock.getTime() + 60_000);
     expect(hub.isMissing(anonymous, scope)).toBe(false);
     expect(await hub.onChallenge(challengeFor(scope), anonymous)).toBe("Bearer tok-1");
+    expect(await hub.authorize(anonymous, scope)).toBe("Bearer tok-1");
+    hub.markMissing(anonymous, scope);
+    expect(await hub.authorize(anonymous, scope)).toBeNull();
   });
 });
