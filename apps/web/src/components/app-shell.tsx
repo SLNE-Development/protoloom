@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronsUpDownIcon, LogInIcon, LogOutIcon, SearchIcon, UserIcon } from "lucide-react";
@@ -37,7 +37,6 @@ import { isNavActive, navItemsFor, type NavItem } from "@/lib/navigation";
 import type { SessionUser } from "@/server/session";
 import { CommandMenuProvider, useCommandMenu } from "./command-actions";
 import { CommandMenu } from "./command-menu";
-import { HeaderSearch } from "./header-search";
 import { NAV_ICONS } from "./nav-icons";
 import { PackageSearch } from "./package-search";
 import { useSignOut } from "./use-sign-out";
@@ -185,12 +184,9 @@ export function AppShell({ user, children }: { user: SessionUser | null; childre
           </div>
         </Sidebar>
         <SidebarInset className="min-w-0">
-          <header className="flex h-12 items-center gap-2 border-b px-3">
-            <SidebarTrigger className="md:hidden" />
-            <Logo className="md:hidden" />
-            <Suspense>
-              <HeaderSearch className="ml-auto" />
-            </Suspense>
+          <header className="flex h-12 items-center gap-2 border-b px-3 md:hidden">
+            <SidebarTrigger />
+            <Logo />
           </header>
           {children}
         </SidebarInset>

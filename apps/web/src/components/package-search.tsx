@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { PackageIcon } from "lucide-react";
+import { PackageIcon, SearchIcon } from "lucide-react";
 import { CommandGroup, CommandItem } from "@weaver/ui/components/command";
 import { packageHref } from "@/components/browse/links";
 import { repositoryHref } from "@/lib/browse";
+import { searchHref } from "@/lib/search";
 import { useTRPC } from "@/trpc/client";
 import type { PackageSearchProps } from "./command-menu";
 
@@ -25,7 +26,7 @@ function useDebounced<T>(value: T, delay: number): T {
 /**
  * The command dialog's "Packages" group: live `search.query` results (8 at most) for the typed
  * query, debounced, from two characters on. Enter opens the package page, or the repository
- * for a package without one.
+ * for a package without one. A last item opens the full search page for the query.
  */
 export function PackageSearch({ query, onNavigate }: PackageSearchProps) {
   const trpc = useTRPC();
@@ -39,7 +40,7 @@ export function PackageSearch({ query, onNavigate }: PackageSearchProps) {
     retry: false,
   });
 
-  if (!enabled || !data || data.hits.length === 0) return null;
+  if (!enabled || !data) return null;
   return (
     <CommandGroup heading="Packages">
       {data.hits.map((hit) => (
@@ -59,6 +60,11 @@ export function PackageSearch({ query, onNavigate }: PackageSearchProps) {
           </span>
         </CommandItem>
       ))}
+      {/* Always shown, never scored against the query, so it stays below the matches. */}
+      <CommandItem value="See all package results" forceMount onSelect={() => onNavigate(searchHref(term))}>
+        <SearchIcon />
+        <span className="flex-1">See all results</span>
+      </CommandItem>
     </CommandGroup>
   );
 }

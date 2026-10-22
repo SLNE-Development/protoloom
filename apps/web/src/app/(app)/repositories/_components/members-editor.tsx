@@ -112,7 +112,7 @@ export function MembersEditor({
           <SelectContent>
             {available.map((c) => (
               <SelectItem key={c.name} value={c.name} className="font-mono">
-                {c.name}
+                <span className="truncate">{c.name}</span>
               </SelectItem>
             ))}
           </SelectContent>

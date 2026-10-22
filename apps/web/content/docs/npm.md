@@ -77,7 +77,7 @@ There are three ways to authenticate.
 
 **Browser login (`npm login`).** `npm login --registry={{url}}/npm/<repo>/` opens a page on `{{url}}` where you sign in to Weaver and approve the request. npm then receives a new access token and stores it in your `.npmrc`. The approval page shows the address of the machine that started the login and its user agent, so you can refuse a login you did not start. Approve only logins you recognise.
 
-The address comes from the `X-Forwarded-For` header, so Weaver must run behind a reverse proxy that sets it (the last entry is the one the proxy appended). Without such a proxy the page may show the address of the proxy or none, which makes the check worthless. A login session is valid for 10 minutes, and only a limited number can be pending at once.
+The address is the rightmost entry of the `X-Forwarded-For` header. It is the client's address only when exactly one trusted reverse proxy sits in front of Weaver and that proxy overwrites `X-Forwarded-For` with the address it sees. Behind two proxies (Cloudflare in front of nginx, say) it is the outer proxy's address, and without a proxy that overwrites the header a client can put any address there, which makes the check worthless. See [Client addresses and X-Forwarded-For](/docs/self-host/compose#client-addresses-and-x-forwarded-for). A login session is valid for 10 minutes, and only a limited number can be pending at once.
 
 **Token as password (`yarn npm login`).** Yarn berry and other clients that ask for a username and password accept any username and an access token as the password.
 
@@ -129,7 +129,12 @@ An unpublished version leaves a tombstone in the package's history, so its numbe
 
 **Search.** `npm search` finds packages that Weaver stores. It does not search the upstream registry behind a mirror.
 
-**Audit.** `npm audit` is sent to the repository. A hosted repository knows no advisories and reports none. A mirror forwards the request to its upstream, so the upstream learns the package names in your dependency tree. To keep private names private, Weaver removes names before forwarding: names that the mirror's rules exclude, and in a group the names served by hosted members. If you ask a mirror with allow or deny rules, or a group that has hosted members, for a quick audit (`audits/quick`, used by older npm versions), Weaver cannot filter the tree and the audit fails with `502` instead of reporting a clean result.
+**Audit.** `npm audit` is sent to the repository. A hosted repository knows no advisories and reports none. A mirror forwards the request to its upstream, so the upstream learns the package names in your dependency tree. A group forwards it to its first mirror member, or reports none when it has no mirror member. To keep private names private, Weaver removes names before forwarding: names that the mirror's rules exclude, and in a group the names served by hosted members.
+
+The audit fails with `502` instead of reporting a clean result in two cases:
+
+- **The upstream audit failed.** The upstream could not be reached, timed out or answered with an error, so the answer is `502 upstream_unavailable`. A broken upstream never reads as "no advisories". An offline mirror, or one whose upstreams all answer `404`, reports none.
+- **The tree cannot be filtered.** The full and quick audits (`audits` and `audits/quick`, used by older npm versions) send the whole dependency tree. Weaver does not forward them from a mirror with allow or deny rules, or from a group with hosted members or with such a mirror member. Current npm uses the bulk advisory endpoint, which Weaver filters.
 
 ## Limits
 

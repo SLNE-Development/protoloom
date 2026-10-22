@@ -53,7 +53,7 @@ export function AuthFrame({
             </ul>
           </div>
         </div>
-        <p className="relative hidden text-xs text-muted-foreground lg:block">Self-hosted registry for Protocol Buffers</p>
+        <p className="relative hidden text-xs text-muted-foreground lg:block">Self-hosted repository manager for Maven, npm, Docker and proto</p>
       </aside>
 
       <main className="flex items-start justify-center px-4 py-12 sm:px-10 lg:items-center">

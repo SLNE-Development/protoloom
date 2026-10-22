@@ -1,8 +1,9 @@
 # weaver
 
-Command-line client for [Weaver](https://github.com/SLNE-Development/weaver), a self-hosted registry
-for `.proto` files. `weaver fetch` downloads the proto bundles your project depends on, with their
-transitive dependencies, into a local directory.
+Command-line client for the proto repositories of [Weaver](https://github.com/SLNE-Development/weaver),
+a self-hosted repository for Maven, npm, Docker/OCI and proto artifacts. `weaver fetch` downloads the proto
+bundles your project depends on, with their transitive dependencies, into a local directory. Hosted, mirror
+and group proto repositories all work; list a group to read through all of its members.
 
 Requires Node.js 22.3 or newer.
 
@@ -38,8 +39,8 @@ Create `weaver.json` next to your `package.json`:
 ## Run
 
 ```sh
-export WEAVER_URL=https://protos.example.com
-export WEAVER_TOKEN=pl_...     # API key; only needed for private repositories
+export WEAVER_URL=https://weaver.example.com
+export WEAVER_TOKEN=<api key>  # only needed for private repositories
 npx @slne/weaver-cli fetch [--config weaver.json] [--out ./protos]
 ```
 

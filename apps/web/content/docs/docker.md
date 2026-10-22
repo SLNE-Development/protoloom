@@ -71,6 +71,15 @@ One docker mirror can be the **root mirror** (repository settings → Docker →
 }
 ```
 
+The daemon only accepts an `https://` mirror unless the host is also listed under `insecure-registries`. For a Weaver reachable only over plain http, use both entries:
+
+```json title="/etc/docker/daemon.json"
+{
+  "registry-mirrors": ["http://{{host}}"],
+  "insecure-registries": ["{{host}}"]
+}
+```
+
 Then a plain `docker pull nginx` goes through Weaver and falls back to Docker Hub when Weaver can't answer. The daemon sends no credentials to registry mirrors, so the root mirror has to be public. Turn on **Docker Hub** for it as well, so `nginx` maps to `library/nginx`. The name `library` is reserved and can't be used for a repository.
 
 For containerd, add a `hosts.toml` for `docker.io` with `[host."https://{{host}}"]` and `capabilities = ["pull", "resolve"]`.
@@ -130,6 +139,8 @@ crane delete {{host}}/apps/web:old            # removes the tag only
 crane delete {{host}}/apps/web@sha256:<hex>   # removes the manifest and its tags
 ```
 
+A delete by digest does not check whether the manifest is still referenced. Deleting a platform manifest that an image index lists, or the subject of a signature, succeeds; pulls of that platform then fail with `MANIFEST_UNKNOWN`, and the index or referrer stays until you delete it too. Delete the index (or its tag) instead of single platforms. [Cleanup policies](/docs/admin/cleanup) respect these references: they never delete a manifest that a remaining index lists, or a referrer whose subject remains.
+
 Deleting frees no storage at once; the worker's `docker:gc` job does, daily at 03:30. Each run does three things:
 
 - **Uploads.** It drops uploads that have received nothing for 24 hours.
@@ -148,4 +159,5 @@ Uploads are written to a temporary file on the web container before they are sto
 - **`denied: requested access to the resource is denied`**: your token is valid but lacks write access to the repository.
 - **`UNSUPPORTED: <repo> is a mirror repository and read-only`**: push to a hosted repository instead.
 - **`name unknown`**: the first segment is not a docker repository, and there is no root mirror to serve the name.
-- **`413 Request Entity Too Large`** from your proxy: raise its body size limit (see [Docker Compose](/docs/self-host/compose#docker-registry-uploads)).
+- **`413 Request Entity Too Large`** from your proxy: raise its body size limit (see [Put a reverse proxy in front](/docs/self-host/compose#put-a-reverse-proxy-in-front)).
+- **`http: server gave HTTP response to HTTPS client`**: Weaver is served over plain http. Put HTTPS in front, or list the host under `insecure-registries` (see [Docker needs HTTPS](/docs/self-host/compose#docker-needs-https)).

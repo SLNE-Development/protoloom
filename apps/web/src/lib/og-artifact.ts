@@ -5,7 +5,7 @@ import type { OgCardInput } from "./og";
 export const GENERIC_ARTIFACT_CARD: OgCardInput = {
   eyebrow: "Artifact",
   title: "Weaver",
-  subtitle: "Versioned .proto contracts for every build.",
+  subtitle: "Maven, npm, Docker and proto repositories in one place.",
 };
 
 export interface ArtifactCardParams {
