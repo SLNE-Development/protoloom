@@ -22,7 +22,7 @@ import {
   type UsageInput,
 } from "@weaver/core";
 import { startTestDb } from "@weaver/db/testing";
-import { createDockerHandlerWith } from "./handler.js";
+import { createDockerHandlerWith, type DockerOptions } from "./handler.js";
 
 /** A running registry over a throwaway database and local store, for tests only. */
 export interface DockerTestRegistry {
@@ -52,8 +52,13 @@ export interface DockerTestRegistry {
 
 const ADMIN: Principal = { kind: "user", userId: "test-admin", role: "admin" };
 
-/** Starts a {@link DockerTestRegistry}; `fetchImpl` replaces the mirror engine's upstream fetch. */
-export async function startDockerTestRegistry(opts: { fetchImpl?: typeof fetch } = {}): Promise<DockerTestRegistry> {
+/**
+ * Starts a {@link DockerTestRegistry}; `fetchImpl` replaces the mirror engine's upstream fetch and
+ * `dockerOptions` adds handler options (such as test hooks) beside the temporary upload directory.
+ */
+export async function startDockerTestRegistry(
+  opts: { fetchImpl?: typeof fetch; dockerOptions?: Omit<DockerOptions, "uploadDir"> } = {},
+): Promise<DockerTestRegistry> {
   const testDb = await startTestDb();
   const dir = await mkdtemp(join(tmpdir(), "weaver-docker-test-"));
   const secretKey = deriveSecretKey("docker-test");
@@ -93,7 +98,7 @@ export async function startDockerTestRegistry(opts: { fetchImpl?: typeof fetch }
       return { kind: "apikey", keyId: token, userId: "test-user", role: entry.role, permissions };
     },
   };
-  const handler = createDockerHandlerWith(deps, { uploadDir });
+  const handler = createDockerHandlerWith(deps, { ...opts.dockerOptions, uploadDir });
 
   return {
     deps,

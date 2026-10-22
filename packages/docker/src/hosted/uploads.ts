@@ -42,15 +42,18 @@ function rangeOf(offset: number): string {
   return `0-${Math.max(offset - 1, 0)}`;
 }
 
-/** The headers describing upload `id` of `target` at `offset`. */
-function uploadHeaders(target: Target, id: string, offset: number): Record<string, string> {
+/** The headers locating upload `id` of `target` at `offset`, for any response including errors (no body length). */
+function uploadLocation(target: Target, id: string, offset: number): Record<string, string> {
   return {
-    ...API_VERSION,
     location: `/v2/${target.name}/blobs/uploads/${id}`,
     "docker-upload-uuid": id,
     range: rangeOf(offset),
-    "content-length": "0",
   };
+}
+
+/** The headers of an empty-bodied success response describing upload `id` of `target` at `offset`. */
+function uploadHeaders(target: Target, id: string, offset: number): Record<string, string> {
+  return { ...API_VERSION, ...uploadLocation(target, id, offset), "content-length": "0" };
 }
 
 /** The `201 Created` answer for a blob now linked under `target`. */
@@ -104,9 +107,13 @@ async function append(ctx: HostedCtx, id: string, body: ReadableStream<Uint8Arra
     if (err instanceof SpoolError) {
       const persisted = offset + err.persisted;
       await setOffset(persisted);
-      throw new DockerError(400, "BLOB_UPLOAD_INVALID", "upload body interrupted", { offset: persisted }, {
-        ...uploadHeaders(ctx.target, id, persisted),
-      });
+      throw new DockerError(
+        400,
+        "BLOB_UPLOAD_INVALID",
+        "upload body interrupted",
+        { offset: persisted },
+        uploadLocation(ctx.target, id, persisted),
+      );
     }
     if (err instanceof SpoolOffsetError) {
       await discard(ctx, id);
@@ -154,6 +161,7 @@ async function finalize(ctx: HostedCtx, id: string, digest: string, size: number
       await store.delete(key);
       throw digestInvalid(digest);
     }
+    await ctx.opts.beforeBlobUpsert?.(digest, key);
     const [row] = await deps.db
       .insert(dockerBlob)
       .values({ store: store.id, digest, size: result.size, storageKey: key })
@@ -248,9 +256,13 @@ export function patchUpload(ctx: HostedCtx, req: Request, id: string): Promise<R
     if (header !== null) {
       const range = parseContentRange(header);
       if (!range || range.start !== row.offset) {
-        throw new DockerError(416, "RANGE_INVALID", "chunk does not continue the upload", { offset: row.offset }, {
-          ...uploadHeaders(ctx.target, id, row.offset),
-        });
+        throw new DockerError(
+          416,
+          "RANGE_INVALID",
+          "chunk does not continue the upload",
+          { offset: row.offset },
+          uploadLocation(ctx.target, id, row.offset),
+        );
       }
     }
     const offset = await append(ctx, id, req.body, row.offset);
