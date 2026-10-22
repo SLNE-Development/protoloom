@@ -106,6 +106,7 @@ function descriptorList(v: unknown, where: string): Descriptor[] {
 
 /**
  * Validates JSON shape and media type (Content-Type must match `mediaType` when present). Throws DockerError MANIFEST_INVALID.
+ * The match is enforced only for a Content-Type that is itself a manifest media type.
  * Accepts Docker v2 schema 2 manifests and manifest lists and OCI image manifests and indexes; schema 1 is rejected.
  * A body without `mediaType` takes it from the Content-Type, or from its shape when neither names a manifest type.
  */
@@ -121,7 +122,8 @@ export function parseManifest(bytes: Buffer, contentType: string | null): Parsed
 
   const header = bareType(contentType);
   const declared = optionalString(json.mediaType, "mediaType");
-  if (declared && header && declared !== header) {
+  // Only a manifest-typed Content-Type must agree; a generic one (application/json, octet-stream) defers to the body.
+  if (declared && header && MANIFEST_MEDIA_TYPES.includes(header) && declared !== header) {
     throw invalid("Content-Type does not match the manifest mediaType", { contentType: header, mediaType: declared });
   }
   let mediaType = declared ?? (header && MANIFEST_MEDIA_TYPES.includes(header) ? header : undefined);

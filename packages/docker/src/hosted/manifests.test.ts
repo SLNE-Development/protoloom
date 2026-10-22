@@ -30,8 +30,12 @@ describe("hosted manifests", () => {
   let reg: DockerTestRegistry;
   let key: string;
   let repoId: string;
+  /** Runs inside a manifest PUT's transaction at each step, when set by a test. */
+  let hook: ((step: "inserted" | "resolved") => Promise<void>) | null = null;
   beforeAll(async () => {
-    reg = await startDockerTestRegistry();
+    reg = await startDockerTestRegistry({
+      dockerOptions: { onManifestPutStep: (step) => (hook ? hook(step) : Promise.resolve()) },
+    });
     const repo = await reg.createRepo({ name: "hosted", format: "docker", kind: "hosted" });
     repoId = repo.id;
     await reg.createRepo({ name: "immut", format: "docker", kind: "hosted", config: { tagImmutable: true } });
@@ -260,6 +264,83 @@ describe("hosted manifests", () => {
       expect(head.headers.get(h)).toBe(get.headers.get(h));
     }
   });
+
+  it("HEAD by tag stamps the tag's lastPulledAt only, without pullCount or usage", async () => {
+    const manifest = await image("hosted/headtag", 19);
+    const digest = digestOf(bytesOf(manifest));
+    expect((await pushManifest(reg, "hosted/headtag", "v1", manifest, key)).status).toBe(201);
+    const tagRow = () =>
+      reg.deps.db
+        .select()
+        .from(dockerTag)
+        .where(and(eq(dockerTag.repositoryId, repoId), eq(dockerTag.image, "headtag"), eq(dockerTag.tag, "v1")))
+        .then((rows) => rows[0]!);
+    expect((await tagRow()).lastPulledAt).toBeNull();
+    const usageBefore = reg.usage.length;
+    expect((await reg.call("HEAD", "hosted/headtag/manifests/v1", { token: key })).status).toBe(200);
+    expect((await tagRow()).lastPulledAt).not.toBeNull();
+    const stored = await row("headtag", digest);
+    expect(stored!.pullCount).toBe(0);
+    expect(stored!.lastPulledAt).toBeNull();
+    expect(reg.usage.length).toBe(usageBefore);
+    // HEAD by digest stamps nothing.
+    expect((await reg.call("HEAD", `hosted/headtag/manifests/${digest}`, { token: key })).status).toBe(200);
+    expect((await row("headtag", digest))!.lastPulledAt).toBeNull();
+  });
+
+  it("config with urls must still be a linked blob", async () => {
+    const layer = randomBlob(20, 100);
+    expect((await pushBlob(reg, "hosted/cfgurls", layer, key)).status).toBe(201);
+    const manifest = {
+      schemaVersion: 2,
+      mediaType: OCI_MANIFEST,
+      config: { ...descriptorOf(Buffer.from('{"os":"linux"}'), OCI_CONFIG), urls: ["https://example.com/config"] },
+      layers: [descriptorOf(layer, OCI_LAYER)],
+    };
+    const res = await pushManifest(reg, "hosted/cfgurls", "v1", manifest, key);
+    expect(res.status).toBe(400);
+    expect(await errorCodeOf(res)).toBe("MANIFEST_BLOB_UNKNOWN");
+  });
+
+  it("generic Content-Type is accepted when the body declares mediaType", async () => {
+    const manifest = await image("hosted/generic", 21);
+    for (const type of ["application/json", "application/octet-stream"]) {
+      const res = await pushManifest(reg, "hosted/generic", "v1", manifest, key, type);
+      expect(res.status).toBe(201);
+    }
+    const get = await reg.call("GET", "hosted/generic/manifests/v1", { token: key });
+    expect(get.headers.get("content-type")).toBe(OCI_MANIFEST);
+  });
+
+  /** Deletes manifest `digest` of `image` from a separate connection, as a concurrent DELETE would. */
+  function concurrentDelete(img: string, digest: string, at: "inserted" | "resolved") {
+    let fired = false;
+    return async (step: "inserted" | "resolved") => {
+      if (fired || step !== at) return;
+      fired = true;
+      await reg.deps.db
+        .delete(dockerManifest)
+        .where(and(eq(dockerManifest.repositoryId, repoId), eq(dockerManifest.image, img), eq(dockerManifest.digest, digest)));
+    };
+  }
+
+  for (const at of ["inserted", "resolved"] as const) {
+    it(`re-push racing a DELETE by digest (${at}) still stores the manifest and tag`, async () => {
+      const manifest = await image("hosted/race", at === "inserted" ? 22 : 23);
+      const digest = digestOf(bytesOf(manifest));
+      expect((await pushManifest(reg, "hosted/race", "v1", manifest, key)).status).toBe(201);
+      hook = concurrentDelete("race", digest, at);
+      try {
+        const res = await pushManifest(reg, "hosted/race", "v2", manifest, key);
+        expect(res.status).toBe(201);
+      } finally {
+        hook = null;
+      }
+      const get = await reg.call("GET", "hosted/race/manifests/v2", { token: key });
+      expect(get.status).toBe(200);
+      expect(get.headers.get("docker-content-digest")).toBe(digest);
+    });
+  }
 
   it("DELETE by tag removes the tag only", async () => {
     const manifest = await image("hosted/deltag", 16);

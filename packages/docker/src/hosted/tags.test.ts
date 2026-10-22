@@ -60,6 +60,14 @@ describe("hosted tags", () => {
     expect(body.tags).toEqual(["c"]);
   });
 
+  it("a non-numeric n → 400 UNSUPPORTED", async () => {
+    for (const n of ["abc", "-1", "2.5"]) {
+      const res = await reg.call("GET", `hosted/app/tags/list?n=${n}`, { token: key });
+      expect(res.status).toBe(400);
+      expect(await errorCodeOf(res)).toBe("UNSUPPORTED");
+    }
+  });
+
   it("n=0 returns no tags", async () => {
     const { body } = await list("?n=0");
     expect(body.tags).toEqual([]);

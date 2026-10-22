@@ -174,6 +174,17 @@ describe("parseManifest", () => {
     expect(codeOf(() => parseManifest(body, OCI_MANIFEST))).toBe("MANIFEST_INVALID");
   });
 
+  it("a generic Content-Type defers to the body's mediaType", () => {
+    const body = bytes({
+      schemaVersion: 2,
+      mediaType: DOCKER_V2,
+      config: { mediaType: "application/vnd.docker.container.image.v1+json", digest: D("a"), size: 10 },
+      layers: [],
+    });
+    expect(parseManifest(body, "application/json").mediaType).toBe(DOCKER_V2);
+    expect(parseManifest(body, "application/octet-stream").mediaType).toBe(DOCKER_V2);
+  });
+
   it("invalid JSON rejected", () => {
     expect(codeOf(() => parseManifest(Buffer.from("{not json"), OCI_MANIFEST))).toBe("MANIFEST_INVALID");
     expect(codeOf(() => parseManifest(Buffer.from("[]"), OCI_MANIFEST))).toBe("MANIFEST_INVALID");

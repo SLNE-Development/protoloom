@@ -155,7 +155,8 @@ async function validateReferences(ctx: HostedCtx, parsed: ParsedManifest): Promi
   }
 
   const config = parsed.config!;
-  const required = [...new Set([config, ...parsed.layers].filter((d) => !d.urls).map((d) => d.digest))];
+  // Only layers may be foreign (served from `urls`); the config is always a linked blob.
+  const required = [...new Set([config, ...parsed.layers.filter((d) => !d.urls)].map((d) => d.digest))];
   const linked = await db
     .select({ digest: dockerBlobLink.digest })
     .from(dockerBlobLink)
@@ -185,6 +186,14 @@ function refRowsOf(manifestId: string, parsed: ParsedManifest): Array<typeof doc
   return rows;
 }
 
+/** Whether `err` (or an error it wraps) is a Postgres foreign key violation (`23503`). */
+function isForeignKeyViolation(err: unknown): boolean {
+  for (let e: unknown = err; e instanceof Error; e = e.cause) {
+    if ((e as { code?: unknown }).code === "23503") return true;
+  }
+  return false;
+}
+
 /** The artifact type of a manifest as the referrers API reports it: `artifactType`, else the config media type. */
 function effectiveArtifactType(parsed: ParsedManifest): string | null {
   return parsed.artifactType ?? parsed.config?.mediaType ?? null;
@@ -194,8 +203,9 @@ function effectiveArtifactType(parsed: ParsedManifest): string | null {
  * `PUT .../manifests/<reference>`: stores the exact pushed bytes (at most 4 MiB, `413 SIZE_INVALID`) under their
  * sha256 digest after validating shape and references; a digest reference must match (`400 DIGEST_INVALID`).
  * Row, refs and tag are written in one transaction; on a `tagImmutable` repository moving an existing tag to
- * another digest is `403 DENIED`. Answers `201` with `Location`, `Docker-Content-Digest` and, for a manifest
- * with a subject, `OCI-Subject`.
+ * another digest is `403 DENIED`. A concurrent DELETE of the same digest mid-transaction is retried once, then
+ * answered `503 UNAVAILABLE`. Answers `201` with `Location`, `Docker-Content-Digest` and, for a manifest with a
+ * subject, `OCI-Subject`.
  */
 export async function putManifest(ctx: HostedCtx, req: Request, reference: string): Promise<Response> {
   const { deps, target } = ctx;
@@ -212,56 +222,76 @@ export async function putManifest(ctx: HostedCtx, req: Request, reference: strin
   const repoId = target.repo.id;
   const image = target.image;
 
-  await deps.db.transaction(async (tx) => {
-    if (!byDigest) {
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`docker-tag:${repoId}:${image}:${reference}`}, 0))`);
-    }
-    const [inserted] = await tx
-      .insert(dockerManifest)
-      .values({
-        repositoryId: repoId,
-        image,
-        digest,
-        mediaType: parsed.mediaType,
-        artifactType: effectiveArtifactType(parsed),
-        subjectDigest: parsed.subject?.digest ?? null,
-        annotations: parsed.annotations,
-        platforms: derived.platforms,
-        size: body.length,
-        totalSize: derived.totalSize,
-        content: body,
-      })
-      .onConflictDoNothing()
-      .returning({ id: dockerManifest.id });
-    let manifestId = inserted?.id;
-    if (manifestId) {
-      const refs = refRowsOf(manifestId, parsed);
-      if (refs.length > 0) await tx.insert(dockerManifestRef).values(refs).onConflictDoNothing();
-    } else {
-      const [existing] = await tx
-        .select({ id: dockerManifest.id })
-        .from(dockerManifest)
-        .where(and(eq(dockerManifest.repositoryId, repoId), eq(dockerManifest.image, image), eq(dockerManifest.digest, digest)));
-      manifestId = existing!.id;
-    }
-    if (byDigest) return;
+  /** One attempt at the write transaction; false when a concurrent DELETE removed the manifest mid-way. */
+  const attempt = () =>
+    deps.db.transaction(async (tx): Promise<boolean> => {
+      if (!byDigest) {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`docker-tag:${repoId}:${image}:${reference}`}, 0))`);
+      }
+      const [inserted] = await tx
+        .insert(dockerManifest)
+        .values({
+          repositoryId: repoId,
+          image,
+          digest,
+          mediaType: parsed.mediaType,
+          artifactType: effectiveArtifactType(parsed),
+          subjectDigest: parsed.subject?.digest ?? null,
+          annotations: parsed.annotations,
+          platforms: derived.platforms,
+          size: body.length,
+          totalSize: derived.totalSize,
+          content: body,
+        })
+        .onConflictDoNothing()
+        .returning({ id: dockerManifest.id });
+      await ctx.opts.onManifestPutStep?.("inserted");
+      let manifestId = inserted?.id;
+      if (manifestId) {
+        const refs = refRowsOf(manifestId, parsed);
+        if (refs.length > 0) await tx.insert(dockerManifestRef).values(refs).onConflictDoNothing();
+      } else {
+        const [existing] = await tx
+          .select({ id: dockerManifest.id })
+          .from(dockerManifest)
+          .where(and(eq(dockerManifest.repositoryId, repoId), eq(dockerManifest.image, image), eq(dockerManifest.digest, digest)));
+        if (!existing) return false;
+        manifestId = existing.id;
+      }
+      await ctx.opts.onManifestPutStep?.("resolved");
+      if (byDigest) return true;
 
-    const [current] = await tx
-      .select({ manifestId: dockerTag.manifestId })
-      .from(dockerTag)
-      .where(and(eq(dockerTag.repositoryId, repoId), eq(dockerTag.image, image), eq(dockerTag.tag, reference)));
-    if (current?.manifestId === manifestId) return;
-    if (current && tagImmutable) {
-      throw new DockerError(403, "DENIED", `tag ${reference} is immutable`, { tag: reference });
+      const [current] = await tx
+        .select({ manifestId: dockerTag.manifestId })
+        .from(dockerTag)
+        .where(and(eq(dockerTag.repositoryId, repoId), eq(dockerTag.image, image), eq(dockerTag.tag, reference)));
+      if (current?.manifestId === manifestId) return true;
+      if (current && tagImmutable) {
+        throw new DockerError(403, "DENIED", `tag ${reference} is immutable`, { tag: reference });
+      }
+      await tx
+        .insert(dockerTag)
+        .values({ repositoryId: repoId, image, tag: reference, manifestId })
+        .onConflictDoUpdate({
+          target: [dockerTag.repositoryId, dockerTag.image, dockerTag.tag],
+          set: { manifestId, updatedAt: sql`now()` },
+        });
+      return true;
+    });
+
+  // A DELETE by digest committing between our insert (which found the row) and the tag write leaves no row
+  // to point at; the second attempt inserts the manifest afresh.
+  let stored = false;
+  for (let i = 0; i < 2 && !stored; i++) {
+    try {
+      stored = await attempt();
+    } catch (err) {
+      if (!isForeignKeyViolation(err)) throw err;
     }
-    await tx
-      .insert(dockerTag)
-      .values({ repositoryId: repoId, image, tag: reference, manifestId })
-      .onConflictDoUpdate({
-        target: [dockerTag.repositoryId, dockerTag.image, dockerTag.tag],
-        set: { manifestId, updatedAt: sql`now()` },
-      });
-  });
+  }
+  if (!stored) {
+    throw new DockerError(503, "UNAVAILABLE", "manifest was deleted concurrently, retry the push", { digest });
+  }
 
   await deps.usage({
     repositoryId: repoId,
@@ -282,7 +312,8 @@ export async function putManifest(ctx: HostedCtx, req: Request, reference: strin
 
 /**
  * `GET`/`HEAD .../manifests/<reference>`: the exact stored bytes with their media type, length, digest and ETag.
- * `GET` also stamps `lastPulledAt`/`pullCount` on the manifest (and `lastPulledAt` on the tag) and records a download.
+ * A reference by tag stamps the tag's `lastPulledAt` (also on `HEAD`); `GET` also stamps `lastPulledAt`/`pullCount`
+ * on the manifest and records a download.
  * Unknown → `404 MANIFEST_UNKNOWN`.
  */
 export async function serveManifest(ctx: HostedCtx, req: Request, reference: string): Promise<Response> {
@@ -296,18 +327,19 @@ export async function serveManifest(ctx: HostedCtx, req: Request, reference: str
     "docker-content-digest": manifest.digest,
     etag: `"${manifest.digest}"`,
   };
-  if (req.method === "HEAD") return new Response(null, { status: 200, headers });
-
-  await deps.db
-    .update(dockerManifest)
-    .set({ lastPulledAt: sql`now()`, pullCount: sql`${dockerManifest.pullCount} + 1` })
-    .where(eq(dockerManifest.id, manifest.id));
+  // containerd and buildx resolve tags with HEAD, so a HEAD by tag still counts as a use of the tag.
   if (!isDigest(reference)) {
     await deps.db
       .update(dockerTag)
       .set({ lastPulledAt: sql`now()` })
       .where(and(eq(dockerTag.repositoryId, target.repo.id), eq(dockerTag.image, target.image), eq(dockerTag.tag, reference)));
   }
+  if (req.method === "HEAD") return new Response(null, { status: 200, headers });
+
+  await deps.db
+    .update(dockerManifest)
+    .set({ lastPulledAt: sql`now()`, pullCount: sql`${dockerManifest.pullCount} + 1` })
+    .where(eq(dockerManifest.id, manifest.id));
   await deps.usage({
     repositoryId: target.repo.id,
     path: `${target.image}/manifests/${reference}`,

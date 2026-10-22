@@ -22,6 +22,11 @@ export interface DockerOptions {
   now?: () => Date;
   /** Test hook: awaited after a finished upload's object is stored and before its blob row is upserted. */
   beforeBlobUpsert?: (digest: string, storageKey: string) => Promise<void>;
+  /**
+   * Test hook: awaited inside a manifest PUT's transaction after the row insert (`inserted`) and once the
+   * manifest id is known, before the tag is written (`resolved`).
+   */
+  onManifestPutStep?: (step: "inserted" | "resolved") => Promise<void>;
 }
 
 const UPLOAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

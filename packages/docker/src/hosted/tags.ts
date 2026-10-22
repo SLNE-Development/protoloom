@@ -55,13 +55,16 @@ async function imageExists(db: Db, repoId: string, image: string): Promise<boole
 
 /**
  * `GET .../tags/list?n=&last=`: `{name, tags}` with a `Link: <...>; rel="next"` header when more tags follow.
- * An image holding nothing is `404 NAME_UNKNOWN`.
+ * An image holding nothing is `404 NAME_UNKNOWN`; a non-numeric `n` is `400 UNSUPPORTED`.
  */
 export async function serveTags(ctx: HostedCtx, req: Request): Promise<Response> {
   const { deps, target } = ctx;
   const params = new URL(req.url).searchParams;
   const rawN = params.get("n");
-  const n = rawN !== null && /^\d+$/.test(rawN) ? Number(rawN) : null;
+  if (rawN !== null && rawN !== "" && !/^\d+$/.test(rawN)) {
+    throw new DockerError(400, "UNSUPPORTED", "n must be a non-negative integer", { n: rawN });
+  }
+  const n = rawN ? Number(rawN) : null;
   const last = params.get("last") || null;
   const page = await listTags(deps.db, target.repo.id, target.image, n, last);
   if (page.tags.length === 0 && !(await imageExists(deps.db, target.repo.id, target.image))) {
