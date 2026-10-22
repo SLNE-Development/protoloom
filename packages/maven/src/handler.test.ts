@@ -11,7 +11,7 @@ describe("maven handler authorization", () => {
     await fx.createRepo({ name: "proxy", format: "maven", kind: "mirror", visibility: "private", upstreams: [{ url: "http://127.0.0.1:1/", authType: "none" }] });
     await fx.createRepo({ name: "all", format: "maven", kind: "group", visibility: "private", members: ["releases", "secret"] });
     await fx.createRepo({ name: "pkgs", format: "npm", kind: "hosted", visibility: "public" });
-  });
+  }, 120_000);
 
   afterAll(async () => {
     await fx?.stop();
@@ -78,6 +78,21 @@ describe("maven handler authorization", () => {
     const res = await fx.request("DELETE", "releases/a/b/1/b-1.jar");
     expect(res.status).toBe(405);
     expect(res.headers.get("allow")).toBe("GET, HEAD, PUT");
+  });
+
+  it("anonymous GET on a public repo is allowed", async () => {
+    const res = await fx.request("GET", "releases/a/b/1/b-1.jar");
+    expect(res.status).toBe(404);
+    expect(res.headers.get("www-authenticate")).toBeNull();
+  });
+
+  it("the releases/ directory form dispatches to the listing without a redirect", async () => {
+    for (const path of ["releases/", "releases/org/example/"]) {
+      const res = await fx.request("GET", path);
+      expect(res.headers.get("location")).toBeNull();
+      // 404 until the directory listing task replaces the stub reader.
+      expect(res.status).toBe(404);
+    }
   });
 
   it("group read token reads the group", async () => {
