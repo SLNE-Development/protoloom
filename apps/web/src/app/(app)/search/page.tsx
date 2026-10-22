@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { FORMATS, type Format } from "@weaver/core";
 import { PageContainer, PageHeader } from "@/components/browse-ui";
 import { searchHref } from "@/lib/search";
+import { SearchBox } from "@/components/search-box";
 import { SearchResults } from "@/components/search-results";
 import { requirePageAccess } from "@/server/session";
 
@@ -25,10 +27,13 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   return (
     <PageContainer>
       <PageHeader crumbs={[{ label: "Search" }]} title={q ? <>Packages matching <span className="font-mono">{q}</span></> : "Search packages"} />
+      <Suspense>
+        <SearchBox className="mb-6" />
+      </Suspense>
       {q.length >= 2 ? (
         <SearchResults key={`${q}/${format ?? ""}`} q={q} format={format} />
       ) : (
-        <p className="text-sm text-muted-foreground">Type at least two characters in the search box above.</p>
+        <p className="text-sm text-muted-foreground">Type at least two characters in the search box above, or press Ctrl+K anywhere.</p>
       )}
     </PageContainer>
   );

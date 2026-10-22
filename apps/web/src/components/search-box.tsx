@@ -7,8 +7,8 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@weaver/ui/compone
 import { cn } from "@weaver/ui/lib/utils";
 import { searchHref } from "@/lib/search";
 
-/** The header's package search box, kept in step with `?q=`: Enter opens `/search?q=` with the typed text. */
-export function HeaderSearch({ className }: { className?: string }) {
+/** The search page's package search box, kept in step with `?q=`: Enter opens `/search?q=` with the typed text. */
+export function SearchBox({ className }: { className?: string }) {
   const router = useRouter();
   const params = useSearchParams();
   const q = params.get("q") ?? "";

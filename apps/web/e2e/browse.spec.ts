@@ -290,13 +290,16 @@ test.describe("package search", () => {
     await withDb((db) => db.delete(repository).where(inArray(repository.name, SEARCH_REPOS.map((r) => r.name))));
   });
 
-  test("the header box searches packages and the format chips filter them", async ({ page }) => {
+  test("Ctrl+K opens the search page and the format chips filter it", async ({ page }) => {
     await loginAs(page, USERS.admin.id);
     await page.goto("/dashboard");
-    const box = page.getByRole("searchbox", { name: "Search packages" });
-    await box.fill("lib");
-    await box.press("Enter");
+    await expect(page.getByRole("searchbox", { name: "Search packages" })).toHaveCount(0);
+    await page.keyboard.press("ControlOrMeta+K");
+    const dialog = page.getByRole("dialog");
+    await dialog.getByPlaceholder(/Search/).fill("lib");
+    await dialog.getByRole("option", { name: "See all results" }).click();
     await expect(page).toHaveURL("/search?q=lib");
+    await expect(page.getByRole("searchbox", { name: "Search packages" })).toHaveValue("lib");
 
     const results = page.getByRole("list", { name: "Search results" });
     await expect(results.getByRole("link", { name: /org\.example:commons-lib/ })).toBeVisible();
