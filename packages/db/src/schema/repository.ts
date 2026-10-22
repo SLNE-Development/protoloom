@@ -30,6 +30,9 @@ export const cleanupKindEnum = pgEnum("cleanup_kind", [
   "keep_last_snapshot_builds",
   "delete_stale_snapshots",
   "delete_not_downloaded",
+  "keep_last_versions",
+  "delete_untagged_manifests",
+  "keep_last_tags",
 ]);
 
 /** A `created_at timestamptz not null default now()` column. */
@@ -130,6 +133,8 @@ export const cleanupPolicy = pgTable("cleanup_policy", {
   value: integer("value").notNull(),
   includeReleases: boolean("include_releases").notNull().default(false),
   groupPrefix: text("group_prefix"),
+  /** Glob of the tags a keep_last_tags policy applies to; null for the other kinds. */
+  pattern: text("pattern"),
   enabled: boolean("enabled").notNull().default(true),
   createdAt: createdAt(),
 });
