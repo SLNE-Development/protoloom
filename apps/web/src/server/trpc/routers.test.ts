@@ -27,6 +27,7 @@ import {
   cleanupPolicy,
   component,
   invite,
+  npmPackage,
   protoBuild as build,
   repoPermission,
   repository,
@@ -1028,5 +1029,130 @@ describe("review follow-ups", () => {
       const full = Object.fromEntries((await call(viewer()).browse.repositories()).map((r) => [r.name, r]));
       expect(full.internal).toMatchObject({ artifactCount: 2, versionCount: 3 });
     });
+  });
+});
+
+describe("npm", () => {
+  /** Stores a hosted packument (and a component with a 1234-byte tarball asset per version). */
+  async function publish(repo: string, name: string, versions: string[], extra: Record<string, unknown> = {}) {
+    const [row] = await db.select({ id: repository.id }).from(repository).where(eq(repository.name, repo));
+    const slash = name.indexOf("/");
+    const namespace = name.startsWith("@") ? name.slice(1, slash) : "";
+    const bare = name.startsWith("@") ? name.slice(slash + 1) : name;
+    const manifests = Object.fromEntries(versions.map((v) => [v, { name, version: v, dist: { tarball: "x", shasum: "y" } }]));
+    await db.insert(npmPackage).values({
+      repositoryId: row!.id,
+      name,
+      document: {
+        _id: name,
+        name,
+        "dist-tags": { latest: versions.at(-1)! },
+        versions: { ...manifests, ...((extra["versions"] as object | undefined) ?? {}) },
+        time: Object.fromEntries(versions.map((v) => [v, "2026-01-01T00:00:00.000Z"])),
+        description: `The ${name} package`,
+        ...(extra["readme"] ? { readme: extra["readme"] } : {}),
+      },
+    });
+    for (const v of versions) {
+      const [comp] = await db.insert(component).values({ repositoryId: row!.id, namespace, name: bare, version: v }).returning();
+      await db.insert(asset).values({
+        repositoryId: row!.id,
+        componentId: comp!.id,
+        path: `${name}/-/${bare}-${v}.tgz`,
+        store: "local",
+        storageKey: `k/${randomUUID()}`,
+        size: 1234,
+        contentType: "application/octet-stream",
+        md5: "m",
+        sha1: "s1",
+        sha256: "s256",
+        sha512: "s512",
+        origin: "hosted",
+      });
+    }
+  }
+
+  beforeEach(async () => {
+    await call(admin()).repositories.create({ name: "npm-priv", format: "npm", kind: "hosted", visibility: "private" });
+    await call(admin()).repositories.create({ name: "npm-pub", format: "npm", kind: "hosted", visibility: "public" });
+  });
+
+  it("packages lists hosted packages with latest", async () => {
+    await publish("npm-priv", "left-pad", ["1.0.0", "1.1.0"]);
+    await publish("npm-priv", "@acme/ui", ["2.0.0"]);
+    const page = await call(viewer()).npm.packages({ repo: "npm-priv" });
+    expect(page.source).toBe("hosted");
+    expect(page.nextCursor).toBeNull();
+    expect(page.items.map((p) => `${p.name}@${p.latest}`)).toEqual(["@acme/ui@2.0.0", "left-pad@1.1.0"]);
+    expect(page.items[0]!.description).toBe("The @acme/ui package");
+    expect((await call(viewer()).npm.packages({ repo: "npm-priv", query: "pad" })).items.map((p) => p.name)).toEqual(["left-pad"]);
+    expect(await codeOf(call(viewer()).npm.packages({ repo: "shared" }))).toBe("BAD_REQUEST");
+  });
+
+  it("packages pages by 25", async () => {
+    for (let i = 0; i < 27; i++) await publish("npm-priv", `pkg-${String(i).padStart(2, "0")}`, ["1.0.0"]);
+    const first = await call(viewer()).npm.packages({ repo: "npm-priv" });
+    expect(first.items).toHaveLength(25);
+    expect(first.nextCursor).toBe(25);
+    const second = await call(viewer()).npm.packages({ repo: "npm-priv", cursor: first.nextCursor! });
+    expect(second.items.map((p) => p.name)).toEqual(["pkg-25", "pkg-26"]);
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it("package returns versions newest first with deprecated flags", async () => {
+    await publish("npm-priv", "@acme/ui", ["1.2.0", "1.10.0", "1.9.0"], {
+      readme: "# UI",
+      versions: { "1.9.0": { name: "@acme/ui", version: "1.9.0", deprecated: "use 1.10", dist: { tarball: "x", shasum: "y" } } },
+    });
+    const pkg = await call(viewer()).npm.package({ repo: "npm-priv", name: "@acme/ui" });
+    expect(pkg!.versions.map((v) => v.version)).toEqual(["1.10.0", "1.9.0", "1.2.0"]);
+    expect(pkg!.versions.find((v) => v.version === "1.9.0")).toMatchObject({ deprecated: "use 1.10", size: 1234, publishedAt: "2026-01-01T00:00:00.000Z" });
+    expect(pkg!.versions[0]!.deprecated).toBeNull();
+    expect(pkg).toMatchObject({ distTags: { latest: "1.9.0" }, readme: "# UI", description: "The @acme/ui package" });
+    expect(await call(viewer()).npm.package({ repo: "npm-priv", name: "missing" })).toBeNull();
+  });
+
+  it("private repo without read is NOT_FOUND", async () => {
+    await publish("npm-priv", "left-pad", ["1.0.0"]);
+    const anon = call(anonymous, anonymousViewOn);
+    expect(await codeOf(anon.npm.packages({ repo: "npm-priv" }))).toBe("NOT_FOUND");
+    expect(await codeOf(anon.npm.package({ repo: "npm-priv", name: "left-pad" }))).toBe("NOT_FOUND");
+    await publish("npm-pub", "open", ["1.0.0"]);
+    expect((await anon.npm.packages({ repo: "npm-pub" })).items).toHaveLength(1);
+  });
+
+  it("mirror source lists cached components only and exposes no config", async () => {
+    await call(admin()).repositories.create({
+      name: "npmjs",
+      format: "npm",
+      kind: "mirror",
+      visibility: "public",
+      upstreams: [{ url: "https://registry.npmjs.org/", authType: "none" }],
+      config: { rules: { deny: ["secret-*"] } },
+    });
+    const [row] = await db.select({ id: repository.id }).from(repository).where(eq(repository.name, "npmjs"));
+    await db.insert(component).values([
+      { repositoryId: row!.id, namespace: "", name: "lodash", version: "4.9.0" },
+      { repositoryId: row!.id, namespace: "", name: "lodash", version: "4.17.21" },
+      { repositoryId: row!.id, namespace: "types", name: "node", version: "22.0.0" },
+    ]);
+    const page = await call(anonymous, anonymousViewOn).npm.packages({ repo: "npmjs" });
+    expect(page.source).toBe("cache");
+    expect(page.items.map((p) => `${p.name}@${p.latest}`)).toEqual(["@types/node@22.0.0", "lodash@4.17.21"]);
+    expect(JSON.stringify(page)).not.toContain("secret-");
+    const pkg = await call(viewer()).npm.package({ repo: "npmjs", name: "lodash" });
+    expect(pkg!.versions.map((v) => v.version)).toEqual(["4.17.21", "4.9.0"]);
+  });
+
+  it("group lists only members the caller can browse, earlier member wins", async () => {
+    await publish("npm-priv", "left-pad", ["1.0.0"]);
+    await publish("npm-pub", "left-pad", ["9.9.9"]);
+    await call(admin()).repositories.create({ name: "npm-grp", format: "npm", kind: "group", visibility: "public", members: ["npm-pub", "npm-priv"] });
+    const anon = await call(anonymous, anonymousViewOn).npm.packages({ repo: "npm-grp" });
+    expect(anon).toMatchObject({ source: "group", members: ["npm-pub"] });
+    const user = await call(viewer()).npm.packages({ repo: "npm-grp" });
+    expect(user.members).toEqual(["npm-pub", "npm-priv"]);
+    expect(user.items.map((p) => `${p.name}@${p.latest}`)).toEqual(["left-pad@9.9.9"]);
+    expect((await call(viewer()).npm.package({ repo: "npm-grp", name: "left-pad" }))!.versions.map((v) => v.version)).toEqual(["9.9.9"]);
   });
 });

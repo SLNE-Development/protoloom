@@ -4,6 +4,7 @@ import type { BrowseRepo as Repo } from "@/server/trpc/routers/browse";
 import { env } from "@/env";
 import { api } from "@/trpc/server";
 import { MavenView } from "./maven-view";
+import { NpmRepoView } from "./npm/npm-repo-view";
 import { ProtoArtifactList } from "./proto-artifact-list";
 
 /** The proto browse view: the repository's artifacts with a `?q=` filter. */
@@ -37,5 +38,6 @@ async function MavenRepositoryView({ repo }: { repo: Repo }) {
  */
 export const BROWSE_VIEWS: Partial<Record<Format, (props: { repo: Repo }) => ReactNode>> = {
   maven: MavenRepositoryView,
+  npm: NpmRepoView,
   proto: ProtoRepositoryView,
 };

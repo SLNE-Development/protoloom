@@ -6,6 +6,7 @@ import { dashboardRouter } from "./routers/dashboard";
 import { invitesRouter } from "./routers/invites";
 import { keysRouter } from "./routers/keys";
 import { mavenRouter } from "./routers/maven";
+import { npmRouter } from "./routers/npm";
 import { policiesRouter } from "./routers/policies";
 import { repositoriesRouter } from "./routers/repositories";
 import { settingsRouter } from "./routers/settings";
@@ -17,6 +18,7 @@ export const appRouter = router({
   browse: browseRouter,
   dashboard: dashboardRouter,
   maven: mavenRouter,
+  npm: npmRouter,
   repositories: repositoriesRouter,
   policies: policiesRouter,
   versions: versionsRouter,

@@ -2,7 +2,7 @@
 title: REST API
 description: Call publish, resolve, list, download and delete directly, with request and response examples and every error code.
 section: Clients
-order: 3
+order: 6
 ---
 
 The Gradle plugin and the CLI use a small JSON API under `{{url}}/api/v1`. You can call it directly from scripts or other build tools. The web app uses its own internal API; the endpoints below are the stable ones for clients.
