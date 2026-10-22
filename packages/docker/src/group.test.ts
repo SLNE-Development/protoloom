@@ -1,4 +1,6 @@
+import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { dockerBlob } from "@weaver/db";
 import type { DockerClaims } from "./auth/jwt.js";
 import { startFakeUpstream, type FakeUpstream } from "./mirror/fake-upstream.js";
 import {
@@ -54,6 +56,7 @@ describe("docker groups", () => {
         { repo: "one", access: "write" },
         { repo: "two", access: "write" },
         { repo: "grp", access: "write" },
+        { repo: "grp3", access: "read" },
       ],
       { role: "admin" },
     );
@@ -139,6 +142,19 @@ describe("docker groups", () => {
     const miss = await reg.call("GET", "grp2/app/manifests/nope", { token });
     expect(miss.status).toBe(502);
     expect(await errorCodeOf(miss)).toBe("UNAVAILABLE");
+  });
+
+  it("a hosted member that fails does not fall through to a later member", async () => {
+    const data = randomBlob(77, 1500);
+    fake.addBlob("app", data);
+    expect((await pushBlob(reg, "one/app", data, admin)).status).toBe(201);
+    await reg.createRepo({ name: "grp3", format: "docker", kind: "group", members: ["one", "mir"] });
+    await reg.deps.db.update(dockerBlob).set({ store: "s3" }).where(eq(dockerBlob.digest, digestOf(data)));
+    fake.reset();
+    const res = await reg.call("GET", `grp3/app/blobs/${digestOf(data)}`, { token: admin });
+    expect(res.status).toBe(500);
+    expect(await errorCodeOf(res)).toBe("UNKNOWN");
+    expect(fake.requests).toHaveLength(0);
   });
 
   it("push to a group → 405 UNSUPPORTED", async () => {

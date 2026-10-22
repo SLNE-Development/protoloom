@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import type { FormatDeps, Repo } from "@weaver/core";
+import { RegistryError, type FormatDeps, type Repo } from "@weaver/core";
 import { dockerManifest } from "@weaver/db";
 import type { Caller } from "./auth/authorize.js";
 import { DockerError } from "./errors.js";
@@ -24,6 +24,15 @@ export interface GroupCtx {
 
 /** The `404` codes a hosted read throws for a missing item, which a group treats as "try the next member". */
 const MISSING = new Set(["MANIFEST_UNKNOWN", "BLOB_UNKNOWN", "NAME_UNKNOWN"]);
+
+/**
+ * Whether a mirror member's error only says its upstream could not serve the request: the engine's
+ * `upstream_unavailable`, or the mirror's `502 UNAVAILABLE` and `429 TOOMANYREQUESTS`.
+ */
+function isUpstreamFailure(error: unknown): boolean {
+  if (error instanceof RegistryError) return error.code === "upstream_unavailable";
+  return error instanceof DockerError && (error.code === "UNAVAILABLE" || error.code === "TOOMANYREQUESTS");
+}
 
 /** Whether repo/image holds at least one manifest. */
 async function hasManifests(deps: FormatDeps, repo: Repo, image: string): Promise<boolean> {
@@ -78,8 +87,10 @@ async function fromMember(ctx: GroupCtx, member: Repo, op: GroupOp, req: Request
 /**
  * Tries members in order; the first non-null answer wins. Hosted members answer null when the item is missing.
  * Members are read with a member-scoped target (same image and client name) and without checking member
- * permissions: read of the group covers them. A member that fails (an unavailable upstream) is skipped;
- * when no later member has the item either, the first failure is thrown instead of answering null.
+ * permissions: read of the group covers them. A mirror member whose upstream fails (unavailable, rate
+ * limited) is skipped; when no later member has the item either, the first such failure is thrown instead
+ * of answering null. Any other error, and every error of a hosted member, is thrown at once, so a later
+ * member (such as a public mirror) never answers in place of an earlier one that could not be read.
  */
 export async function fromGroup(ctx: GroupCtx, op: GroupOp, req: Request, arg: string): Promise<Response | null> {
   let failure: { error: unknown } | null = null;
@@ -88,7 +99,7 @@ export async function fromGroup(ctx: GroupCtx, op: GroupOp, req: Request, arg: s
       const served = await fromMember(ctx, member, op, req, arg);
       if (served) return served;
     } catch (error) {
-      if (error instanceof DockerError && error.status < 500 && error.status !== 429) throw error;
+      if (member.kind !== "mirror" || !isUpstreamFailure(error)) throw error;
       console.warn(`weaver:docker group ${ctx.target.repo.name}: member ${member.name} failed`, error);
       failure ??= { error };
     }

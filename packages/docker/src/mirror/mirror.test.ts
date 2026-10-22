@@ -6,6 +6,7 @@ import { digestOf, errorCodeOf, randomBlob, startDockerTestRegistry, type Docker
 import { startFakeUpstream, type FakeUpstream } from "./fake-upstream.js";
 
 const OCI_MANIFEST = "application/vnd.oci.image.manifest.v1+json";
+const OCI_INDEX = "application/vnd.oci.image.index.v1+json";
 
 /** An OCI image manifest referencing `config` and `layer`, serialized with unusual spacing so its bytes matter. */
 function manifestOf(config: Buffer, layer: Buffer): Buffer {
@@ -247,6 +248,78 @@ describe("docker mirrors", () => {
     expect(res.status).toBe(502);
     expect(res.headers.get("www-authenticate")).toBeNull();
     expect(await errorCodeOf(res)).toBe("UNAVAILABLE");
+  });
+
+  it("a Docker Hub 401 insufficient_scope for a missing image is 404, and the realm is not asked again within 60 s", async () => {
+    fake.missing.add("library/ghost");
+    const first = await reg.call("GET", "hub/ghost/manifests/latest");
+    expect(first.status).toBe(404);
+    expect(await errorCodeOf(first)).toBe("MANIFEST_UNKNOWN");
+    expect(first.headers.get("www-authenticate")).toBeNull();
+    const head = await reg.call("HEAD", "hub/ghost/manifests/latest");
+    expect(head.status).toBe(404);
+    await head.body?.cancel();
+    const blob = await reg.call("GET", `hub/ghost/blobs/sha256:${"d".repeat(64)}`);
+    expect(blob.status).toBe(404);
+    expect(await errorCodeOf(blob)).toBe("BLOB_UNKNOWN");
+    expect(fake.tokenRequests.filter((r) => r.url.includes("library%2Fghost") || r.url.includes("library/ghost"))).toHaveLength(1);
+  });
+
+  it("a missing-image 401 serves the cached copy when there is one", async () => {
+    const gone = manifestOf(Buffer.from("{}"), randomBlob(12, 10));
+    fake.addManifest("library/gone", "latest", gone, OCI_MANIFEST);
+    await bytes(await reg.call("GET", "hubc/gone/manifests/latest"));
+    await reg.deps.mirror.drain();
+    fake.missing.add("library/gone");
+    const res = await reg.call("GET", "hubc/gone/manifests/latest");
+    expect(res.status).toBe(200);
+    expect((await bytes(res)).equals(gone)).toBe(true);
+    expect(fake.hits("/v2/library/gone/manifests/latest")).toBeGreaterThan(1);
+  });
+
+  it("serves a multi-arch image index from the cache with its content type and digest", async () => {
+    const amd = manifestOf(Buffer.from('{"architecture":"amd64","os":"linux"}'), randomBlob(13, 10));
+    const arm = manifestOf(Buffer.from('{"architecture":"arm64","os":"linux"}'), randomBlob(14, 10));
+    const amdDigest = fake.addManifest("library/multi", null, amd, OCI_MANIFEST);
+    const armDigest = fake.addManifest("library/multi", null, arm, OCI_MANIFEST);
+    const index = Buffer.from(
+      JSON.stringify({
+        schemaVersion: 2,
+        mediaType: OCI_INDEX,
+        manifests: [
+          { mediaType: OCI_MANIFEST, digest: amdDigest, size: amd.length, platform: { os: "linux", architecture: "amd64" } },
+          { mediaType: OCI_MANIFEST, digest: armDigest, size: arm.length, platform: { os: "linux", architecture: "arm64" } },
+        ],
+      }),
+    );
+    const indexDigest = fake.addManifest("library/multi", "latest", index, OCI_INDEX);
+
+    const byTag = await reg.call("GET", "hubc/multi/manifests/latest");
+    expect(byTag.headers.get("content-type")).toBe(OCI_INDEX);
+    expect(byTag.headers.get("docker-content-digest")).toBe(indexDigest);
+    await bytes(byTag);
+    await bytes(await reg.call("GET", `hubc/multi/manifests/${indexDigest}`));
+    await bytes(await reg.call("GET", `hubc/multi/manifests/${armDigest}`));
+    await reg.deps.mirror.drain();
+    fake.reset();
+
+    const cached = await reg.call("GET", `hubc/multi/manifests/${indexDigest}`);
+    expect(cached.status).toBe(200);
+    expect(cached.headers.get("content-type")).toBe(OCI_INDEX);
+    expect(cached.headers.get("docker-content-digest")).toBe(indexDigest);
+    expect((await bytes(cached)).equals(index)).toBe(true);
+    const head = await reg.call("HEAD", `hubc/multi/manifests/${indexDigest}`);
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-type")).toBe(OCI_INDEX);
+    expect(head.headers.get("docker-content-digest")).toBe(indexDigest);
+    expect(head.headers.get("content-length")).toBe(String(index.length));
+    const child = await reg.call("GET", `hubc/multi/manifests/${armDigest}`);
+    expect((await bytes(child)).equals(arm)).toBe(true);
+    expect(fake.requests).toHaveLength(0);
+
+    const tagHead = await reg.call("HEAD", "hubc/multi/manifests/latest");
+    expect(tagHead.headers.get("docker-content-digest")).toBe(indexDigest);
+    expect(tagHead.headers.get("content-type")).toBe(OCI_INDEX);
   });
 
   it("an unknown upstream manifest is 404 MANIFEST_UNKNOWN and an unknown blob 404 BLOB_UNKNOWN", async () => {

@@ -13,7 +13,7 @@ import { DockerError } from "../errors.js";
 import { API_VERSION, blobUnknown, parseRange } from "../hosted/blobs.js";
 import { MANIFEST_MEDIA_TYPES, isDigest } from "../media-types.js";
 import type { Target } from "../target.js";
-import type { HubAuth } from "./hub-auth.js";
+import type { HubAuth, UpstreamWithSecret } from "./hub-auth.js";
 import { digestMatches, verifyDigest } from "./verify.js";
 
 /** Everything a mirror operation works with: dependencies, the authorized caller, the target and the upstream token cache. */
@@ -50,12 +50,12 @@ function unavailable(): DockerError {
   return new DockerError(502, "UNAVAILABLE", "upstream unavailable");
 }
 
-/** Deletes the cached asset at `path` when its content does not match `digest`, so it is neither served nor kept. */
+/** Evicts the cached asset at `path` when its content does not match `digest`, so it is neither served nor kept. */
 async function dropMismatch(ctx: MirrorCtx, path: string, digest: string): Promise<void> {
   const row = await ctx.deps.assets.find(ctx.target.repo.id, path);
   if (row && !digestMatches(row, digest)) {
-    console.warn(`weaver:docker cached ${ctx.target.repo.name}/${path} does not match ${digest}; deleting it`);
-    await ctx.deps.assets.delete(row);
+    console.warn(`weaver:docker cached ${ctx.target.repo.name}/${path} does not match ${digest}; evicting it`);
+    await ctx.deps.mirror.evict(ctx.target.repo, path);
   }
 }
 
@@ -76,9 +76,10 @@ async function cachedFallback(ctx: MirrorCtx, path: string, method: "GET" | "HEA
 /**
  * Asks the mirror engine for `path` below the upstream base, authorizing with cached upstream tokens for
  * `repository:<image>:pull` and answering bearer challenges. Resolves to a 200 answer or null (not found,
- * or denied by the mirror's rules). Upstream 429s with no cache become `429 TOOMANYREQUESTS`; any other
- * upstream answer (401 and 403 included, which are never passed on as a challenge) is served from the
- * cache when possible, else `502 UNAVAILABLE`.
+ * denied by the mirror's rules, or a missing image: a 401 `insufficient_scope` despite a token, unless a
+ * cached copy exists). Upstream 429s with no cache become `429 TOOMANYREQUESTS`; any other upstream answer
+ * (other 401s and 403 included, which are never passed on as a challenge) is served from the cache when
+ * possible, else `502 UNAVAILABLE`.
  */
 async function fetchUpstream(
   ctx: MirrorCtx,
@@ -90,6 +91,8 @@ async function fetchUpstream(
   const { deps, target, hub } = ctx;
   const subject = upstreamImage(target.repo, target.image);
   const scope = `repository:${subject}:pull`;
+  // The upstream asked last, and whether a token went to it (cached, or fetched on a challenge).
+  const seen: { upstream: UpstreamWithSecret | null; tokenSent: boolean } = { upstream: null, tokenSent: false };
   let res: MirrorResponse | null;
   try {
     res = await deps.mirror.fetch({
@@ -99,8 +102,18 @@ async function fetchUpstream(
       class: contentClass,
       method,
       headers,
-      authorize: (upstream) => hub.authorize(upstream, scope),
-      onChallenge: (challenge, upstream) => hub.onChallenge(challenge, upstream),
+      authorize: async (upstream) => {
+        seen.upstream = upstream;
+        const authorization = await hub.authorize(upstream, scope);
+        seen.tokenSent = authorization !== null;
+        return authorization;
+      },
+      onChallenge: async (challenge, upstream) => {
+        seen.upstream = upstream;
+        const authorization = await hub.onChallenge(challenge, upstream);
+        if (authorization !== null) seen.tokenSent = true;
+        return authorization;
+      },
     });
   } catch (err) {
     if (err instanceof RegistryError && err.code === "upstream_unavailable" && onlyRateLimited(err)) {
@@ -110,10 +123,27 @@ async function fetchUpstream(
   }
   if (!res || res.status === 200) return res;
   await release(res);
+  if (res.status === 401 && seen.upstream && isMissingImage(res, seen.tokenSent, hub, seen.upstream, scope)) {
+    return cachedFallback(ctx, path, method);
+  }
   console.warn(`weaver:docker upstream of ${target.repo.name} answered ${res.status} for ${path}`);
   const cached = await cachedFallback(ctx, path, method);
   if (cached) return cached;
   throw unavailable();
+}
+
+/**
+ * Whether a final upstream 401 means the image is missing (or private to others): the upstream rejected a
+ * token with `error="insufficient_scope"`, as Docker Hub does, or did so within the last 60 s. A fresh
+ * rejection is remembered, so repeated lookups do not ask the token realm each time.
+ */
+function isMissingImage(res: MirrorResponse, tokenSent: boolean, hub: HubAuth, upstream: UpstreamWithSecret, scope: string): boolean {
+  const challenge = res.headers.get("www-authenticate") ?? "";
+  if (tokenSent && /\berror\s*=\s*"?insufficient_scope"?/i.test(challenge)) {
+    hub.markMissing(upstream, scope);
+    return true;
+  }
+  return hub.isMissing(upstream, scope);
 }
 
 /** The `/v2` response headers of a mirror answer: the content headers of the asset or the upstream, never its challenge. */
@@ -142,20 +172,38 @@ function lengthOf(headers: Headers): number | undefined {
 
 /**
  * The body of an upstream answer for `digest`, verified while it streams; a mismatching body errors before
- * its last chunk and any copy the cache took of it is deleted once the write settles.
+ * its last chunk and any copy the cache took of it is evicted once its write settles.
  */
 function verified(ctx: MirrorCtx, res: MirrorResponse, path: string, digest: string): ReadableStream<Uint8Array> {
   return verifyDigest(res.body!, digest, lengthOf(res.headers), () => {
     console.warn(`weaver:docker upstream of ${ctx.target.repo.name} sent content for ${path} that does not match ${digest}`);
     void ctx.deps.mirror
-      .drain()
-      .then(() => dropMismatch(ctx, path, digest))
+      .evict(ctx.target.repo, path)
       .catch((error: unknown) => console.warn(`weaver:docker cannot clean up ${path}`, error));
   });
 }
 
-/** Records a mirror download of `path` (relative to the image's repository) with its cache result. */
-async function recordDownload(ctx: MirrorCtx, path: string, res: MirrorResponse, bytes: number | undefined): Promise<void> {
+/**
+ * Records a mirror download of `path` (relative to the image's repository) with its cache result; when that
+ * fails, `body` (the body about to be sent) is cancelled before the error propagates.
+ */
+async function recordDownload(
+  ctx: MirrorCtx,
+  path: string,
+  res: MirrorResponse,
+  bytes: number | undefined,
+  body: ReadableStream<Uint8Array> | null,
+): Promise<void> {
+  try {
+    await recordUsage(ctx, path, res, bytes);
+  } catch (err) {
+    await body?.cancel(err).catch(() => undefined);
+    throw err;
+  }
+}
+
+/** Writes the usage event of a mirror download. */
+async function recordUsage(ctx: MirrorCtx, path: string, res: MirrorResponse, bytes: number | undefined): Promise<void> {
   await ctx.deps.usage({
     repositoryId: ctx.target.repo.id,
     assetId: res.asset?.id ?? null,
@@ -200,7 +248,7 @@ export async function mirrorManifest(ctx: MirrorCtx, req: Request, reference: st
   const named = headers.get("docker-content-digest");
   const expected = byDigest ? reference : named !== null && isDigest(named) ? named : null;
   const body = res.asset || expected === null ? res.body : verified(ctx, res, path, expected);
-  await recordDownload(ctx, `manifests/${reference}`, res, lengthOf(headers));
+  await recordDownload(ctx, `manifests/${reference}`, res, lengthOf(headers), body);
   return new Response(body, { status: 200, headers });
 }
 
@@ -212,8 +260,9 @@ async function rangeOfAsset(ctx: MirrorCtx, res: MirrorResponse, asset: AssetRow
   const length = range.end - range.start + 1;
   headers.set("content-range", `bytes ${range.start}-${range.end}/${asset.size}`);
   headers.set("content-length", String(length));
-  await recordDownload(ctx, `blobs/${digest}`, res, length);
-  return new Response(Readable.toWeb(read.body) as unknown as ReadableStream<Uint8Array>, { status: 206, headers });
+  const body = Readable.toWeb(read.body) as unknown as ReadableStream<Uint8Array>;
+  await recordDownload(ctx, `blobs/${digest}`, res, length, body);
+  return new Response(body, { status: 206, headers });
 }
 
 /**
@@ -246,7 +295,7 @@ export async function mirrorBlob(ctx: MirrorCtx, req: Request, digest: string): 
     if (range) return rangeOfAsset(ctx, res, res.asset, range, headers, digest);
   }
   const body = res.asset ? res.body : verified(ctx, res, path, digest);
-  await recordDownload(ctx, `blobs/${digest}`, res, lengthOf(headers));
+  await recordDownload(ctx, `blobs/${digest}`, res, lengthOf(headers), body);
   return new Response(body, { status: 200, headers });
 }
 

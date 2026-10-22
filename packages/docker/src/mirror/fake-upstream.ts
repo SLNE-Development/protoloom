@@ -26,6 +26,11 @@ export interface FakeUpstream {
   rateLimited: Set<string>;
   /** Images whose every request answers 401 even with a valid token (Docker Hub's answer for a missing or private image). */
   locked: Set<string>;
+  /**
+   * Images that do not exist upstream, answered like Docker Hub: a request without a token gets the plain
+   * challenge, one with a valid token `401` with `error="insufficient_scope"`.
+   */
+  missing: Set<string>;
   /** Stores a manifest under its digest (and `tag`, when given); resolves to the digest. */
   addManifest(image: string, tag: string | null, body: Buffer, mediaType: string): string;
   /** Stores a blob; `redirect` makes the registry answer 307 to the CDN for it. Resolves to the digest. */
@@ -73,6 +78,7 @@ export async function startFakeUpstream(): Promise<FakeUpstream> {
   };
   const rateLimited = new Set<string>();
   const locked = new Set<string>();
+  const missing = new Set<string>();
   let realmUrl = "";
   let cdnUrl = "";
 
@@ -120,7 +126,20 @@ export async function startFakeUpstream(): Promise<FakeUpstream> {
     }
     const scope = `repository:${image}:pull`;
     const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "");
-    if (locked.has(image) || !bearer || tokens.get(bearer[1]!) !== scope) {
+    const valid = bearer !== null && tokens.get(bearer[1]!) === scope;
+    if (missing.has(image) && valid) {
+      return send(
+        res,
+        method,
+        401,
+        {
+          "content-type": "application/json",
+          "www-authenticate": `Bearer realm="${realmUrl}",service="fake-registry",scope="${scope}",error="insufficient_scope"`,
+        },
+        Buffer.from('{"errors":[{"code":"UNAUTHORIZED"}]}'),
+      );
+    }
+    if (locked.has(image) || !valid) {
       return send(
         res,
         method,
@@ -190,6 +209,7 @@ export async function startFakeUpstream(): Promise<FakeUpstream> {
     },
     rateLimited,
     locked,
+    missing,
     addManifest(image, tag, body, mediaType) {
       const digest = sha256(body);
       if (!manifests.has(image)) manifests.set(image, new Map());

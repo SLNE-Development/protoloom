@@ -19,6 +19,10 @@ export interface HubAuth {
    * when it has some), caches it and resolves to `Bearer <token>`; null for a non-Bearer challenge or a failed fetch.
    */
   onChallenge(challenge: string, upstream: UpstreamWithSecret): Promise<string | null>;
+  /** Remembers for 60 s that the upstream denied `scope` despite a token (a missing or private image). */
+  markMissing(upstream: UpstreamWithSecret, scope: string): void;
+  /** Whether `scope` was marked missing for the upstream within the last 60 s; challenges for it are not answered meanwhile. */
+  isMissing(upstream: UpstreamWithSecret, scope: string): boolean;
 }
 
 /** How long before its `expires_in` a token stops being reused. */
@@ -27,6 +31,10 @@ const EXPIRY_MARGIN_MS = 30_000;
 const DEFAULT_EXPIRES_IN_S = 60;
 /** How long a token request may take. */
 const TOKEN_TIMEOUT_MS = 30_000;
+/** How long a scope the upstream denied despite a token is answered as missing without asking the realm. */
+const MISSING_TTL_MS = 60_000;
+/** The largest token response read, in bytes. */
+const MAX_TOKEN_BYTES = 64 * 1024;
 /** The most cached tokens kept; beyond it expired, then oldest, entries are dropped. */
 const MAX_CACHED = 1000;
 
@@ -46,20 +54,55 @@ export function parseChallenge(header: string): BearerChallenge | null {
   return out;
 }
 
-/** The Authorization header for a token request: the upstream's basic credentials, or none. */
-function realmAuthorization(upstream: UpstreamWithSecret): string | null {
+/**
+ * The Authorization header for a token request to `realm`: the upstream's basic credentials, or none. They go
+ * only to an https realm, or to an http realm when the upstream itself is plain http (a local registry).
+ */
+function realmAuthorization(upstream: UpstreamWithSecret, realm: URL): string | null {
   if (upstream.authType !== "basic" || !upstream.username || upstream.secret === null) return null;
+  if (realm.protocol !== "https:" && !upstream.url.toLowerCase().startsWith("http:")) return null;
   return `Basic ${Buffer.from(`${upstream.username}:${upstream.secret}`).toString("base64")}`;
+}
+
+/** Reads a response body as text, or null when it exceeds `limit` bytes (cancelling the rest). */
+async function readCapped(res: Response, limit: number): Promise<string | null> {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 /**
  * Creates a {@link HubAuth} whose tokens are cached per (upstream id, scope) for `expires_in` (default 60 s)
- * minus 30 s. Concurrent challenges for the same key share one token request.
+ * minus 30 s. Concurrent challenges for the same key share one token request. Token responses are read up to
+ * 64 KiB. Bearer upstreams never answer challenges: their secret is sent as the token, so realm-protected
+ * registries (Docker Hub, GHCR) need basic credentials (username plus access token).
  */
 export function createHubAuth(fetchImpl: typeof fetch, now: () => Date): HubAuth {
   const cache = new Map<string, { authorization: string; expiresAt: number }>();
   const inflight = new Map<string, Promise<string | null>>();
+  const missing = new Map<string, number>();
   const keyOf = (upstream: UpstreamWithSecret, scope: string) => `${upstream.id}\n${scope}`;
+
+  function isMissing(upstream: UpstreamWithSecret, scope: string): boolean {
+    const key = keyOf(upstream, scope);
+    const until = missing.get(key);
+    if (until === undefined) return false;
+    if (until > now().getTime()) return true;
+    missing.delete(key);
+    return false;
+  }
 
   function remember(key: string, authorization: string, lifetimeMs: number): void {
     if (lifetimeMs <= 0) return;
@@ -83,7 +126,7 @@ export function createHubAuth(fetchImpl: typeof fetch, now: () => Date): HubAuth
     if (challenge.service !== undefined) url.searchParams.set("service", challenge.service);
     if (challenge.scope !== undefined) url.searchParams.set("scope", challenge.scope);
     const headers: Record<string, string> = { accept: "application/json" };
-    const authorization = realmAuthorization(upstream);
+    const authorization = realmAuthorization(upstream, url);
     if (authorization) headers.authorization = authorization;
     try {
       const res = await fetchImpl(url, { headers, redirect: "follow", signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS) });
@@ -92,7 +135,12 @@ export function createHubAuth(fetchImpl: typeof fetch, now: () => Date): HubAuth
         console.warn(`weaver:docker token request to ${url.origin}${url.pathname} answered ${res.status}`);
         return null;
       }
-      const body = (await res.json()) as { token?: unknown; access_token?: unknown; expires_in?: unknown };
+      const text = await readCapped(res, MAX_TOKEN_BYTES);
+      if (text === null) {
+        console.warn(`weaver:docker token response of ${url.origin}${url.pathname} exceeds ${MAX_TOKEN_BYTES} bytes`);
+        return null;
+      }
+      const body = JSON.parse(text) as { token?: unknown; access_token?: unknown; expires_in?: unknown };
       const token = typeof body.token === "string" && body.token ? body.token : body.access_token;
       if (typeof token !== "string" || !token) return null;
       const expiresIn = typeof body.expires_in === "number" && body.expires_in > 0 ? body.expires_in : DEFAULT_EXPIRES_IN_S;
@@ -114,9 +162,23 @@ export function createHubAuth(fetchImpl: typeof fetch, now: () => Date): HubAuth
       return Promise.resolve(entry.authorization);
     },
 
+    markMissing(upstream, scope) {
+      const t = now().getTime();
+      if (missing.size >= MAX_CACHED) {
+        for (const [k, until] of missing) if (until <= t) missing.delete(k);
+        while (missing.size >= MAX_CACHED) missing.delete(missing.keys().next().value!);
+      }
+      missing.set(keyOf(upstream, scope), t + MISSING_TTL_MS);
+    },
+
+    isMissing,
+
     onChallenge(header, upstream) {
+      // A bearer upstream's secret is its token, sent as is; token realms need basic credentials.
+      if (upstream.authType === "bearer") return Promise.resolve(null);
       const challenge = parseChallenge(header);
       if (!challenge) return Promise.resolve(null);
+      if (isMissing(upstream, challenge.scope ?? "")) return Promise.resolve(null);
       const key = keyOf(upstream, challenge.scope ?? "");
       const running = inflight.get(key);
       if (running) return running;

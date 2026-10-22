@@ -15,6 +15,14 @@ const withCredentials: Upstream = {
   hasSecret: true,
   secret: "hub-access-token",
 };
+const httpsWithCredentials: Upstream = {
+  id: "up-https",
+  url: "https://registry",
+  authType: "basic",
+  username: "hubuser",
+  hasSecret: true,
+  secret: "hub-access-token",
+};
 
 describe("hub auth", () => {
   let realm: Server;
@@ -25,6 +33,11 @@ describe("hub auth", () => {
   beforeAll(async () => {
     realm = createServer((req, res) => {
       requests.push({ url: req.url ?? "", headers: req.headers });
+      if (status === 299) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ token: "x".repeat(70 * 1024) }));
+        return;
+      }
       if (status !== 200) {
         res.writeHead(status, { "content-type": "application/json" });
         res.end("{}");
@@ -92,5 +105,38 @@ describe("hub auth", () => {
     expect(await hub.onChallenge('Bearer realm="http://127.0.0.1:1/token"', anonymous)).toBeNull();
     expect(await hub.onChallenge('Basic realm="x"', anonymous)).toBeNull();
     expect(await hub.authorize(anonymous, "repository:library/nginx:pull")).toBeNull();
+  });
+
+  it("sends credentials to an http realm only when the upstream itself is http", async () => {
+    const hub = createHubAuth(fetch, () => new Date());
+    expect(await hub.onChallenge(challengeFor("repository:a:pull"), httpsWithCredentials)).toBe("Bearer tok-1");
+    expect(requests[0]!.headers.authorization).toBeUndefined();
+  });
+
+  it("a token response over 64 KiB → null", async () => {
+    const hub = createHubAuth(fetch, () => new Date());
+    status = 299;
+    expect(await hub.onChallenge(challengeFor("repository:a:pull"), anonymous)).toBeNull();
+  });
+
+  it("a bearer upstream sends its own token and does not answer challenges", async () => {
+    const hub = createHubAuth(fetch, () => new Date());
+    const bearer: Upstream = { ...anonymous, id: "up-bearer", authType: "bearer", hasSecret: true, secret: "static" };
+    expect(await hub.onChallenge(challengeFor("repository:a:pull"), bearer)).toBeNull();
+    expect(requests).toHaveLength(0);
+  });
+
+  it("a scope marked missing is answered without the realm for 60 s", async () => {
+    let clock = new Date("2026-10-22T10:00:00Z");
+    const hub = createHubAuth(fetch, () => clock);
+    const scope = "repository:library/ghost:pull";
+    hub.markMissing(anonymous, scope);
+    expect(hub.isMissing(anonymous, scope)).toBe(true);
+    expect(hub.isMissing(withCredentials, scope)).toBe(false);
+    expect(await hub.onChallenge(challengeFor(scope), anonymous)).toBeNull();
+    expect(requests).toHaveLength(0);
+    clock = new Date(clock.getTime() + 60_000);
+    expect(hub.isMissing(anonymous, scope)).toBe(false);
+    expect(await hub.onChallenge(challengeFor(scope), anonymous)).toBe("Bearer tok-1");
   });
 });
