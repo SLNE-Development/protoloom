@@ -103,7 +103,7 @@ export function CommandMenu({
             </CommandItem>
           )}
           {role === "admin" && (
-            <CommandItem value="Create repository" onSelect={() => navigate("/repositories/new")}>
+            <CommandItem value="Create repository" onSelect={() => navigate("/repositories?create=1")}>
               <PlusIcon />
               Create repository
             </CommandItem>

@@ -22,6 +22,7 @@ import {
 } from "@weaver/core";
 import {
   apikey,
+  asset,
   auditEvent,
   cleanupPolicy,
   invite,
@@ -36,7 +37,7 @@ import { startTestDb } from "@weaver/db/testing";
 import { createQueue, producerConnection, type CleanupQueue } from "@weaver/jobs";
 import { createAuth, type Auth, type AuthEnv } from "../auth";
 import { API_KEY_PREFIX } from "./routers/keys";
-import { appRouter, createCaller } from "./root";
+import { appRouter, createCaller, type RouterInputs } from "./root";
 import { createTrpcContext, INTERNAL_ERROR_MESSAGE, type TrpcContext } from "./init";
 
 const BASE = "http://localhost:3000";
@@ -103,6 +104,9 @@ function call(principal: Principal, overrides: Partial<TrpcContext> = {}) {
   return createCaller(contextFor(principal, overrides));
 }
 
+/** Format and kind of the proto fixture repositories. */
+const protoHosted = { format: "proto", kind: "hosted" } as const;
+
 const anonymousViewOn = { settings: { anonymousView: true, defaultCacheStore: "local" as const } };
 
 async function createUser(role: string, name = `${role} user`) {
@@ -149,8 +153,8 @@ beforeAll(async () => {
   auth = createAuth(db, authEnv);
   blobDir = await mkdtemp(join(tmpdir(), "weaver-trpc-"));
   stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir });
-  registry = createRegistry({ db, stores });
   repos = createRepoService({ db, stores, secretKey: deriveSecretKey(authEnv.BETTER_AUTH_SECRET) });
+  registry = createRegistry({ db, stores, repos });
   liveQueue = createQueue(producerConnection(valkey.getConnectionUrl()));
   deadQueue = createQueue(producerConnection("redis://127.0.0.1:1"), { onError: () => undefined });
 });
@@ -167,8 +171,8 @@ beforeEach(async () => {
   people.admin = (await createUser("admin", "Ada Admin")).id;
   people.maintainer = (await createUser("maintainer", "Max Maintainer")).id;
   people.viewer = (await createUser("viewer", "Vic Viewer")).id;
-  await call(admin()).repositories.create({ name: "shared", visibility: "public", description: "Public contracts" });
-  await call(admin()).repositories.create({ name: "internal", visibility: "private" });
+  await call(admin()).repositories.create({ ...protoHosted, name: "shared", visibility: "public", description: "Public contracts" });
+  await call(admin()).repositories.create({ ...protoHosted, name: "internal", visibility: "private" });
   for (const row of await db.select({ id: repository.id, name: repository.name }).from(repository)) {
     if (row.name === "shared" || row.name === "internal") repoIds[row.name] = row.id;
   }
@@ -206,7 +210,7 @@ describe("procedures", () => {
 
   it("requires a signed-in user for authed procedures and the role for maintainer and admin ones", async () => {
     expect(await codeOf(call(anonymous, anonymousViewOn).keys.list())).toBe("UNAUTHORIZED");
-    expect(await codeOf(call(viewer()).repositories.create({ name: "mine", visibility: "private" }))).toBe("FORBIDDEN");
+    expect(await codeOf(call(viewer()).repositories.create({ ...protoHosted, name: "mine" }))).toBe("FORBIDDEN");
     expect(await codeOf(call(viewer()).versions.delete({ repository: "shared", coordinate: "acme:money:1.0.0" }))).toBe(
       "FORBIDDEN",
     );
@@ -397,6 +401,22 @@ describe("keys", () => {
     expect(await db.select().from(apikey)).toEqual([]);
   });
 
+  it("rejects entries that can never grant anything", async () => {
+    await call(admin()).repositories.create({ name: "libs", format: "maven", kind: "hosted" });
+    await call(admin()).repositories.create({ name: "protos", format: "proto", kind: "group", members: ["shared"] });
+    const write = call(maintainer()).keys.create({ name: "ci", permissions: [{ repository: "protos", access: "write" }] });
+    await expect(write).rejects.toThrow(/protos is a group/);
+    expect(await codeOf(call(maintainer()).keys.create({ name: "ci", permissions: [{ repository: "protos", access: "write" }] }))).toBe(
+      "BAD_REQUEST",
+    );
+    for (const repo of ["libs", "protos"]) {
+      const prefix = call(maintainer()).keys.create({ name: "ci", permissions: [{ repository: repo, groupPrefix: "acme", access: "read" }] });
+      await expect(prefix).rejects.toThrow(/group prefix/i);
+    }
+    expect(await db.select().from(apikey)).toEqual([]);
+    await call(maintainer()).keys.create({ name: "ok", permissions: [{ repository: "protos", access: "read" }] });
+  });
+
   it("deletes the Better Auth key again when storing its permissions fails", async () => {
     const spy = vi.spyOn(db, "transaction").mockRejectedValueOnce(new Error("insert failed"));
     try {
@@ -425,24 +445,155 @@ describe("keys", () => {
 });
 
 describe("repositories", () => {
-  it("creates, reads, updates and lists repositories, refusing duplicates", async () => {
+  const npmMirror: RouterInputs["repositories"]["create"] = {
+    name: "npmjs",
+    format: "npm",
+    kind: "mirror",
+    upstreams: [{ url: "https://registry.npmjs.org", authType: "bearer", secret: "s3cret" }],
+  };
+
+  it("creates repositories for admins only, filling in the defaults", async () => {
+    expect(await codeOf(call(maintainer()).repositories.create(npmMirror))).toBe("FORBIDDEN");
+    const mirror = await call(admin()).repositories.create(npmMirror);
+    expect(mirror).toMatchObject({
+      name: "npmjs",
+      format: "npm",
+      kind: "mirror",
+      visibility: "private",
+      description: null,
+      dockerRoot: false,
+      config: {
+        cache: { enabled: false, store: null, metadataTtlSeconds: 1800, maxAgeDays: null, maxSizeBytes: null },
+        offline: false,
+        rules: { allow: [], deny: [] },
+      },
+    });
+    const maven = await call(admin()).repositories.create({ name: "libs", format: "maven", kind: "hosted" });
+    expect(maven.config).toEqual({ versionPolicy: "mixed", redeploy: false });
+    expect(JSON.stringify(await call(admin()).repositories.upstreams({ name: "npmjs" }))).not.toContain("s3cret");
+  });
+
+  it("refuses taken and invalid names and invalid kind input", async () => {
     const caller = call(admin());
-    expect(await codeOf(caller.repositories.create({ name: "shared", visibility: "public" }))).toBe("CONFLICT");
-    expect(await codeOf(caller.repositories.create({ name: "Bad Name", visibility: "public" }))).toBe("BAD_REQUEST");
-    const updated = await caller.repositories.update({ name: "internal", allowRedeploy: true, resolutionPriority: 5 });
-    expect(updated).toMatchObject({ name: "internal", allowRedeploy: true, resolutionPriority: 5, visibility: "private" });
-    expect(await caller.repositories.get({ name: "internal" })).toMatchObject({ allowRedeploy: true, artifactCount: 0 });
-    expect((await caller.repositories.list()).map((r) => r.name)).toEqual(["internal", "shared"]);
+    expect(await codeOf(caller.repositories.create({ ...protoHosted, name: "shared" }))).toBe("CONFLICT");
+    expect(await codeOf(caller.repositories.create({ name: "npmjs", format: "npm", kind: "shared" as "hosted" }))).toBe("BAD_REQUEST");
+    expect(await codeOf(caller.repositories.create({ ...protoHosted, name: "Bad Name" }))).toBe("BAD_REQUEST");
+    expect(await codeOf(caller.repositories.create({ name: "m", format: "maven", kind: "mirror" }))).toBe("BAD_REQUEST");
+  });
+
+  it("lists repositories with their asset counts and sizes, and reads one", async () => {
+    await publish("shared", "acme:money:1.0.0", moneyFiles);
+    const caller = call(admin());
+    const list = await caller.repositories.list();
+    expect(list.map((r) => r.name)).toEqual(["internal", "shared"]);
+    expect(list.find((r) => r.name === "internal")).toMatchObject({ format: "proto", kind: "hosted", assetCount: 0, storageBytes: 0 });
+    const shared = list.find((r) => r.name === "shared")!;
+    expect(shared.assetCount).toBe(1);
+    expect(shared.storageBytes).toBeGreaterThan(0);
+    expect(await caller.repositories.get({ name: "shared" })).toMatchObject({
+      name: "shared",
+      assetCount: 1,
+      policyCount: 0,
+      artifactCount: 1,
+    });
     expect(await codeOf(caller.repositories.get({ name: "ghost" }))).toBe("NOT_FOUND");
+    expect(await codeOf(call(maintainer()).repositories.list())).toBe("FORBIDDEN");
+  });
+
+  it("updates with a patch, deep-merging the config and auditing", async () => {
+    const caller = call(admin());
+    const updated = await caller.repositories.update({
+      name: "internal",
+      patch: { config: { allowRedeploy: true, resolutionPriority: 5 } },
+    });
+    expect(updated).toMatchObject({
+      name: "internal",
+      visibility: "private",
+      config: { allowRedeploy: true, allowReleases: true, resolutionPriority: 5 },
+    });
+    await caller.repositories.create(npmMirror);
+    const cached = await caller.repositories.update({ name: "npmjs", patch: { config: { cache: { enabled: true } } } });
+    expect(cached.config).toMatchObject({ cache: { enabled: true, metadataTtlSeconds: 1800 } });
+    expect(await codeOf(caller.repositories.update({ name: "ghost", patch: { visibility: "public" } }))).toBe("NOT_FOUND");
     const actions = (await db.select({ action: auditEvent.action }).from(auditEvent)).map((a) => a.action);
     expect(actions).toEqual(expect.arrayContaining(["repository.create", "repository.update"]));
   });
 
-  it("deletes only repositories without artifacts", async () => {
+  it("keeps an upstream's stored secret when the update omits it", async () => {
+    const caller = call(admin());
+    await caller.repositories.create(npmMirror);
+    await caller.repositories.update({
+      name: "npmjs",
+      patch: {
+        upstreams: [
+          { url: "https://mirror.example.com/npm", authType: "none" },
+          { url: "https://registry.npmjs.org", authType: "bearer" },
+        ],
+      },
+    });
+    const upstreams = await caller.repositories.upstreams({ name: "npmjs" });
+    expect(upstreams).toEqual([
+      expect.objectContaining({ url: "https://mirror.example.com/npm", authType: "none", hasSecret: false }),
+      expect.objectContaining({ url: "https://registry.npmjs.org", authType: "bearer", hasSecret: true }),
+    ]);
+    const [, kept] = await repos.upstreamsWithSecrets((await repos.get("npmjs"))!.id);
+    expect(kept!.secret).toBe("s3cret");
+  });
+
+  it("lists group members in order and offers only hosted and mirror repos of the format as candidates", async () => {
+    const caller = call(admin());
+    await caller.repositories.create(npmMirror);
+    await caller.repositories.create({ name: "npm-local", format: "npm", kind: "hosted" });
+    await caller.repositories.create({ name: "maven-local", format: "maven", kind: "hosted" });
+    await caller.repositories.create({ name: "npm-all", format: "npm", kind: "group", members: ["npmjs", "npm-local"] });
+    expect((await caller.repositories.members({ name: "npm-all" })).map((r) => r.name)).toEqual(["npmjs", "npm-local"]);
+    expect((await caller.repositories.candidates({ format: "npm" })).map((r) => r.name)).toEqual(["npm-local", "npmjs"]);
+    expect((await caller.repositories.candidates({ format: "proto" })).map((r) => r.name)).toEqual(["internal", "shared"]);
+    expect(await codeOf(caller.repositories.members({ name: "npmjs" }))).toBe("BAD_REQUEST");
+    expect(await codeOf(caller.repositories.upstreams({ name: "npm-all" }))).toBe("BAD_REQUEST");
+    expect(await codeOf(call(maintainer()).repositories.candidates({ format: "npm" }))).toBe("FORBIDDEN");
+  });
+
+  it("refuses to delete a proto repository that still has artifacts, and deletes other formats with their content", async () => {
     await publish("shared", "acme:money:1.0.0", moneyFiles);
     expect(await codeOf(call(admin()).repositories.delete({ name: "shared" }))).toBe("PRECONDITION_FAILED");
     await call(admin()).repositories.delete({ name: "internal" });
+    await call(admin()).repositories.create({ name: "libs", format: "maven", kind: "hosted" });
+    const [libs] = await db.select({ id: repository.id }).from(repository).where(eq(repository.name, "libs"));
+    await db.insert(asset).values({
+      repositoryId: libs!.id,
+      path: "a.jar",
+      store: "local",
+      storageKey: "libs/a.jar",
+      size: 3,
+      origin: "hosted",
+      md5: "m",
+      sha1: "s1",
+      sha256: "s256",
+      sha512: "s512",
+    });
+    await call(admin()).repositories.delete({ name: "libs" });
     expect((await call(admin()).repositories.list()).map((r) => r.name)).toEqual(["shared"]);
+  });
+
+  it("refuses cleanup policies on repositories that are not proto", async () => {
+    await call(admin()).repositories.create({ name: "libs", format: "maven", kind: "hosted" });
+    expect(await codeOf(call(admin()).policies.list({ repository: "libs" }))).toBe("BAD_REQUEST");
+    expect(await codeOf(call(admin()).policies.upsert({ repository: "libs", kind: "delete_stale_snapshots", value: 30 }))).toBe(
+      "BAD_REQUEST",
+    );
+  });
+});
+
+describe("browse by format", () => {
+  it("lists format and kind, reads a repository, and serves proto listings only for proto repositories", async () => {
+    await call(admin()).repositories.create({ name: "libs", format: "maven", kind: "hosted" });
+    const listed = await call(viewer()).browse.repositories();
+    expect(listed.find((r) => r.name === "libs")).toMatchObject({ format: "maven", kind: "hosted", artifactCount: 0 });
+    expect(listed.find((r) => r.name === "shared")).toMatchObject({ format: "proto", kind: "hosted" });
+    expect(await call(viewer()).browse.repository({ name: "libs" })).toMatchObject({ name: "libs", format: "maven" });
+    expect(await codeOf(call(anonymous, anonymousViewOn).browse.repository({ name: "internal" }))).toBe("NOT_FOUND");
+    expect(await codeOf(call(viewer()).browse.artifacts({ repository: "libs" }))).toBe("BAD_REQUEST");
   });
 });
 
@@ -646,7 +797,7 @@ describe("review follow-ups", () => {
       .innerJoin(repository, eq(repository.id, repoPermission.repositoryId));
     expect(scopes.map((p) => p.name)).toEqual(["shared"]);
 
-    await call(admin()).repositories.create({ name: "internal", visibility: "private" });
+    await call(admin()).repositories.create({ ...protoHosted, name: "internal", visibility: "private" });
     const [key] = await call(maintainer()).keys.list();
     expect(key!.permissions).toEqual([
       { repositoryId: repoIds.shared, repository: "shared", groupPrefix: null, access: "read" },

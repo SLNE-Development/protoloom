@@ -1,17 +1,22 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import { auditEvent, protoBuild as build, protoDeletedRelease as deletedRelease, repository } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
 import { packArchive, type ProtoFile } from "../archive.js";
+import { createAssetService } from "../content/assets.js";
 import type { Coordinate } from "../coordinates.js";
+import { deriveSecretKey } from "../crypto.js";
 import type { RegistryError } from "../errors.js";
+import { createMirrorEngine } from "../mirror/index.js";
 import type { KeyPermission, Principal, Role } from "../permissions.js";
+import { createRepoService, type Repo, type RepoService } from "../repos/service.js";
+import type { ServerSettings } from "../settings.js";
 import { createStoreSetFromEnv, getBuffer, type ObjectStore, type StoreSet } from "../storage/index.js";
 import { validateProtos } from "../validation.js";
-import { createRegistry, type Manifest, type Registry } from "./index.js";
+import { createRegistry, publishRepositoryOrder, type Manifest, type Registry } from "./index.js";
 import type { ProtoHostedConfig } from "../repos/config.js";
 
 const anonymous: Principal = { kind: "anonymous" };
@@ -66,6 +71,7 @@ describe("registry", () => {
   let testDb: Awaited<ReturnType<typeof startTestDb>>;
   let blobDir: string;
   let stores: StoreSet;
+  let repos: RepoService;
   let registry: Registry;
 
   const moneyFiles = [proto("acme/money/v1/money.proto", "message Money { int64 cents = 1; }")];
@@ -122,7 +128,8 @@ describe("registry", () => {
     testDb = await startTestDb();
     blobDir = await mkdtemp(join(tmpdir(), "weaver-registry-"));
     stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir });
-    registry = createRegistry({ db: testDb.db, stores });
+    repos = createRepoService({ db: testDb.db, stores, secretKey: deriveSecretKey("registry-test-secret") });
+    registry = createRegistry({ db: testDb.db, stores, repos });
   }, 120_000);
 
   afterAll(async () => {
@@ -145,7 +152,7 @@ describe("registry", () => {
     const wrong = () => Promise.reject(new Error("read from the wrong store"));
     const elsewhere: ObjectStore = { id: "s3", put: wrong, get: wrong, head: wrong, delete: wrong, deleteMany: wrong };
     const moved: StoreSet = { primary: elsewhere, get: (id) => stores.get(id), configured: () => ["local", "s3"] };
-    const archive = await createRegistry({ db: testDb.db, stores: moved }).download(
+    const archive = await createRegistry({ db: testDb.db, stores: moved, repos }).download(
       maintainer,
       "releases",
       coord("acme", "money", "1.0.0"),
@@ -282,6 +289,7 @@ describe("registry", () => {
     return createRegistry({
       db: testDb.db,
       stores,
+      repos,
       validate: async () => {
         if (++arrived === 2) release();
         await together;
@@ -344,12 +352,17 @@ describe("registry", () => {
     await expectError(publishMoney(maintainer, "snapshots", "1.0.0"), "invalid_request");
   });
 
-  it("rejects publishing to a proto group", async () => {
+  it("rejects publishing to a proto group as method_not_allowed, before the write check", async () => {
     await testDb.db.insert(repository).values({ id: repoIds.everything, name: "everything", format: "proto", kind: "group" });
     const key = maintainerWith(write("everything"));
-    // Groups are read-only in the permission model, so the write check refuses before the kind check.
-    const error = await expectError(publishMoney(key, "everything"), "forbidden");
-    expect(error.message).toContain("everything");
+    // Groups are read-only in the permission model; the kind check answers first, so this is not `forbidden`.
+    const error = await expectError(publishMoney(key, "everything"), "method_not_allowed");
+    expect(error.message).toBe("Repository everything is a group; publish to a hosted repository");
+  });
+
+  it("does not disclose an unreadable group when publishing to it", async () => {
+    await testDb.db.insert(repository).values({ id: repoIds.everything, name: "everything", format: "proto", kind: "group" });
+    await expectError(publishMoney(maintainerWith(write("snapshots")), "everything"), "not_found");
   });
 
   it("rejects an invalid manifest", async () => {
@@ -390,6 +403,7 @@ describe("registry", () => {
       registry: createRegistry({
         db: testDb.db,
         stores,
+        repos,
         validate: async (input) => {
           dependencyFiles.push(input.dependencyFiles);
           return validateProtos(input);
@@ -432,14 +446,26 @@ describe("registry", () => {
     const otherWriter = key("maintainer", [write("other")], "key-other");
     // "other" has the lower priority value but this key can't read it, so "shared" is used.
     await publishMoney(otherWriter, "other");
-    await publishMoney(sharedWriter, "shared");
+    await publishMoney(sharedWriter, "shared", "1.0.0", currencyMoney);
 
-    await publishOrder();
-    const resolution = await registry.resolve(maintainer, ["releases", "shared"], [coord("acme", "order", "1.0.0")]);
-    expect(resolution.nodes.map((n) => `${n.repository}/${n.coordinate.name}`)).toEqual([
-      "shared/money",
-      "releases/order",
-    ]);
+    const spy = spyingRegistry();
+    await spy.registry.publish(maintainer, {
+      repository: "releases",
+      manifest: manifest("acme", "order", "1.0.0", ["acme:money:1.0.0"]),
+      archive: await packArchive(currencyOrder),
+    });
+    expect(spy.dependencyFiles).toEqual([currencyMoney]);
+  });
+
+  it("resolves dependencies from a repository the key reads only for the dependency's group", async () => {
+    await insertRepo("shared");
+    await publishMoney(key("maintainer", [write("shared")], "key-shared"), "shared");
+    const scoped = key("maintainer", [write("releases"), { ...read("shared"), groupPrefix: "acme" }], "key-scoped");
+    await expect(publishOrder(scoped)).resolves.toMatchObject({ buildNumber: 1 });
+
+    const elsewhere = key("maintainer", [write("releases"), { ...read("shared"), groupPrefix: "corp" }], "key-elsewhere");
+    await registry.deleteVersion(admin, "releases", coord("acme", "order", "1.0.0"));
+    await expectError(publishOrder(elsewhere), "validation_failed");
   });
 
   it("prefers the target repository over higher-priority repositories", async () => {
@@ -470,20 +496,6 @@ describe("registry", () => {
     await expectError(publishMoney(key("viewer", [write("releases")])), "forbidden");
     await expectError(publishMoney({ kind: "user", userId: "u1", role: "admin" }), "forbidden");
     await expectError(publishMoney(anonymous), "unauthorized");
-  });
-
-  it("hides private artifacts from anonymous resolution like missing ones", async () => {
-    await insertRepo("private");
-    await publishMoney(key("maintainer", [write("private")], "key-private"), "private");
-    const hidden = await expectError(
-      registry.resolve(anonymous, ["private"], [coord("acme", "money", "1.0.0")]),
-      "not_found",
-    );
-    const missing = await expectError(
-      registry.resolve(anonymous, ["private"], [coord("acme", "absent", "1.0.0")]),
-      "not_found",
-    );
-    expect(hidden.message.replace("money", "X")).toBe(missing.message.replace("absent", "X"));
   });
 
   it("reads public repositories anonymously and hides private ones", async () => {
@@ -670,5 +682,163 @@ describe("registry", () => {
       .from(auditEvent)
       .where(and(eq(auditEvent.action, "publish")));
     expect(actors).toEqual([{ actorType: "apikey", actorId: "key-maintainer" }]);
+  });
+
+  describe("on the repository model", () => {
+    const writeOn = (r: Repo): KeyPermission => ({ repositoryId: r.id, repository: r.name, groupPrefix: null, access: "write" });
+    const readOn = (r: Repo): KeyPermission => ({ repositoryId: r.id, repository: r.name, groupPrefix: null, access: "read" });
+    const upstreamUrl = "https://upstream.invalid/api/v1/repos/remote";
+
+    function createHosted(name: string, config: Partial<ProtoHostedConfig> = {}): Promise<Repo> {
+      return repos.create(admin, { name, format: "proto", kind: "hosted", config });
+    }
+
+    function createMirror(name: string): Promise<Repo> {
+      return repos.create(admin, { name, format: "proto", kind: "mirror", upstreams: [{ url: upstreamUrl, authType: "none" }] });
+    }
+
+    /** A registry whose validation accepts everything and records the dependency files of every publish. */
+    function stubRegistry(): { registry: Registry; dependencyFiles: ProtoFile[][] } {
+      const dependencyFiles: ProtoFile[][] = [];
+      return {
+        dependencyFiles,
+        registry: createRegistry({
+          db: testDb.db,
+          stores,
+          repos,
+          validate: async (input) => {
+            dependencyFiles.push(input.dependencyFiles);
+            return [];
+          },
+        }),
+      };
+    }
+
+    it("publish to a group is method_not_allowed", async () => {
+      await createHosted("member");
+      const group = await repos.create(admin, { name: "all", format: "proto", kind: "group", members: ["member"] });
+      const err = await expectError(publishMoney(key("maintainer", [writeOn(group)], "key-group"), "all"), "method_not_allowed");
+      expect(err.code).toBe("method_not_allowed");
+      expect(err.status).toBe(405);
+      expect(err.message).toBe("Repository all is a group; publish to a hosted repository");
+    });
+
+    it("publish to a proto mirror is method_not_allowed", async () => {
+      const mirror = await createMirror("remote");
+      const err = await expectError(publishMoney(key("maintainer", [writeOn(mirror)], "key-mirror"), "remote"), "method_not_allowed");
+      expect(err.status).toBe(405);
+      expect(err.message).toBe("Repository remote is a mirror; publish to a hosted repository");
+    });
+
+    it("deleteVersion on a group is method_not_allowed", async () => {
+      await createHosted("member");
+      const group = await repos.create(admin, { name: "all", format: "proto", kind: "group", members: ["member"] });
+      const err = await expectError(
+        registry.deleteVersion(key("admin", [writeOn(group)], "key-group-admin"), "all", coord("acme", "money", "1.0.0")),
+        "method_not_allowed",
+      );
+      expect(err.status).toBe(405);
+      await expectError(
+        registry.deleteVersion({ kind: "user", userId: "u-admin", role: "admin" }, "all", coord("acme", "money", "1.0.0")),
+        "method_not_allowed",
+      );
+    });
+
+    it("hosted reads of a non-proto repo are not_found", async () => {
+      await repos.create(admin, { name: "npm-hosted", format: "npm", kind: "hosted", visibility: "public" });
+      await expectError(registry.listVersions(admin, "npm-hosted", "g", "n"), "not_found");
+    });
+
+    it("publish resolves dependencies from hosted repos by resolutionPriority", async () => {
+      // Created, and named, against their priority order so neither decides the outcome.
+      const high = await createHosted("high", { resolutionPriority: 10 });
+      const low = await createHosted("low", { resolutionPriority: 5 });
+      const target = await createHosted("target");
+      await publishMoney(key("maintainer", [writeOn(high)], "key-high"), "high");
+      await publishMoney(key("maintainer", [writeOn(low)], "key-low"), "low", "1.0.0", currencyMoney);
+
+      const stub = stubRegistry();
+      await stub.registry.publish(key("maintainer", [writeOn(target), readOn(high), readOn(low)], "key-target"), {
+        repository: "target",
+        manifest: manifest("acme", "order", "1.0.0", ["acme:money:1.0.0"]),
+        archive: await packArchive(currencyOrder),
+      });
+      expect(stub.dependencyFiles).toEqual([currencyMoney]);
+    });
+
+    it("publish ignores mirrors", async () => {
+      const mirror = await createMirror("remote");
+      const target = await createHosted("target");
+      const fetchImpl = vi.fn<typeof fetch>(() => Promise.reject(new Error("upstream contacted")));
+      const settings = (): Promise<ServerSettings> => Promise.resolve({ anonymousView: false, defaultCacheStore: "local" });
+      const engine = createMirrorEngine({
+        db: testDb.db,
+        stores,
+        repos,
+        assets: createAssetService({ db: testDb.db, stores }),
+        settings,
+        fetchImpl,
+      });
+
+      const publisher = key("maintainer", [writeOn(target), readOn(mirror)], "key-target");
+      const order = await publishRepositoryOrder(testDb.db, repos, publisher, target);
+      expect(order.map((r) => r.name)).not.toContain("remote");
+      const err = await expectError(publishOrder(publisher, "target"), "validation_failed");
+      expect(err.message).toBe("Dependency not found: acme:money:1.0.0");
+      await engine.drain();
+      expect(fetchImpl).toHaveBeenCalledTimes(0);
+    });
+
+    it("publish sees a hosted repo through a readable group", async () => {
+      const hidden = await createHosted("private-hosted");
+      const target = await createHosted("target");
+      const group = await repos.create(admin, { name: "all", format: "proto", kind: "group", members: ["private-hosted"] });
+      await publishMoney(key("maintainer", [writeOn(hidden)], "key-hidden"), "private-hosted");
+
+      const result = await publishOrder(key("maintainer", [readOn(group), writeOn(target)], "key-target"), "target");
+      expect(result.buildNumber).toBe(1);
+    });
+
+    it("publish skips hosted repos the publisher cannot read", async () => {
+      const hidden = await createHosted("private-hosted");
+      const target = await createHosted("target");
+      await repos.create(admin, { name: "all", format: "proto", kind: "group", members: ["private-hosted"] });
+      await publishMoney(key("maintainer", [writeOn(hidden)], "key-hidden"), "private-hosted");
+
+      const err = await expectError(publishOrder(key("maintainer", [writeOn(target)], "key-target"), "target"), "validation_failed");
+      expect(err.message).toBe("Dependency not found: acme:money:1.0.0");
+    });
+
+    it("hosted.node returns the newest snapshot build without permission checks", async () => {
+      const snapshot = coord("acme", "money", "1.0.0-SNAPSHOT");
+      await publishMoney(maintainer, "snapshots", "1.0.0-SNAPSHOT");
+      const second = await publishMoney(maintainer, "snapshots", "1.0.0-SNAPSHOT", currencyMoney);
+      const repo = (await repos.get("snapshots"))!;
+
+      const node = await registry.hosted.node(repo, snapshot);
+      expect(node).toEqual({ coordinate: snapshot, repository: "snapshots", buildNumber: 2, sha256: second.sha256, dependencies: [] });
+      expect((await registry.hosted.node(repo, snapshot, 1))?.buildNumber).toBe(1);
+      expect(await registry.hosted.node(repo, coord("acme", "absent", "1.0.0"))).toBeNull();
+
+      expect((await registry.hosted.versions(repo, "acme", "money")).map((v) => v.version)).toEqual(["1.0.0-SNAPSHOT"]);
+      expect(await registry.hosted.versions(repo, "acme", "absent")).toEqual([]);
+      expect((await registry.hosted.manifest(repo, snapshot))?.buildNumber).toBe(2);
+      expect((await registry.hosted.manifest(repo, snapshot, { buildNumber: 1 }))?.buildNumber).toBe(1);
+      expect(await registry.hosted.manifest(repo, coord("acme", "absent", "1.0.0"))).toBeNull();
+    });
+
+    it("hosted.archive counts one download", async () => {
+      const published = await publishMoney();
+      const repo = (await repos.get("releases"))!;
+      const c = coord("acme", "money", "1.0.0");
+
+      const archive = await registry.hosted.archive(repo, c);
+      const [row] = await testDb.db.select().from(build);
+      expect(archive).toMatchObject({ sha256: published.sha256, filename: "money-1.0.0.tar.gz", buildId: row!.id });
+      expect(archive!.data.length).toBeGreaterThan(0);
+      expect(row?.downloadCount).toBe(1);
+      expect(await registry.hosted.archive(repo, c, { buildNumber: 2 })).toBeNull();
+      expect((await testDb.db.select().from(build))[0]?.downloadCount).toBe(1);
+    });
   });
 });

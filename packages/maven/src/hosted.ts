@@ -36,7 +36,7 @@ function contentLengthOf(req: Request): number | undefined {
 }
 
 /** Whether downloads and uploads of this path count as usage (not checksums, signatures or metadata). */
-function counted(target: MavenPath): boolean {
+export function counted(target: MavenPath): boolean {
   if (target.type === "directory" || target.type === "metadata") return false;
   return target.checksum === null && !target.basePath.endsWith(".asc");
 }
@@ -153,7 +153,7 @@ async function serveAsset(ctx: MavenContext, repo: Repo, asset: AssetRow, counta
 }
 
 /** Serves a small generated body (metadata or a checksum) with length and etag headers. */
-function generatedResponse(ctx: MavenContext, body: string, contentType: string): Response {
+export function generatedResponse(ctx: MavenContext, body: string, contentType: string): Response {
   const bytes = Buffer.from(body, "utf8");
   return new Response(ctx.method === "HEAD" ? null : bytes, {
     status: 200,
