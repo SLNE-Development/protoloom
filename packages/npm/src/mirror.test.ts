@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { asset, usageEvent } from "@weaver/db";
 import type { Repo } from "@weaver/core";
@@ -24,6 +24,9 @@ let lockedUrl: string;
 let lockedHits = 0;
 let lockedAuth: string | undefined;
 let echo: Server;
+let bad: Server;
+let flip: Server;
+let flipLocked = false;
 let echoHeaders: Record<string, string | string[] | undefined> = {};
 const repos: Record<string, Repo> = {};
 
@@ -60,6 +63,38 @@ beforeAll(async () => {
     res.end("plain");
   });
   await new Promise<void>((resolve) => echo.listen(0, "127.0.0.1", resolve));
+  bad = createServer((req, res) => {
+    req.resume();
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ name: "left-pad", "dist-tags": { latest: "1.0.0" }, versions: { "1.0.0": "not an object" } }));
+  });
+  await new Promise<void>((resolve) => bad.listen(0, "127.0.0.1", resolve));
+  flip = createServer((req, res) => {
+    req.resume();
+    if (flipLocked) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ name: "left-pad", "dist-tags": { latest: "1.0.0" }, versions: { "1.0.0": { name: "left-pad", version: "1.0.0", dist: { tarball: "x", shasum: "y" } } } }));
+  });
+  await new Promise<void>((resolve) => flip.listen(0, "127.0.0.1", resolve));
+  repos["npm-flip"] = await h.createRepo({
+    name: "npm-flip",
+    format: "npm",
+    kind: "mirror",
+    visibility: "public",
+    upstreams: [{ url: `http://127.0.0.1:${(flip.address() as AddressInfo).port}`, authType: "none" }],
+    config: { cache: { enabled: true, metadataTtlSeconds: 0 } },
+  });
+  repos["npm-bad"] = await h.createRepo({
+    name: "npm-bad",
+    format: "npm",
+    kind: "mirror",
+    visibility: "public",
+    upstreams: [{ url: `http://127.0.0.1:${(bad.address() as AddressInfo).port}`, authType: "none" }],
+  });
   repos["npm-echo"] = await h.createRepo({
     name: "npm-echo",
     format: "npm",
@@ -98,6 +133,8 @@ afterAll(async () => {
   await gzip?.close();
   await new Promise((resolve) => locked?.close(resolve));
   await new Promise((resolve) => echo?.close(resolve));
+  await new Promise((resolve) => bad?.close(resolve));
+  await new Promise((resolve) => flip?.close(resolve));
 });
 
 describe("npm mirror", () => {
@@ -227,6 +264,38 @@ describe("npm mirror", () => {
       expect(doc.versions["1.0.0"]!.dist.tarball).toBe("https://weaver.slne.dev/npm/npm-down/@acme/ui/-/ui-1.0.0.tgz");
     } finally {
       down.setOffline(false);
+    }
+  });
+
+  it("an unreadable cached copy counts as none when the upstream refuses", async () => {
+    const first = await h.call("GET", "npm-flip/left-pad");
+    expect(first.status).toBe(200);
+    await first.text();
+    await h.deps.mirror.drain();
+    flipLocked = true;
+    try {
+      const stale = await h.call("GET", "npm-flip/left-pad");
+      expect(stale.status).toBe(200);
+      await stale.text();
+      const open = vi.spyOn(h.deps.assets, "open").mockRejectedValue(new Error("store gone"));
+      try {
+        const res = await h.call("GET", "npm-flip/left-pad");
+        expect(res.status).toBe(502);
+        expect(res.headers.get("www-authenticate")).toBeNull();
+        expect(await res.json()).toHaveProperty("error");
+      } finally {
+        open.mockRestore();
+      }
+    } finally {
+      flipLocked = false;
+    }
+  });
+
+  it("a version entry that is not an object is an invalid packument", async () => {
+    for (const accept of [CORGI, "application/json"]) {
+      const res = await h.call("GET", "npm-bad/left-pad", { headers: { accept } });
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ error: "the upstream of npm-bad sent an invalid packument" });
     }
   });
 

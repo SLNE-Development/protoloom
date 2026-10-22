@@ -49,6 +49,11 @@ describe("rewriteTarballs", () => {
     expect(out.versions["1.0.1"]!.dist.tarball).toBe("https://weaver.slne.dev/npm/grp/@acme/ui/-/ui-1.0.1.tgz");
     expect(p.versions["1.0.0"]!.dist.tarball).not.toBe(want);
   });
+
+  it("builds the url from the packument's name, not the manifest's", () => {
+    const p = make({ versions: { "1.0.0": { ...v("1.0.0"), name: "../evil" } } });
+    expect(rewriteTarballs(p, base).versions["1.0.0"]!.dist.tarball).toBe(want);
+  });
 });
 
 describe("mergePackuments", () => {

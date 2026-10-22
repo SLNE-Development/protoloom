@@ -101,15 +101,16 @@ export function abbreviate(p: Packument): AbbreviatedPackument {
 
 /**
  * Returns a copy of the packument whose tarball URLs point at `${base}/${name}/-/${file}`, where `base` is
- * `${publicUrl}/npm/${repo}`. Absolute and relative upstream tarball URLs are both handled; a version without a
- * usable name or tarball falls back to the packument's name and the conventional file name, so no upstream URL survives.
+ * `${publicUrl}/npm/${repo}` and `name` is the packument's own name (never a version manifest's, which an upstream
+ * controls). Absolute and relative upstream tarball URLs are both handled; a version without a usable tarball falls
+ * back to the conventional file name, so no upstream URL survives.
  */
 export function rewriteTarballs<T extends { name: string; versions: Record<string, Partial<VersionManifest>> }>(p: T, base: string): T {
   const versions: Record<string, Partial<VersionManifest>> = {};
+  const name = p.name;
+  const bare = name.startsWith("@") ? name.slice(name.indexOf("/") + 1) : name;
   for (const [version, manifest] of Object.entries(p.versions ?? {})) {
-    const name = typeof manifest.name === "string" ? manifest.name : p.name;
     const tarball = manifest.dist?.tarball;
-    const bare = name.startsWith("@") ? name.slice(name.indexOf("/") + 1) : name;
     const fromUrl = typeof tarball === "string" ? (tarball.split(/[?#]/)[0]!.split("/").pop() ?? "") : "";
     const file = fromUrl || `${bare}-${version}.tgz`;
     const dist = { ...manifest.dist, tarball: `${base}/${name}/-/${file}` } as VersionManifest["dist"];
