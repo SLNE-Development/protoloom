@@ -781,7 +781,7 @@ describe("registry", () => {
       });
 
       const publisher = key("maintainer", [writeOn(target), readOn(mirror)], "key-target");
-      const order = await publishRepositoryOrder(testDb.db, repos, publisher, target);
+      const order = await publishRepositoryOrder(testDb.db, publisher, target);
       expect(order.map((r) => r.name)).not.toContain("remote");
       const err = await expectError(publishOrder(publisher, "target"), "validation_failed");
       expect(err.message).toBe("Dependency not found: acme:money:1.0.0");
@@ -796,6 +796,22 @@ describe("registry", () => {
       await publishMoney(key("maintainer", [writeOn(hidden)], "key-hidden"), "private-hosted");
 
       const result = await publishOrder(key("maintainer", [readOn(group), writeOn(target)], "key-target"), "target");
+      expect(result.buildNumber).toBe(1);
+    });
+
+    it("publish sees a hosted repo through a group-prefix entry on a containing group, per coordinate", async () => {
+      const hidden = await createHosted("private-hosted");
+      const target = await createHosted("target");
+      const group = await repos.create(admin, { name: "all", format: "proto", kind: "group", members: ["private-hosted"] });
+      await publishMoney(key("maintainer", [writeOn(hidden)], "key-hidden"), "private-hosted");
+      const prefixed = (prefix: string): KeyPermission => ({ ...readOn(group), groupPrefix: prefix });
+
+      const err = await expectError(
+        publishOrder(key("maintainer", [prefixed("other"), writeOn(target)], "key-other"), "target"),
+        "validation_failed",
+      );
+      expect(err.message).toBe("Dependency not found: acme:money:1.0.0");
+      const result = await publishOrder(key("maintainer", [prefixed("acme"), writeOn(target)], "key-acme"), "target");
       expect(result.buildNumber).toBe(1);
     });
 
