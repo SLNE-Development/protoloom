@@ -1,4 +1,5 @@
 import { getSettings, recordUsage, type FormatFactory, type FormatHandler } from "@weaver/core";
+import { createNpmHandler } from "@weaver/npm";
 import { env } from "@/env";
 import { handle } from "./http";
 import { getServerContext } from "./context";
@@ -13,7 +14,7 @@ export type FormatMount = "maven" | "npm" | "docker";
  */
 const FACTORIES: Record<FormatMount, FormatFactory | undefined> = {
   maven: undefined,
-  npm: undefined,
+  npm: createNpmHandler,
   docker: undefined,
 };
 

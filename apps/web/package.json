@@ -22,6 +22,7 @@
     "@weaver/core": "workspace:*",
     "@weaver/db": "workspace:*",
     "@weaver/jobs": "workspace:*",
+    "@weaver/npm": "workspace:*",
     "@weaver/ui": "workspace:*",
     "@t3-oss/env-nextjs": "0.13.11",
     "@tanstack/react-query": "5.104.5",

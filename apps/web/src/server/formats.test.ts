@@ -1,7 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import config from "../../next.config";
 import { config as proxyConfig } from "../proxy";
 import { getFormatHandler, mountRest } from "./formats";
+
+// A server context without a database: every repository lookup misses.
+vi.mock("./context", () => ({
+  getServerContext: () => ({
+    db: {},
+    stores: { primary: { id: "local" }, configured: () => ["local"] },
+    repos: { get: async () => null },
+    assets: {},
+    mirror: {},
+    secretKey: Buffer.alloc(32),
+  }),
+}));
 
 const req = (path: string) => new Request(`http://localhost:3000${path}`);
 
@@ -23,6 +35,15 @@ describe("placeholder mounts", () => {
     const res = await getFormatHandler("maven")(req("/maven/x"), "x");
     expect(res.status).toBe(501);
     expect(await res.json()).toEqual({ error: { code: "not_implemented", message: "maven support is not installed" } });
+  });
+});
+
+describe("npm mount", () => {
+  it("serves npm through the real handler: a missing repo answers 404 JSON", async () => {
+    const res = await getFormatHandler("npm")(req("/npm/x/-/ping"), "x/-/ping");
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toBe("application/json");
+    expect(await res.json()).toEqual({ error: "not found" });
   });
 });
 
