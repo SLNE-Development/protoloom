@@ -1,6 +1,14 @@
-import { createRegistry, createStoreSetFromEnv, packArchive, type Principal, type ProtoFile } from "@weaver/core";
+import {
+  createRegistry,
+  createRepoService,
+  createStoreSetFromEnv,
+  deriveSecretKey,
+  packArchive,
+  type Principal,
+  type ProtoFile,
+} from "@weaver/core";
 import { repository, type Db } from "@weaver/db";
-import { ARTIFACTS, USERS, serverEnv } from "./fixtures";
+import { ARTIFACTS, AUTH_SECRET, USERS, serverEnv } from "./fixtures";
 
 function proto(path: string, body: string, imports: string[] = []): ProtoFile {
   const pkg = path.replace(/\/[^/]+$/, "").replaceAll("/", ".");
@@ -21,7 +29,9 @@ export async function seedArtifacts(db: Db): Promise<void> {
   ]).returning({ id: repository.id, name: repository.name });
 
   const stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: serverEnv().STORAGE_LOCAL_PATH });
-  const registry = createRegistry({ db, stores });
+  // Publishing reads repositories only; upstream secrets are never touched.
+  const repos = createRepoService({ db, stores, secretKey: deriveSecretKey(AUTH_SECRET) });
+  const registry = createRegistry({ db, stores, repos });
   // Publishing needs a key with write access (users can't publish from the UI); this one is never stored.
   const publisher: Principal = {
     kind: "apikey",

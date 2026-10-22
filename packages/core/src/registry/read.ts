@@ -3,19 +3,10 @@ import { protoArtifact, protoBuild, protoBuildFile, protoDependency, protoVersio
 import { compareVersions, formatCoordinate, type Coordinate } from "../coordinates.js";
 import { RegistryError } from "../errors.js";
 import { canAccess, canForce, type Principal } from "../permissions.js";
-import { resolveGraph, type Resolution, type ResolveOptions } from "../resolution.js";
+import type { Repo, RepoService } from "../repos/service.js";
+import type { ResolvedNode } from "../resolution.js";
 import { getBuffer } from "../storage/index.js";
-import {
-  createLookup,
-  findLatestBuild,
-  findRepositories,
-  findRepository,
-  loadDependencies,
-  type BuildRow,
-  type Queryable,
-  type RegistryContext,
-  type RepositoryRow,
-} from "./lookup.js";
+import { findLatestBuild, loadDependencies, nodeOf, type BuildRow, type Queryable, type RegistryContext } from "./lookup.js";
 
 /** Summary of one version of an artifact. */
 export interface VersionSummary {
@@ -46,99 +37,128 @@ export interface Dependent {
   coordinate: Coordinate;
 }
 
-function notFound(what: string): RegistryError {
-  return new RegistryError("not_found", `${what} was not found`);
-}
-
-/**
- * Loads a repository the principal may read for `group`. Missing and unreadable repositories both
- * throw the same `not_found`, so private repositories are not disclosed.
- */
-export async function readableRepository(
-  db: Queryable,
-  p: Principal,
-  name: string,
-  group: string,
-): Promise<RepositoryRow> {
-  const repo = await findRepository(db, name);
-  if (!repo || !canAccess(p, repo, group, "read")) throw notFound(`Repository ${name}`);
-  return repo;
-}
-
 /** Selects one build of a version: `buildNumber` when given, otherwise the newest. */
 export interface BuildSelector {
   buildNumber?: number;
 }
 
+/** The archive of one build, with the id of the build it was served from. */
+export interface HostedArchive {
+  data: Buffer;
+  sha256: string;
+  filename: string;
+  buildId: string;
+}
+
+/** Unchecked reads of one hosted proto repo; the caller has already authorised the read. */
+export interface HostedReader {
+  /** The newest build of `c` (or build `buildNumber`) as a resolved node naming `repo`; null when absent. */
+  node(repo: Repo, c: Coordinate, buildNumber?: number): Promise<ResolvedNode | null>;
+  /** The versions of an artifact, newest version first; `[]` when the artifact is absent. */
+  versions(repo: Repo, group: string, name: string): Promise<VersionSummary[]>;
+  /** Metadata of the newest build or of `select.buildNumber`; null when absent. */
+  manifest(repo: Repo, c: Coordinate, select?: BuildSelector): Promise<VersionInfo | null>;
+  /** Archive bytes of the newest build or `select.buildNumber`; counts a download on the build. */
+  archive(repo: Repo, c: Coordinate, select?: BuildSelector): Promise<HostedArchive | null>;
+}
+
+/** Which write a repository is loaded for; mirrors and groups accept neither. */
+export type WriteAction = "publish" | "delete";
+
+function notFound(what: string): RegistryError {
+  return new RegistryError("not_found", `${what} was not found`);
+}
+
+function missingBuild(c: Coordinate, buildNumber: number | undefined): RegistryError {
+  return notFound(buildNumber === undefined ? `Version ${formatCoordinate(c)}` : `Build ${buildNumber} of ${formatCoordinate(c)}`);
+}
+
 /**
- * The newest build (or build `buildNumber`) of a version in a readable repository; throws
- * `not_found` otherwise.
+ * Loads a proto repository the principal may read for `group`. Missing, non-proto and unreadable
+ * repositories all throw the same `not_found`, so private repositories are not disclosed. For a
+ * write (`action`), a readable mirror or group then throws `method_not_allowed`, before the
+ * caller's write permission check.
  */
-async function readableBuild(
-  db: Queryable,
+export async function readableRepository(
+  repos: RepoService,
   p: Principal,
-  repositoryName: string,
-  c: Coordinate,
-  { buildNumber }: BuildSelector = {},
-): Promise<{ repo: RepositoryRow; build: BuildRow }> {
-  const repo = await readableRepository(db, p, repositoryName, c.group);
-  const found = await findLatestBuild(db, repo.id, c, buildNumber);
-  if (!found) {
-    throw notFound(buildNumber === undefined ? `Version ${formatCoordinate(c)}` : `Build ${buildNumber} of ${formatCoordinate(c)}`);
-  }
-  return { repo, build: found };
-}
-
-/** Lists the versions of an artifact, newest version first. */
-export async function listVersions(
-  ctx: RegistryContext,
-  p: Principal,
-  repositoryName: string,
-  group: string,
   name: string,
-): Promise<VersionSummary[]> {
-  const repo = await readableRepository(ctx.db, p, repositoryName, group);
-  const rows = await ctx.db
-    .select({
-      version: protoVersion.version,
-      isSnapshot: protoVersion.isSnapshot,
-      updatedAt: protoVersion.updatedAt,
-      latestBuild: max(protoBuild.buildNumber),
-    })
-    .from(protoVersion)
-    .innerJoin(protoArtifact, eq(protoArtifact.id, protoVersion.artifactId))
-    .innerJoin(protoBuild, eq(protoBuild.versionId, protoVersion.id))
-    .where(and(eq(protoArtifact.repositoryId, repo.id), eq(protoArtifact.group, group), eq(protoArtifact.name, name)))
-    .groupBy(protoVersion.id);
-  if (rows.length === 0) throw notFound(`Artifact ${group}:${name}`);
-  return rows
-    .map((r) => ({ ...r, latestBuild: r.latestBuild ?? 0 }))
-    .sort((a, b) => compareVersions(b.version, a.version));
+  group: string,
+  action?: WriteAction,
+): Promise<Repo> {
+  const repo = await repos.get(name);
+  if (!repo || repo.format !== "proto" || !canAccess(p, repo, group, "read")) throw notFound(`Repository ${name}`);
+  if (action && repo.kind !== "hosted") {
+    const hint = action === "publish" ? "publish to a hosted repository" : "delete from a hosted repository";
+    throw new RegistryError("method_not_allowed", `Repository ${repo.name} is a ${repo.kind}; ${hint}`);
+  }
+  return repo;
 }
 
-/** Metadata of a version; snapshots describe their newest build unless `select` names one. */
-export async function getManifest(
-  ctx: RegistryContext,
-  p: Principal,
-  repositoryName: string,
-  c: Coordinate,
-  select: BuildSelector = {},
-): Promise<VersionInfo> {
-  const { repo, build: latest } = await readableBuild(ctx.db, p, repositoryName, c, select);
+/** Creates the unchecked reads of hosted proto repositories over the registry's database and stores. */
+export function createHostedReader(ctx: Pick<RegistryContext, "db" | "stores">): HostedReader {
+  const { db, stores } = ctx;
+  return {
+    async node(repo, c, buildNumber) {
+      const found = await findLatestBuild(db, repo.id, c, buildNumber);
+      return found ? nodeOf(db, repo, c, found) : null;
+    },
+
+    async versions(repo, group, name) {
+      const rows = await db
+        .select({
+          version: protoVersion.version,
+          isSnapshot: protoVersion.isSnapshot,
+          updatedAt: protoVersion.updatedAt,
+          latestBuild: max(protoBuild.buildNumber),
+        })
+        .from(protoVersion)
+        .innerJoin(protoArtifact, eq(protoArtifact.id, protoVersion.artifactId))
+        .innerJoin(protoBuild, eq(protoBuild.versionId, protoVersion.id))
+        .where(and(eq(protoArtifact.repositoryId, repo.id), eq(protoArtifact.group, group), eq(protoArtifact.name, name)))
+        .groupBy(protoVersion.id);
+      return rows
+        .map((r) => ({ ...r, latestBuild: r.latestBuild ?? 0 }))
+        .sort((a, b) => compareVersions(b.version, a.version));
+    },
+
+    async manifest(repo, c, { buildNumber } = {}) {
+      const latest = await findLatestBuild(db, repo.id, c, buildNumber);
+      return latest ? describeBuild(db, repo, c, latest) : null;
+    },
+
+    async archive(repo, c, { buildNumber } = {}) {
+      const served = await findLatestBuild(db, repo.id, c, buildNumber);
+      if (!served) return null;
+      const store = stores.get(served.store);
+      if (!store) throw new Error(`Archive blob ${served.storageKey} is in store ${served.store}, which is not configured`);
+      const data = await getBuffer(store, served.storageKey);
+      if (!data) throw new Error(`Archive blob ${served.storageKey} is missing from storage`);
+      await db
+        .update(protoBuild)
+        .set({ downloadCount: sql`${protoBuild.downloadCount} + 1`, lastDownloadedAt: new Date() })
+        .where(eq(protoBuild.id, served.id));
+      return { data, sha256: served.sha256, filename: `${c.name}-${c.version}.tar.gz`, buildId: served.id };
+    },
+  };
+}
+
+/** The {@link VersionInfo} of build `latest` of `c` in `repo`. */
+async function describeBuild(db: Queryable, repo: Repo, c: Coordinate, latest: BuildRow): Promise<VersionInfo> {
   const [files, dependencies, builds, publisher] = await Promise.all([
-    ctx.db
+    db
       .select({ path: protoBuildFile.path })
       .from(protoBuildFile)
       .where(eq(protoBuildFile.buildId, latest.id))
       .orderBy(asc(protoBuildFile.path)),
-    loadDependencies(ctx.db, latest.id),
-    ctx.db
+    loadDependencies(db, latest.id),
+    db
       .select({ buildNumber: protoBuild.buildNumber, createdAt: protoBuild.createdAt, sha256: protoBuild.sha256 })
       .from(protoBuild)
       .where(eq(protoBuild.versionId, latest.versionId))
       .orderBy(asc(protoBuild.buildNumber)),
     latest.publishedByUserId
-      ? ctx.db.select({ name: user.name }).from(user).where(eq(user.id, latest.publishedByUserId))
+      ? db.select({ name: user.name }).from(user).where(eq(user.id, latest.publishedByUserId))
       : Promise.resolve([]),
   ]);
   return {
@@ -157,27 +177,52 @@ export async function getManifest(
   };
 }
 
+/** Lists the versions of an artifact in a readable repository, newest version first; `not_found` when it has none. */
+export async function listVersions(
+  ctx: RegistryContext,
+  hosted: HostedReader,
+  p: Principal,
+  repositoryName: string,
+  group: string,
+  name: string,
+): Promise<VersionSummary[]> {
+  const repo = await readableRepository(ctx.repos, p, repositoryName, group);
+  const versions = await hosted.versions(repo, group, name);
+  if (versions.length === 0) throw notFound(`Artifact ${group}:${name}`);
+  return versions;
+}
+
+/** Metadata of a version; snapshots describe their newest build unless `select` names one. */
+export async function getManifest(
+  ctx: RegistryContext,
+  hosted: HostedReader,
+  p: Principal,
+  repositoryName: string,
+  c: Coordinate,
+  select: BuildSelector = {},
+): Promise<VersionInfo> {
+  const repo = await readableRepository(ctx.repos, p, repositoryName, c.group);
+  const info = await hosted.manifest(repo, c, select);
+  if (!info) throw missingBuild(c, select.buildNumber);
+  return info;
+}
+
 /**
  * Returns the archive of a version's newest build (or the build `select` names, `not_found` once
  * it is gone) and counts the download on that build.
  */
 export async function download(
   ctx: RegistryContext,
+  hosted: HostedReader,
   p: Principal,
   repositoryName: string,
   c: Coordinate,
   select: BuildSelector = {},
 ): Promise<{ data: Buffer; sha256: string; filename: string }> {
-  const { build: served } = await readableBuild(ctx.db, p, repositoryName, c, select);
-  const store = ctx.stores.get(served.store);
-  if (!store) throw new Error(`Archive blob ${served.storageKey} is in store ${served.store}, which is not configured`);
-  const data = await getBuffer(store, served.storageKey);
-  if (!data) throw new Error(`Archive blob ${served.storageKey} is missing from storage`);
-  await ctx.db
-    .update(protoBuild)
-    .set({ downloadCount: sql`${protoBuild.downloadCount} + 1`, lastDownloadedAt: new Date() })
-    .where(eq(protoBuild.id, served.id));
-  return { data, sha256: served.sha256, filename: `${c.name}-${c.version}.tar.gz` };
+  const repo = await readableRepository(ctx.repos, p, repositoryName, c.group);
+  const archive = await hosted.archive(repo, c, select);
+  if (!archive) throw missingBuild(c, select.buildNumber);
+  return { data: archive.data, sha256: archive.sha256, filename: archive.filename };
 }
 
 /** Returns one proto file of a version's newest build. */
@@ -188,25 +233,15 @@ export async function getFile(
   c: Coordinate,
   path: string,
 ): Promise<string> {
-  const { build: latest } = await readableBuild(ctx.db, p, repositoryName, c);
+  const repo = await readableRepository(ctx.repos, p, repositoryName, c.group);
+  const latest = await findLatestBuild(ctx.db, repo.id, c);
+  if (!latest) throw missingBuild(c, undefined);
   const [row] = await ctx.db
     .select({ content: protoBuildFile.content })
     .from(protoBuildFile)
     .where(and(eq(protoBuildFile.buildId, latest.id), eq(protoBuildFile.path, path)));
   if (!row) throw notFound(`File ${path}`);
   return row.content;
-}
-
-/** Resolves `roots` against `repositories` in order, as seen by the principal; see {@link resolveGraph} for `options`. */
-export async function resolve(
-  ctx: RegistryContext,
-  p: Principal,
-  repositories: string[],
-  roots: Coordinate[],
-  options: ResolveOptions = {},
-): Promise<Resolution> {
-  const repos = await findRepositories(ctx.db, repositories);
-  return resolveGraph(roots, createLookup(ctx.db, p, repos).lookup, options);
 }
 
 /** A dependent plus its repository's visibility, so callers can filter by read access. */

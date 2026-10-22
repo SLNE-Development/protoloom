@@ -113,7 +113,8 @@ function invalid(message: string, details?: unknown): RegistryError {
   return new RegistryError("invalid_request", message, details);
 }
 
-function toRepo(row: RepositoryRow): Repo {
+/** A `repository` row as a {@link Repo}, its config read leniently with {@link readRepositoryConfig}. */
+export function toRepo(row: RepositoryRow): Repo {
   return {
     id: row.id,
     name: row.name,

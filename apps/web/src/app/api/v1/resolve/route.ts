@@ -1,5 +1,14 @@
 import { z } from "zod";
-import { formatCoordinate, isValidGroup, isValidName, parseCoordinate } from "@weaver/core";
+import {
+  canAccess,
+  formatCoordinate,
+  isValidGroup,
+  isValidName,
+  parseCoordinate,
+  resolveGraph,
+  type Lookup,
+  type Repo,
+} from "@weaver/core";
 import { getServerContext } from "@/server/context";
 import { archiveUrl, handle, invalidRequest, json, readJson } from "@/server/http";
 import { getPrincipal } from "@/server/principal";
@@ -37,7 +46,19 @@ export const POST = handle(async (req: Request) => {
   }
   const { repositories, dependencies, exclude } = parsed.data;
   const roots = dependencies.map(parseCoordinate);
-  const resolution = await ctx.registry.resolve(principal, repositories, roots, { exclude: new Set(exclude) });
+  // Hosted proto entries only, in the client's order; unknown names and other repos are skipped.
+  const found = await Promise.all([...new Set(repositories)].map((name) => ctx.repos.get(name)));
+  const hosted = found.filter((r): r is Repo => r !== null && r.format === "proto" && r.kind === "hosted");
+  const lookup: Lookup = async (c) => {
+    for (const repo of hosted) {
+      // Unreadable repositories are skipped, so hidden artifacts look exactly like missing ones.
+      if (!canAccess(principal, repo, c.group, "read")) continue;
+      const node = await ctx.registry.hosted.node(repo, c);
+      if (node) return node;
+    }
+    return null;
+  };
+  const resolution = await resolveGraph(roots, lookup, { exclude: new Set(exclude) });
   return json({
     artifacts: resolution.nodes.map((node) => ({
       repository: node.repository,

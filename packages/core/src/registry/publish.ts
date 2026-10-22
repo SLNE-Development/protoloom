@@ -15,6 +15,7 @@ import {
 } from "../coordinates.js";
 import { RegistryError } from "../errors.js";
 import { canAccess, type Principal } from "../permissions.js";
+import type { Repo } from "../repos/service.js";
 import { findPathCollisions, resolveGraph, type Resolution } from "../resolution.js";
 import { putBuffer } from "../storage/index.js";
 import {
@@ -23,13 +24,12 @@ import {
   findLatestBuild,
   loadFiles,
   hostedProtoConfig,
-  publishRepositoryOrder,
+  publishSources,
   versionLockKey,
   type BlobRef,
   type BuildRow,
   type Queryable,
   type RegistryContext,
-  type RepositoryRow,
 } from "./lookup.js";
 import { assertNoDependents, findDependents, readableRepository, type Dependent } from "./read.js";
 
@@ -117,7 +117,7 @@ function tombstoneOf(repositoryId: string, c: Coordinate) {
 async function checkExistingRelease(
   db: Queryable,
   p: Principal,
-  repo: RepositoryRow,
+  repo: Repo,
   c: Coordinate,
   digest: string,
   force: boolean | undefined,
@@ -152,7 +152,7 @@ async function checkExistingRelease(
 async function resolveDependencies(
   ctx: RegistryContext,
   p: Principal,
-  repo: RepositoryRow,
+  repo: Repo,
   c: Coordinate,
   declared: Coordinate[],
 ): Promise<{ resolution: Resolution; buildIds: Map<string, string> }> {
@@ -160,7 +160,8 @@ async function resolveDependencies(
     const snapshot = declared.find((d) => isSnapshot(d.version));
     if (snapshot) throw validationFailed(`A release may not depend on snapshot ${formatCoordinate(snapshot)}`);
   }
-  const { lookup, buildIds } = createLookup(ctx.db, p, await publishRepositoryOrder(ctx.db, repo));
+  const sources = await publishSources(ctx.db, ctx.repos, p, repo);
+  const { lookup, buildIds } = createLookup(ctx.db, p, sources.repositories, sources.groupGranted);
   let resolution: Resolution;
   try {
     resolution = await resolveGraph(declared, lookup);
@@ -191,8 +192,9 @@ export async function publish(ctx: RegistryContext, p: Principal, input: Publish
   if (p.kind === "anonymous") throw new RegistryError("unauthorized", "Publishing requires an API key");
   const manifest = parseManifest(input.manifest);
   const c: Coordinate = { group: manifest.group, name: manifest.name, version: manifest.version };
-  // Unreadable repositories look missing, so publishing never discloses that one exists.
-  const repo = await readableRepository(ctx.db, p, input.repository, c.group);
+  // Unreadable repositories look missing, so publishing never discloses that one exists; a
+  // readable mirror or group answers method_not_allowed before the write check.
+  const repo = await readableRepository(ctx.repos, p, input.repository, c.group, "publish");
   if (!canAccess(p, repo, c.group, "write")) {
     throw new RegistryError("forbidden", `No write access to ${c.group} in ${repo.name}`);
   }

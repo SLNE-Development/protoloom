@@ -149,8 +149,8 @@ beforeAll(async () => {
   auth = createAuth(db, authEnv);
   blobDir = await mkdtemp(join(tmpdir(), "weaver-trpc-"));
   stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir });
-  registry = createRegistry({ db, stores });
   repos = createRepoService({ db, stores, secretKey: deriveSecretKey(authEnv.BETTER_AUTH_SECRET) });
+  registry = createRegistry({ db, stores, repos });
   liveQueue = createQueue(producerConnection(valkey.getConnectionUrl()));
   deadQueue = createQueue(producerConnection("redis://127.0.0.1:1"), { onError: () => undefined });
 });

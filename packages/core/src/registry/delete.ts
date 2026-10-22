@@ -98,7 +98,8 @@ export async function deleteBuildRow(tx: Queryable, versionId: string, buildNumb
 /**
  * Deletes a version with all its builds, files and dependency edges, then removes the archive
  * blobs after commit. Blocked by dependents in any repository unless an admin passes `force`.
- * The artifact row goes too once its last version is gone.
+ * The artifact row goes too once its last version is gone. Mirrors and groups answer
+ * `method_not_allowed`.
  */
 export async function deleteVersion(
   ctx: RegistryContext,
@@ -108,7 +109,7 @@ export async function deleteVersion(
   opts: { force?: boolean } = {},
 ): Promise<void> {
   if (p.kind === "anonymous") throw new RegistryError("unauthorized", "Deleting requires authentication");
-  const repo = await readableRepository(ctx.db, p, repositoryName, c.group);
+  const repo = await readableRepository(ctx.repos, p, repositoryName, c.group, "delete");
   if (!canDeleteVersions(p, repo, c.group)) {
     throw new RegistryError("forbidden", `Not allowed to delete versions of ${c.group} in ${repo.name}`);
   }
