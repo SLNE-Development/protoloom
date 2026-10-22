@@ -7,9 +7,9 @@ import { startWorker } from "./worker.js";
 const env = loadEnv(process.env);
 const db = createDb(env.DATABASE_URL);
 const stores = createStoreSetFromEnv(env);
-// Derived once at startup; nothing consumes it yet (upstream credential decryption lands with mirror repos).
-export const secretKey = deriveSecretKey(env.BETTER_AUTH_SECRET);
-const running = await startWorker({ db, stores, connection: redisConnection(env.VALKEY_URL) });
+// Derived once at startup for the repository service the cleanups read repositories through.
+const secretKey = deriveSecretKey(env.BETTER_AUTH_SECRET);
+const running = await startWorker({ db, stores, secretKey, connection: redisConnection(env.VALKEY_URL) });
 console.log("weaver-worker: processing cleanup jobs");
 
 let stopping = false;
