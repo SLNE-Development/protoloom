@@ -20,6 +20,7 @@
   "devDependencies": {
     "@types/node": "26.6.5",
     "@weaver/config": "workspace:*",
+    "drizzle-orm": "0.45.4",
     "eslint": "10.13.0",
     "testcontainers": "12.2.1",
     "typescript": "6.0.3",

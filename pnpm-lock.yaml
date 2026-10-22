@@ -59,6 +59,9 @@ importers:
       '@weaver/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs
+      '@weaver/maven':
+        specifier: workspace:*
+        version: link:../../packages/maven
       '@weaver/npm':
         specifier: workspace:*
         version: link:../../packages/npm
@@ -498,6 +501,9 @@ importers:
       '@weaver/config':
         specifier: workspace:*
         version: link:../config
+      drizzle-orm:
+        specifier: 0.45.4
+        version: 0.45.4(@types/pg@8.23.1)(kysely@0.29.7)(pg@8.23.1)
       eslint:
         specifier: 10.13.0
         version: 10.13.0(jiti@2.7.0)

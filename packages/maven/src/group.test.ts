@@ -96,6 +96,11 @@ describe("maven group repositories", () => {
     expect((await get("org/ex/none/1/none-1.jar")).status).toBe(404);
   });
 
+  it("metadata missing everywhere while a member failed answers 502, never a cacheable 404", async () => {
+    upstream.down = true;
+    expect((await get("org/ex/ghost/maven-metadata.xml")).status).toBe(502);
+  });
+
   it("metadata in no member answers 404", async () => {
     expect((await get("org/ex/ghost/maven-metadata.xml")).status).toBe(404);
   });

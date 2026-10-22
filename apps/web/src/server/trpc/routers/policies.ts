@@ -68,11 +68,12 @@ function requireQueue(ctx: TrpcContext) {
 export const policiesRouter = router({
   list: adminProcedure.input(z.object({ repository: repositoryName })).query(async ({ ctx, input }): Promise<CleanupPolicy[]> => {
     const repo = await requireRepository(ctx.db, input.repository, PROTO_ONLY);
-    return ctx.db
+    // The row type also lists the npm/docker kinds; the API stays proto-only until those formats get policies.
+    return (await ctx.db
       .select(policyColumns)
       .from(cleanupPolicy)
       .where(eq(cleanupPolicy.repositoryId, repo.id))
-      .orderBy(asc(cleanupPolicy.createdAt), asc(cleanupPolicy.id));
+      .orderBy(asc(cleanupPolicy.createdAt), asc(cleanupPolicy.id))) as CleanupPolicy[];
   }),
 
   /** Creates a policy, or updates the one with `id`; `NOT_FOUND` when `id` is not a policy of the repository. */
@@ -100,7 +101,7 @@ export const policiesRouter = router({
               .insert(cleanupPolicy)
               .values({ ...fields, kind, value, repositoryId: repo.id })
               .returning(policyColumns)
-          )[0]!;
+          )[0]! as CleanupPolicy;
         }
         const matches = and(eq(cleanupPolicy.id, id), eq(cleanupPolicy.repositoryId, repo.id));
         const [updated] =
@@ -108,7 +109,7 @@ export const policiesRouter = router({
             ? await tx.select(policyColumns).from(cleanupPolicy).where(matches)
             : await tx.update(cleanupPolicy).set(fields).where(matches).returning(policyColumns);
         if (!updated) throw notFound(`Cleanup policy ${id} was not found in ${repoName}`);
-        return updated;
+        return updated as CleanupPolicy;
       },
     );
   }),
