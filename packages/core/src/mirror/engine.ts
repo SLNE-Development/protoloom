@@ -72,6 +72,12 @@ export interface MirrorEngine {
   fetch(req: MirrorFetch): Promise<MirrorResponse | null>;
   /** Resolves once every cache write started so far has finished or failed. */
   drain(): Promise<void>;
+  /**
+   * Removes what the mirror cached under `cacheKey` (a fetch's `cacheKey`, else its `path`): waits
+   * for any cache write still running for that key, then deletes the asset row and its object.
+   * Used when a cached body turned out to be unusable; nothing cached is not an error.
+   */
+  evict(repo: Repo, cacheKey: string): Promise<void>;
 }
 
 /** What the mirror engine works with. */
@@ -223,6 +229,9 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
   const timeoutMs = deps.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS;
   const idleTimeoutMs = deps.cacheIdleTimeoutMs ?? CACHE_IDLE_TIMEOUT_MS;
   const pending = new Set<Promise<unknown>>();
+  /** The cache writes still running, by repository id and cache key. */
+  const pendingByKey = new Map<string, Set<Promise<unknown>>>();
+  const keyOf = (repoId: string, cacheKey: string) => `${repoId}\u0000${cacheKey}`;
 
   /** The store cached objects go to: the mirror's, else the server default, else the primary when that one is not configured. */
   async function cacheStore(config: MirrorConfig): Promise<StoreId> {
@@ -333,7 +342,8 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
     // The store's pipeline sees the error too; this only keeps one that lands before it attaches from going uncaught.
     body.on("error", () => undefined);
     armIdle();
-    const write = deps.assets
+    const key = keyOf(req.repo.id, req.cacheKey ?? req.path);
+    const write: Promise<unknown> = deps.assets
       .put({
         repo: req.repo,
         path: req.cacheKey ?? req.path,
@@ -354,8 +364,14 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
       .finally(() => {
         clearTimeout(idle);
         pending.delete(write);
+        const forKey = pendingByKey.get(key);
+        forKey?.delete(write);
+        if (forKey?.size === 0) pendingByKey.delete(key);
       });
     pending.add(write);
+    let forKey = pendingByKey.get(key);
+    if (!forKey) pendingByKey.set(key, (forKey = new Set()));
+    forKey.add(write);
     return {
       status: response.status,
       headers: forwardableHeaders(response.headers, decoded ? "decoded" : "plain"),
@@ -411,6 +427,15 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
 
     async drain() {
       while (pending.size > 0) await Promise.allSettled([...pending]);
+    },
+
+    async evict(repo, cacheKey) {
+      const key = keyOf(repo.id, cacheKey);
+      for (let writes = pendingByKey.get(key); writes && writes.size > 0; writes = pendingByKey.get(key)) {
+        await Promise.allSettled([...writes]);
+      }
+      const existing = await deps.assets.find(repo.id, cacheKey);
+      if (existing) await deps.assets.delete(existing);
     },
   };
 }

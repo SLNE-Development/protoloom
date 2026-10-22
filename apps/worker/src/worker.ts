@@ -1,30 +1,47 @@
 import { UnrecoverableError, Worker, type ConnectionOptions } from "bullmq";
 import {
-  applyCleanup,
   createAssetService,
+  createRepoService,
   dockerStorageBytes,
   evictCaches,
   RegistryError,
   rollupUsage,
   runAllCleanups,
+  runRepoCleanup,
   toRepo,
+  type CleanupDeps,
   type StoreSet,
 } from "@weaver/core";
 import { repository, type Db } from "@weaver/db";
+import { sweepLoginSessions } from "@weaver/npm";
 import {
   createQueue,
   MAINTENANCE_QUEUE,
   scheduleDailyCleanup,
   scheduleHourlyEviction,
   scheduleHourlyStatsRollup,
+  scheduleNpmLoginSweep,
   type MaintenanceJobData,
 } from "@weaver/jobs";
+import { cleanupRegistry } from "./cleanups.js";
 
-/** What the worker needs: the database, the object stores and the Valkey connection. */
+/** What the worker needs: the database, the object stores, the upstream-credential key and the Valkey connection. */
 export interface WorkerDeps {
   db: Db;
   stores: StoreSet;
+  /** AES key for upstream credentials, derived from `BETTER_AUTH_SECRET`. */
+  secretKey: Buffer;
   connection: ConnectionOptions;
+}
+
+/** The services a cleanup run works with, built from the worker dependencies. */
+function cleanupDeps(deps: WorkerDeps): CleanupDeps {
+  return {
+    db: deps.db,
+    stores: deps.stores,
+    assets: createAssetService({ db: deps.db, stores: deps.stores }),
+    repos: createRepoService({ db: deps.db, stores: deps.stores, secretKey: deps.secretKey }),
+  };
 }
 
 /** A started worker; `close` waits for the running job, then disconnects. */
@@ -41,10 +58,11 @@ export async function processMaintenanceJob(deps: WorkerDeps, data: MaintenanceJ
   const now = new Date();
   switch (data.kind) {
     case "cleanup:all":
-      return { deleted: await runAllCleanups(deps.db, deps.stores, now) };
+      return { deleted: await runAllCleanups(cleanupDeps(deps), cleanupRegistry(), now) };
     case "cleanup:repo":
       try {
-        return { deleted: (await applyCleanup(deps.db, deps.stores, data.repository, now)).length };
+        const deleted = await runRepoCleanup(cleanupDeps(deps), cleanupRegistry(), data.repository, now, { dryRun: false });
+        return { deleted: deleted.length };
       } catch (error) {
         if (error instanceof RegistryError && error.code === "not_found") throw new UnrecoverableError(error.message);
         throw error;
@@ -55,6 +73,8 @@ export async function processMaintenanceJob(deps: WorkerDeps, data: MaintenanceJ
       // The docker format registers its garbage collection later; until then the job does nothing.
       console.log("weaver: docker:gc is not implemented yet; skipping");
       return { skipped: true };
+    case "npm:login-sweep":
+      return sweepLoginSessions(deps.db, now);
     case "stats:rollup":
       return rollupUsage(
         {
@@ -70,7 +90,7 @@ export async function processMaintenanceJob(deps: WorkerDeps, data: MaintenanceJ
 }
 
 /**
- * Upserts the `cleanup-daily`, `evict-hourly` and `stats-hourly` schedulers (idempotent) and starts a worker that
+ * Upserts the `cleanup-daily`, `evict-hourly`, `npm-login-sweep` and `stats-hourly` schedulers (idempotent) and starts a worker that
  * processes maintenance jobs one at a time.
  */
 export async function startWorker(deps: WorkerDeps): Promise<RunningWorker> {
@@ -78,6 +98,7 @@ export async function startWorker(deps: WorkerDeps): Promise<RunningWorker> {
   try {
     await scheduleDailyCleanup(queue);
     await scheduleHourlyEviction(queue);
+    await scheduleNpmLoginSweep(queue);
     await scheduleHourlyStatsRollup(queue);
   } finally {
     await queue.close();

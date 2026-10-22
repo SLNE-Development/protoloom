@@ -10,6 +10,9 @@ vi.mock("./context", () => ({
     db: {},
     stores: { primary: { id: "local" }, configured: () => ["local"] },
     repos: { get: async () => null },
+    registry: { hosted: {} },
+    // No session: every request without a token is anonymous.
+    auth: { api: { getSession: async () => null } },
     assets: {},
     mirror: {},
     secretKey: Buffer.alloc(32, 1),
@@ -28,6 +31,30 @@ describe("mountRest", () => {
   });
   it("keeps a trailing slash", () => {
     expect(mountRest(req("/maven/r/a/"), "maven")).toBe("r/a/");
+  });
+  it('rest for /api/v1/repos/r/artifacts/g/n is "repos/r/artifacts/g/n"', () => {
+    expect(mountRest(req("/api/v1/repos/r/artifacts/g/n"), "proto")).toBe("repos/r/artifacts/g/n");
+    expect(mountRest(req("/api/v1/repos/r/artifacts/a%2Fb/n"), "proto")).toBe("repos/r/artifacts/a%2Fb/n");
+  });
+});
+
+describe("proto mount", () => {
+  it("getFormatHandler(\"proto\") answers /api/v1/resolve", async () => {
+    const res = await getFormatHandler("proto")(
+      new Request("http://localhost:3000/api/v1/resolve", {
+        method: "POST",
+        body: JSON.stringify({ repositories: ["missing"], dependencies: [] }),
+      }),
+      "resolve",
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ artifacts: [], conflicts: [] });
+  });
+
+  it("answers an unknown repository with 404 not_found", async () => {
+    const res = await getFormatHandler("proto")(req("/api/v1/repos/missing/artifacts/acme/money"), "repos/missing/artifacts/acme/money");
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("not_found");
   });
 });
 

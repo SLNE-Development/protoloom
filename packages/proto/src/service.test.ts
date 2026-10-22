@@ -28,7 +28,7 @@ import { protoArtifact, protoBuild, protoVersion, user } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
 import { createMirrorSource } from "./mirror-source.js";
 import { createProtoService, type ProtoService } from "./service.js";
-import { protoReadApi } from "./testing/api.js";
+import { createProtoHandler } from "./handler.js";
 import { serveFormatHandler, type HandlerUpstream } from "./testing/upstream.js";
 
 const admin: Principal = { kind: "user", userId: "proto-admin", role: "admin" };
@@ -131,15 +131,31 @@ describe("proto service", () => {
     }
     blobDir = await mkdtemp(join(tmpdir(), "weaver-proto-service-"));
     const stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir });
-    repos = createRepoService({ db: testDb.db, stores, secretKey: deriveSecretKey("proto-service-test") });
+    const secretKey = deriveSecretKey("proto-service-test");
+    repos = createRepoService({ db: testDb.db, stores, secretKey });
     registry = createRegistry({ db: testDb.db, stores, repos, validate: () => Promise.resolve([]) });
     const settings = (): Promise<ServerSettings> => Promise.resolve({ anonymousView: false, defaultCacheStore: "local" });
-    engine = createMirrorEngine({ db: testDb.db, stores, repos, assets: createAssetService({ db: testDb.db, stores }), settings });
+    const assets = createAssetService({ db: testDb.db, stores });
+    engine = createMirrorEngine({ db: testDb.db, stores, repos, assets, settings });
     const mirrorSource = createMirrorSource({ mirror: engine });
     service = createProtoService({ registry, repos, mirrorSource, usage });
-    // The remote Weaver instance: a second service over the same database, serving hosted repo `remote`.
-    const remoteService = createProtoService({ registry, repos, mirrorSource, usage: () => Promise.resolve() });
-    up = await serveFormatHandler(protoReadApi(remoteService, admin));
+    // The remote Weaver instance: the real /api/v1 handler over the same database, serving hosted
+    // repo `remote` to the mirrors as admin.
+    up = await serveFormatHandler(
+      createProtoHandler({
+        db: testDb.db,
+        stores,
+        repos,
+        assets,
+        mirror: engine,
+        principal: () => Promise.resolve(admin),
+        settings,
+        publicUrl: "http://remote.test",
+        secretKey,
+        usage: () => Promise.resolve(),
+        registry,
+      }),
+    );
     downPort = await closedPort();
   });
 
@@ -279,6 +295,24 @@ describe("proto service", () => {
     await group("down-then-empty", ["up-mirror-down", "snap"]);
     expect((await registryError(service.getManifest(reader, "down-then-empty", money, {}, 0))).code).toBe("upstream_unavailable");
     expect((await service.resolve(reader, ["down-only", "rel"], [money], {}, 0)).nodes[0]?.repository).toBe("rel");
+  });
+
+  it("a superseded version only behind a down mirror does not fail the resolution", async () => {
+    // order -> money:1.0.0 and invoice; invoice -> money:1.1.0, so money:1.0.0 is looked up, then superseded.
+    await publish(rel, money);
+    await publish(rel, coord("money", "1.1.0"));
+    await publish(rel, coord("invoice", "1.0.0"), ["acme:money:1.1.0"]);
+    await publish(rel, coord("order", "1.0.0"), ["acme:money:1.0.0", "acme:invoice:1.0.0"]);
+    await registry.deleteVersion(admin, "rel", money, { force: true });
+    await mirror("up-mirror-down", { down: true });
+
+    const { nodes } = await service.resolve(reader, ["up-mirror-down", "rel"], [coord("order", "1.0.0")], {}, 0);
+    expect(nodes.map((n) => `${n.coordinate.name}:${n.coordinate.version}`)).toEqual(["invoice:1.0.0", "money:1.1.0", "order:1.0.0"]);
+
+    // A coordinate that stays live and only the down mirror could have had is upstream_unavailable, not not_found.
+    const error = await registryError(service.resolve(reader, ["up-mirror-down", "rel"], [coord("absent", "1.0.0")], {}, 0));
+    expect(error.code).toBe("upstream_unavailable");
+    expect((await registryError(service.resolve(reader, ["rel"], [coord("absent", "1.0.0")], {}, 0))).code).toBe("not_found");
   });
 
   describe("pinned mirror snapshot build gone upstream", () => {
