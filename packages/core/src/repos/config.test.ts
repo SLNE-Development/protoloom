@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RegistryError } from "../errors.js";
-import { defaultRepositoryConfig, parseRepositoryConfig, type Format, type Kind } from "./config.js";
+import { defaultRepositoryConfig, parseRepositoryConfig, salvageRepositoryConfig, type Format, type Kind } from "./config.js";
 
 const formats: Format[] = ["maven", "npm", "docker", "proto"];
 
@@ -66,6 +66,21 @@ describe("repository config", () => {
     expect(codeOf(() => parseRepositoryConfig("npm", "group", { offline: true }))).toBe("invalid_request");
     expect(codeOf(() => parseRepositoryConfig("npm", "hosted", { redeploy: true }))).toBe("invalid_request");
     expect(codeOf(() => parseRepositoryConfig("proto", "hosted", "nope"))).toBe("invalid_request");
+  });
+
+  it("salvages stale stored configs: drops unknown keys and replaces invalid values with defaults", () => {
+    expect(salvageRepositoryConfig("proto", "hosted", { allowRedeploy: true, resolutionPriority: 5 })).toEqual({
+      config: { allowRedeploy: true, allowReleases: true, allowSnapshots: true, resolutionPriority: 5 },
+      repaired: false,
+    });
+    expect(salvageRepositoryConfig("proto", "hosted", { allowRedeploy: true, resolutionPriority: -3, legacy: 1 })).toEqual({
+      config: { allowRedeploy: true, allowReleases: true, allowSnapshots: true, resolutionPriority: 100 },
+      repaired: true,
+    });
+    expect(salvageRepositoryConfig("npm", "mirror", "garbage").config).toEqual(expected.npm.mirror);
+    expect(
+      salvageRepositoryConfig("docker", "mirror", { dockerHub: true, rules: { allow: ["x*"], deny: [""] }, cache: 7 }).config,
+    ).toEqual({ ...mirrorDefaults, dockerHub: true, rules: { allow: ["x*"], deny: [] } });
   });
 
   it("dockerHub only accepted for docker mirrors", () => {

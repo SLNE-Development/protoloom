@@ -12,6 +12,7 @@ export {
   type PutResult,
   type StoreId,
   type StoreSet,
+  STORE_IDS,
 } from "./object-store.js";
 export { createLocalStore } from "./local.js";
 export { createS3Store, type S3StoreOptions } from "./s3.js";

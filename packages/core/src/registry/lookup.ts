@@ -4,7 +4,7 @@ import type { ProtoFile } from "../archive.js";
 import { formatCoordinate, type Coordinate } from "../coordinates.js";
 import { RegistryError } from "../errors.js";
 import { canAccess, type Principal } from "../permissions.js";
-import { parseRepositoryConfig, type ProtoHostedConfig } from "../repos/config.js";
+import { readRepositoryConfig, type ProtoHostedConfig } from "../repos/config.js";
 import type { Lookup, ResolvedNode } from "../resolution.js";
 import type { StoreId, StoreSet } from "../storage/index.js";
 import type { validateProtos } from "../validation.js";
@@ -39,12 +39,13 @@ export function hostedProtoConfig(repo: Pick<RepositoryRow, "name" | "kind" | "c
   if (repo.kind !== "hosted") {
     throw new RegistryError("invalid_request", `Repository ${repo.name} is a ${repo.kind}; publish to a hosted repository`);
   }
-  return parseRepositoryConfig("proto", "hosted", repo.config);
+  return readRepositoryConfig({ name: repo.name, format: "proto", kind: "hosted", config: repo.config });
 }
 
 /** The `resolutionPriority` of a proto repository; mirrors and groups have none and rank at the default 100. */
 function resolutionPriority(repo: RepositoryRow): number {
-  return repo.kind === "hosted" ? parseRepositoryConfig("proto", "hosted", repo.config).resolutionPriority : 100;
+  if (repo.kind !== "hosted") return 100;
+  return readRepositoryConfig({ name: repo.name, format: "proto", kind: "hosted", config: repo.config }).resolutionPriority;
 }
 
 /**

@@ -1,7 +1,10 @@
 import type { Readable } from "node:stream";
 
+/** Every storage backend id, in the order `local`, `s3`. */
+export const STORE_IDS = ["local", "s3"] as const;
+
 /** Identifies a configured storage backend. */
-export type StoreId = "local" | "s3";
+export type StoreId = (typeof STORE_IDS)[number];
 
 /** Lowercase-hex digests of an object's bytes. */
 export interface ObjectDigests {
