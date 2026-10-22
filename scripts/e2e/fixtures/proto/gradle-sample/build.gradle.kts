@@ -5,11 +5,11 @@ plugins {
 group = "dev.smoke"
 version = "1.0.0"
 
-// WEAVER_URL and WEAVER_TOKEN come from the environment.
+// WEAVER_URL and WEAVER_TOKEN come from the environment; -PpublishRepository=<name> publishes elsewhere.
 weaver {
-    repositories("releases")
+    repositories("proto-hosted")
     publishing {
-        repository.set("releases")
+        repository.set(providers.gradleProperty("publishRepository").orElse("proto-hosted"))
         group.set("dev.smoke")
         name.set("sample")
     }
