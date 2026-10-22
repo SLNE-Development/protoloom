@@ -51,7 +51,7 @@ export async function createTrpcContext(
     stores: deps.stores,
     auth: deps.auth,
     principal,
-    settings: await getSettings(deps.db, { primaryStore: deps.stores.primary.id }),
+    settings: await getSettings(deps.db, { primaryStore: deps.stores.primary.id, configuredStores: deps.stores.configured() }),
     publicUrl: env.BETTER_AUTH_URL,
     cleanupQueue: getCleanupQueue,
   };

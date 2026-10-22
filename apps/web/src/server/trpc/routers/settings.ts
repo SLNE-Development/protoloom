@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { updateSettings, type ServerSettings, type StoreId } from "@weaver/core";
+import { STORE_IDS, updateSettings, type ServerSettings, type StoreId } from "@weaver/core";
 import { adminProcedure, publicProcedure, router } from "../init";
 
 /** Server-wide settings. */
@@ -9,7 +9,7 @@ export const settingsRouter = router({
 
   /** Changes settings (admin), audited as `settings.update`; returns the resulting settings. */
   update: adminProcedure
-    .input(z.object({ anonymousView: z.boolean().optional(), defaultCacheStore: z.enum(["local", "s3"]).optional() }))
+    .input(z.object({ anonymousView: z.boolean().optional(), defaultCacheStore: z.enum(STORE_IDS).optional() }))
     .mutation(
       async ({ ctx, input }): Promise<ServerSettings> =>
         updateSettings(ctx.db, input, ctx.principal, {

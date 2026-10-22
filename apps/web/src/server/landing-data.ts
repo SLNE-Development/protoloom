@@ -21,7 +21,7 @@ export async function loadLandingData(requestHeaders: Headers): Promise<LandingD
       console.error("landing: could not read the session", error);
       return null;
     }),
-    getSettings(db, { primaryStore: stores.primary.id }).catch((error: unknown) => {
+    getSettings(db, { primaryStore: stores.primary.id, configuredStores: stores.configured() }).catch((error: unknown) => {
       console.error("landing: could not read settings", error);
       return { anonymousView: false };
     }),

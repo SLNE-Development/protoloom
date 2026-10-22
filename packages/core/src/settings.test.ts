@@ -6,7 +6,7 @@ import type { Principal } from "./permissions.js";
 import type { StoreId } from "./storage/index.js";
 import { getSettings, updateSettings } from "./settings.js";
 
-const LOCAL = { primaryStore: "local" as StoreId };
+const LOCAL = { primaryStore: "local" as StoreId, configuredStores: ["local"] as StoreId[] };
 const ONLY_LOCAL = { configuredStores: ["local"] as StoreId[], primaryStore: "local" as StoreId };
 const BOTH = { configuredStores: ["local", "s3"] as StoreId[], primaryStore: "local" as StoreId };
 
@@ -62,7 +62,7 @@ describe("settings", () => {
   });
 
   it("defaults the cache store to the primary store", async () => {
-    expect((await getSettings(testDb.db, { primaryStore: "s3" })).defaultCacheStore).toBe("s3");
+    expect((await getSettings(testDb.db, { primaryStore: "s3", configuredStores: ["s3"] })).defaultCacheStore).toBe("s3");
     expect((await getSettings(testDb.db, LOCAL)).defaultCacheStore).toBe("local");
   });
 
@@ -78,9 +78,15 @@ describe("settings", () => {
       anonymousView: false,
       defaultCacheStore: "s3",
     });
-    expect((await getSettings(testDb.db, LOCAL)).defaultCacheStore).toBe("s3");
+    expect((await getSettings(testDb.db, BOTH)).defaultCacheStore).toBe("s3");
     const [audit] = await testDb.db.select({ details: auditEvent.details }).from(auditEvent);
     expect(audit?.details).toEqual({ defaultCacheStore: "s3" });
+  });
+
+  it("falls back to the primary store when the stored store is no longer configured", async () => {
+    await updateSettings(testDb.db, { defaultCacheStore: "s3" }, admin, BOTH);
+    expect((await getSettings(testDb.db, LOCAL)).defaultCacheStore).toBe("local");
+    expect((await getSettings(testDb.db, BOTH)).defaultCacheStore).toBe("s3");
   });
 
   it("falls back to the primary store when the stored value is not a store id", async () => {

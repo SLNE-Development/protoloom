@@ -36,7 +36,7 @@ export async function resolveAppSession(
 ): Promise<AppSession> {
   const [session, settings] = await Promise.all([
     deps.auth.api.getSession({ headers: requestHeaders }),
-    getSettings(deps.db, { primaryStore: deps.stores.primary.id }),
+    getSettings(deps.db, { primaryStore: deps.stores.primary.id, configuredStores: deps.stores.configured() }),
   ]);
   const role = session ? await loadActiveRole(deps.db, session.user.id) : null;
   if (!session || !role) return { principal: { kind: "anonymous" }, user: null, settings };

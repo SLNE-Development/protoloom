@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 async function browsePages(): Promise<BrowsePage[]> {
   try {
     const { db, stores } = getServerContext();
-    const settings = await getSettings(db, { primaryStore: stores.primary.id });
+    const settings = await getSettings(db, { primaryStore: stores.primary.id, configuredStores: stores.configured() });
     return settings.anonymousView ? await listPublicBrowsePages(db) : [];
   } catch (error) {
     console.error("sitemap: could not list browse pages", error);
