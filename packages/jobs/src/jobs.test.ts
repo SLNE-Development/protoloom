@@ -69,6 +69,18 @@ describe("jobs", () => {
     expect(await getJobState(queue, "missing")).toEqual({ state: "unknown", result: null, failedReason: null });
   });
 
+  it("reads a finished job's result after its state, never from an earlier snapshot", async () => {
+    let finished = false;
+    const fake = {
+      getJobState: async () => {
+        finished = true;
+        return "completed";
+      },
+      getJob: async () => ({ returnvalue: finished ? { deleted: 2 } : undefined, failedReason: undefined }),
+    } as unknown as CleanupQueue;
+    expect(await getJobState(fake, "j")).toEqual({ state: "completed", result: { deleted: 2 }, failedReason: null });
+  });
+
   it("registers the daily scheduler once, however often it is upserted", async () => {
     await scheduleDailyCleanup(queue);
     await scheduleDailyCleanup(queue);

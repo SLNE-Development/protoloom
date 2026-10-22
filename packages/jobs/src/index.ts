@@ -201,9 +201,13 @@ export async function getJobState(
   options: ProducerOptions = {},
 ): Promise<CleanupJobStatus> {
   const lookup = async (): Promise<CleanupJobStatus> => {
+    // Read the state first and the job hash after it: a job moves to completed/failed and writes its
+    // returnvalue/failedReason in one atomic step, so a hash read after seeing a finished state is
+    // complete. Reading the hash first can return a snapshot of the still-active job.
+    const state = await queue.getJobState(jobId);
+    if (state === "unknown") return { state, result: null, failedReason: null };
     const job = await queue.getJob(jobId);
     if (!job) return { state: "unknown", result: null, failedReason: null };
-    const state = await job.getState();
     return {
       state,
       result: state === "completed" ? ((job.returnvalue as CleanupJobResult | undefined) ?? null) : null,

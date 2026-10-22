@@ -50,12 +50,14 @@ describe("worker", () => {
 
   async function waitForFinish(jobId: string): Promise<CleanupJobStatus> {
     // Generous budget: under heavy parallel load (several containers starting) a job can take long to be picked up.
+    let last: CleanupJobStatus | undefined;
     for (let i = 0; i < 1000; i++) {
-      const status = await getJobState(queue, jobId);
-      if (status.state === "completed" || status.state === "failed") return status;
+      last = await getJobState(queue, jobId);
+      if (last.state === "completed" || last.state === "failed") return last;
       await new Promise((r) => setTimeout(r, 50));
     }
-    throw new Error(`job ${jobId} did not finish`);
+    const counts = await queue.getJobCounts();
+    throw new Error(`job ${jobId} did not finish: last state ${JSON.stringify(last)}, queue counts ${JSON.stringify(counts)}`);
   }
 
   beforeAll(async () => {
