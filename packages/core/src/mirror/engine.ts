@@ -1,6 +1,7 @@
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
-import type { Db } from "@weaver/db";
+import { and, eq } from "drizzle-orm";
+import { asset, type Db } from "@weaver/db";
 import type { AssetRow, AssetService, ComponentRef } from "../content/assets.js";
 import { RegistryError } from "../errors.js";
 import type { MirrorConfig } from "../repos/config.js";
@@ -74,8 +75,10 @@ export interface MirrorEngine {
   drain(): Promise<void>;
   /**
    * Removes what the mirror cached under `cacheKey` (a fetch's `cacheKey`, else its `path`): waits
-   * for any cache write still running for that key, then deletes the asset row and its object.
-   * Used when a cached body turned out to be unusable; nothing cached is not an error.
+   * for any cache write still running for that key, then deletes the asset row it found, but only
+   * while the row still points at the same object, and then that object. A write that replaced the
+   * row meanwhile is kept, together with its object. Used when a cached body turned out to be
+   * unusable; nothing cached is not an error.
    */
   evict(repo: Repo, cacheKey: string): Promise<void>;
 }
@@ -237,6 +240,20 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
   async function cacheStore(config: MirrorConfig): Promise<StoreId> {
     const wanted = config.cache.store ?? (await deps.settings()).defaultCacheStore;
     return deps.stores.get(wanted) ? wanted : deps.stores.primary.id;
+  }
+
+  /** Deletes the object of a removed asset row; failures and unconfigured stores only leave an orphan and are logged. */
+  async function deleteObject(store: StoreId, key: string): Promise<void> {
+    const target = deps.stores.get(store);
+    if (!target) {
+      console.warn(`weaver: cannot delete evicted object ${key}: store ${store} is not configured`);
+      return;
+    }
+    try {
+      await target.delete(key);
+    } catch (error) {
+      console.warn(`weaver: failed to delete evicted object ${key}`, error);
+    }
   }
 
   /** Serves a cached asset and marks it accessed; null when its object is gone. */
@@ -435,7 +452,14 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
         await Promise.allSettled([...writes]);
       }
       const existing = await deps.assets.find(repo.id, cacheKey);
-      if (existing) await deps.assets.delete(existing);
+      if (!existing) return;
+      // Conditional, so a concurrent good write that replaced the row (same id, new object) is neither lost nor orphaned.
+      const removed = await deps.db
+        .delete(asset)
+        .where(and(eq(asset.id, existing.id), eq(asset.storageKey, existing.storageKey)))
+        .returning({ id: asset.id });
+      if (removed.length === 0) return;
+      await deleteObject(existing.store, existing.storageKey);
     },
   };
 }
