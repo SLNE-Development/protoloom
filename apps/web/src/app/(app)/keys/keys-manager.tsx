@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRoundIcon, PlusIcon } from "lucide-react";
@@ -134,7 +135,7 @@ export function KeysManager({ role, openCreate }: { role: Role; openCreate: bool
                 <TableHead>Permissions</TableHead>
                 <TableHead>Expires</TableHead>
                 <TableHead>Last used</TableHead>
-                <TableHead className="w-20" />
+                <TableHead className="w-36" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -168,7 +169,10 @@ export function KeysManager({ role, openCreate }: { role: Role; openCreate: bool
                       <span className="text-muted-foreground">never</span>
                     )}
                   </TableCell>
-                  <TableCell className="pr-3 text-right">
+                  <TableCell className="pr-3 text-right whitespace-nowrap">
+                    <Button asChild variant="ghost" size="sm">
+                      <Link href={`/keys/${encodeURIComponent(key.id)}/activity`}>Activity</Link>
+                    </Button>
                     <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setRevoking(key)}>
                       Revoke
                     </Button>
