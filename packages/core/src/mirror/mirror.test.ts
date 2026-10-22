@@ -375,6 +375,148 @@ describe("mirror engine", () => {
     const hosted = await repos.create(admin, { name: "hosted", format: "maven", kind: "hosted" });
     await expect(engine.fetch({ repo: hosted, path: "x", subject: "x", class: "immutable" })).rejects.toMatchObject({ code: "invalid_request" });
   });
+
+  it("passes a body fetch cannot decode through with its encoding and never caches it", async () => {
+    const raw = Buffer.from([0x1f, 0x9d, 0x90, 0x41, 0x42, 0x43]);
+    up.handler = (_req, res) => {
+      res.writeHead(200, { "content-encoding": "compress", "content-length": raw.length, "content-type": "application/octet-stream" });
+      res.end(raw);
+    };
+    const repo = await mirror(cached);
+    const res = await engine.fetch({ repo, path: "z.bin", subject: "z.bin", class: "immutable" });
+    expect(res).toMatchObject({ status: 200, cache: "bypass", asset: null });
+    expect(res!.headers.get("content-encoding")).toBe("compress");
+    expect(res!.headers.get("content-length")).toBe(String(raw.length));
+    expect(Buffer.from(await new Response(res!.body).arrayBuffer())).toEqual(raw);
+    await engine.drain();
+    expect(await assetRows()).toHaveLength(0);
+  });
+
+  it("caches a gzip body decoded and drops its encoding headers", async () => {
+    const { gzipSync } = await import("node:zlib");
+    const zipped = gzipSync("decoded-content");
+    up.handler = (_req, res) => res.writeHead(200, { "content-encoding": "gzip", "content-length": zipped.length }).end(zipped);
+    const repo = await mirror(cached);
+    const res = await engine.fetch({ repo, path: "g.txt", subject: "g.txt", class: "immutable" });
+    expect(res!.cache).toBe("miss");
+    expect(res!.headers.get("content-encoding")).toBeNull();
+    expect(res!.headers.get("content-length")).toBeNull();
+    expect(await readText(res!)).toBe("decoded-content");
+    await engine.drain();
+    expect((await assetRows())[0]!.size).toBe("decoded-content".length);
+  });
+
+  /** An upstream that sends the start of a large body and then holds the connection; `closed` turns true when it goes away. */
+  function stallingUpstream(): { closed: () => boolean } {
+    let closed = false;
+    up.handler = (_req, res) => {
+      res.on("close", () => (closed = true));
+      res.writeHead(200, { "content-length": 10_000_000 });
+      res.write(Buffer.alloc(300_000, 7));
+    };
+    return { closed: () => closed };
+  }
+
+  it("a client that cancels at once leaves no asset, cancels the upstream, and drain resolves", async () => {
+    const upstream = stallingUpstream();
+    const repo = await mirror(cached);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const res = await engine.fetch({ repo, path: "cancelled.bin", subject: "cancelled.bin", class: "immutable" });
+    await res!.body!.cancel(new Error("client went away"));
+    await engine.drain();
+    expect(await assetRows()).toHaveLength(0);
+    expect(await filesIn(blobDir)).toEqual([]);
+    await vi.waitFor(() => expect(upstream.closed()).toBe(true));
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("an abandoned body fails the cache write after the idle timeout and cancels the upstream", async () => {
+    const upstream = stallingUpstream();
+    engine = createMirrorEngine({ db: testDb.db, stores, repos, assets, settings, cacheIdleTimeoutMs: 200 });
+    const repo = await mirror(cached);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const res = await engine.fetch({ repo, path: "abandoned.bin", subject: "abandoned.bin", class: "immutable" });
+    expect(res!.body).not.toBeNull(); // never read, never cancelled
+    await engine.drain();
+    expect(await assetRows()).toHaveLength(0);
+    expect(await filesIn(blobDir)).toEqual([]);
+    await vi.waitFor(() => expect(upstream.closed()).toBe(true));
+    expect(warn).toHaveBeenCalled();
+    await expect(readText(res!)).rejects.toThrow();
+  });
+
+  it("a cache write that fails before reading the body does not stall the client", async () => {
+    const body = "y".repeat(500_000);
+    up.handler = serve({ "f.bin": body });
+    const failing: AssetService = { ...assets, put: () => Promise.reject(new Error("store down")) };
+    engine = createMirrorEngine({ db: testDb.db, stores, repos, assets: failing, settings, cacheIdleTimeoutMs: 60_000 });
+    const repo = await mirror(cached);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const res = await engine.fetch({ repo, path: "f.bin", subject: "f.bin", class: "immutable" });
+    expect(await readText(res!)).toBe(body);
+    await engine.drain();
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("treats 429 like a server error: tries the next upstream, else serves stale", async () => {
+    up.handler = (_req, res) => res.writeHead(429, { "retry-after": "1" }).end("slow down");
+    up2.handler = serve({ "x.jar": "from-second" });
+    const repo = await mirror(cached, [
+      { url: up.base, authType: "none" },
+      { url: up2.base, authType: "none" },
+    ]);
+    const res = await engine.fetch({ repo, path: "x.jar", subject: "x.jar", class: "immutable" });
+    expect(res!.upstreamUrl).toBe(`${up2.base}/x.jar`);
+    expect(await readText(res!)).toBe("from-second");
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    up.handler = (_req, res) => res.writeHead(200).end("meta");
+    const single = await repos.update(admin, "central", { upstreams: [{ url: up.base, authType: "none" }], config: { cache: { metadataTtlSeconds: 60 } } });
+    const req = { repo: single, path: "m.xml", subject: "m.xml", class: "metadata" as const };
+    await readText((await engine.fetch(req))!);
+    await engine.drain();
+    vi.setSystemTime(new Date("2026-01-01T01:00:00Z"));
+    up.handler = (_req, res) => res.writeHead(429).end();
+    const stale = await engine.fetch(req);
+    expect(stale!.cache).toBe("stale");
+    expect(await readText(stale!)).toBe("meta");
+  });
+
+  it("reports the post-redirect URL as upstreamUrl", async () => {
+    up.handler = (req, res) => {
+      if (req.url === "/repo/old.jar") return void res.writeHead(302, { location: "/repo/new.jar" }).end();
+      serve({ "new.jar": "moved" })(req, res);
+    };
+    const repo = await mirror();
+    const res = await engine.fetch({ repo, path: "old.jar", subject: "old.jar", class: "immutable" });
+    expect(res!.upstreamUrl).toBe(`${up.base}/new.jar`);
+    expect(await readText(res!)).toBe("moved");
+  });
+
+  it("strips client credentials and encoding from requests and connection-named headers from responses", async () => {
+    let seen: IncomingMessage["headers"] = {};
+    up.handler = (req, res) => {
+      seen = req.headers;
+      res.writeHead(200, { connection: "keep-alive, x-hop", "x-hop": "1", "x-kept": "2" }).end("ok");
+    };
+    const repo = await mirror();
+    const res = await engine.fetch({
+      repo,
+      path: "h",
+      subject: "h",
+      class: "immutable",
+      headers: { accept: "text/plain", cookie: "s=1", "proxy-authorization": "Basic eA==", authorization: "Bearer client", "accept-encoding": "x-custom" },
+    });
+    expect(await readText(res!)).toBe("ok");
+    expect(seen.accept).toBe("text/plain");
+    expect(seen.cookie).toBeUndefined();
+    expect(seen["proxy-authorization"]).toBeUndefined();
+    expect(seen.authorization).toBeUndefined();
+    expect(seen["accept-encoding"]).not.toBe("x-custom");
+    expect(res!.headers.get("x-hop")).toBeNull();
+    expect(res!.headers.get("x-kept")).toBe("2");
+  });
 });
 
 describe("teeWithBackpressure", () => {
@@ -413,6 +555,36 @@ describe("teeWithBackpressure", () => {
     const [a, b] = teeWithBackpressure(stream);
     await b.cancel();
     expect(await all(a)).toHaveLength(10);
+  });
+
+  it("cancels the source with the reason when both branches cancel during an in-flight read", async () => {
+    let deliver: (() => void) | null = null;
+    let cancelled: unknown = "not cancelled";
+    const source = new ReadableStream<number>(
+      {
+        pull(controller) {
+          return new Promise<void>((resolve) => {
+            deliver = () => {
+              controller.enqueue(1);
+              resolve();
+            };
+          });
+        },
+        cancel(reason) {
+          cancelled = reason;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const [a, b] = teeWithBackpressure(source);
+    // Let both branches pull, so a read is in flight.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(deliver).not.toBeNull();
+    await a.cancel("first");
+    await b.cancel("second");
+    expect(cancelled).toBe("not cancelled");
+    deliver!();
+    await vi.waitFor(() => expect(cancelled).toBe("second"));
   });
 
   it("errors both branches when the source errors", async () => {

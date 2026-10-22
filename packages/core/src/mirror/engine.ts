@@ -10,8 +10,8 @@ import type { ServerSettings } from "../settings.js";
 import type { StoreId, StoreSet } from "../storage/index.js";
 import {
   discardBody,
+  bodyEncoding,
   forwardableHeaders,
-  isDecoded,
   requestUpstream,
   UPSTREAM_TIMEOUT_MS,
   UpstreamFetchError,
@@ -48,12 +48,15 @@ export interface MirrorFetch {
 export interface MirrorResponse {
   status: number;
   headers: Headers;
-  /** null for HEAD. */
+  /**
+   * The content; null for HEAD. Callers must read it to the end or cancel it: an unread body holds
+   * the upstream connection and, on a cache miss, stalls the cache write until its idle timeout.
+   */
   body: ReadableStream<Uint8Array> | null;
   cache: CacheResult;
   /** The cached asset served (hit, stale); null when the response came from an upstream. */
   asset: AssetRow | null;
-  /** The upstream URL that answered; null when served from the cache. */
+  /** The upstream URL that answered, after redirects; null when served from the cache. */
   upstreamUrl: string | null;
 }
 
@@ -75,20 +78,29 @@ export interface MirrorEngineDeps {
   fetchImpl?: typeof fetch;
   /** How long an upstream may take to send response headers; defaults to {@link UPSTREAM_TIMEOUT_MS}. */
   upstreamTimeoutMs?: number;
+  /** How long a cache write may go without receiving a chunk before it fails; defaults to {@link CACHE_IDLE_TIMEOUT_MS}. */
+  cacheIdleTimeoutMs?: number;
 }
 
+/** How long a cache write may go without a chunk (a stalled upstream or an abandoned client body) before it is abandoned. */
+export const CACHE_IDLE_TIMEOUT_MS = 60_000;
+
 type UpstreamOutcome =
-  | { kind: "response"; response: Response; url: string }
+  | { kind: "response"; response: Response; url: string; abort: AbortController }
   | { kind: "not_found" }
   | { kind: "failed"; failures: string[] };
 
 /**
  * Splits `source` into two streams that each receive every chunk. Unlike `ReadableStream.tee`, a
  * chunk is read only once every open branch wants one, so a slow branch slows the source instead
- * of the other branch's chunks piling up in memory. A cancelled branch stops counting; the source
- * is cancelled when both are.
+ * of the other branch's chunks piling up in memory. A cancelled branch stops counting and
+ * `opts.onCancel` is told which one it was; the source is cancelled, with the last branch's
+ * reason, when both are (also when that happens while a read is in flight).
  */
-export function teeWithBackpressure<T>(source: ReadableStream<T>): [ReadableStream<T>, ReadableStream<T>] {
+export function teeWithBackpressure<T>(
+  source: ReadableStream<T>,
+  opts: { onCancel?: (branch: 0 | 1, reason: unknown) => void } = {},
+): [ReadableStream<T>, ReadableStream<T>] {
   const reader = source.getReader();
   interface Branch {
     controller: ReadableStreamDefaultController<T> | null;
@@ -102,6 +114,15 @@ export function teeWithBackpressure<T>(source: ReadableStream<T>): [ReadableStre
   ];
   let reading = false;
   let finished = false;
+  let cancelReason: unknown;
+
+  /** Cancels the source once no branch is open; true when it did. */
+  function cancelIfUnwanted(): boolean {
+    if (finished || branches.some((b) => b.open)) return false;
+    finished = true;
+    reader.cancel(cancelReason).catch(() => undefined);
+    return true;
+  }
 
   function settle(branch: Branch): void {
     const wake = branch.wake;
@@ -110,14 +131,8 @@ export function teeWithBackpressure<T>(source: ReadableStream<T>): [ReadableStre
   }
 
   function step(): void {
-    if (reading || finished) return;
-    const open = branches.filter((b) => b.open);
-    if (open.length === 0) {
-      finished = true;
-      reader.cancel().catch(() => undefined);
-      return;
-    }
-    if (!open.every((b) => b.wake !== null)) return;
+    if (reading || finished || cancelIfUnwanted()) return;
+    if (!branches.every((b) => !b.open || b.wake !== null)) return;
     reading = true;
     reader.read().then(
       ({ done, value }) => {
@@ -134,6 +149,8 @@ export function teeWithBackpressure<T>(source: ReadableStream<T>): [ReadableStre
           }
           settle(branch);
         }
+        // Both branches may have been cancelled while the read was in flight.
+        if (!done) cancelIfUnwanted();
       },
       (error: unknown) => {
         reading = false;
@@ -149,7 +166,7 @@ export function teeWithBackpressure<T>(source: ReadableStream<T>): [ReadableStre
     );
   }
 
-  const branchStream = (branch: Branch) =>
+  const branchStream = (branch: Branch, index: 0 | 1) =>
     new ReadableStream<T>({
       start(controller) {
         branch.controller = controller;
@@ -160,13 +177,15 @@ export function teeWithBackpressure<T>(source: ReadableStream<T>): [ReadableStre
           step();
         });
       },
-      cancel() {
+      cancel(reason) {
         branch.open = false;
+        cancelReason = reason;
         settle(branch);
+        opts.onCancel?.(index, reason);
         step();
       },
     });
-  return [branchStream(branches[0]!), branchStream(branches[1]!)];
+  return [branchStream(branches[0]!, 0), branchStream(branches[1]!, 1)];
 }
 
 /** Whether a cached asset may be served without asking an upstream. */
@@ -196,6 +215,7 @@ function assetHeaders(asset: AssetRow): Headers {
 export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const timeoutMs = deps.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS;
+  const idleTimeoutMs = deps.cacheIdleTimeoutMs ?? CACHE_IDLE_TIMEOUT_MS;
   const pending = new Set<Promise<unknown>>();
 
   /** The store cached objects go to: the mirror's, else the server default, else the primary when that one is not configured. */
@@ -220,9 +240,15 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
   }
 
   /** Sends the request to one upstream, retrying once with the `onChallenge` credentials after a 401 challenge. */
-  async function ask(req: MirrorFetch, method: "GET" | "HEAD", upstream: UpstreamWithSecret, url: string): Promise<Response> {
+  async function ask(
+    req: MirrorFetch,
+    method: "GET" | "HEAD",
+    upstream: UpstreamWithSecret,
+    url: string,
+    signal: AbortSignal,
+  ): Promise<Response> {
     const send = (authorization: string | null) =>
-      requestUpstream(fetchImpl, url, { method, headers: req.headers ?? {}, authorization, timeoutMs });
+      requestUpstream(fetchImpl, url, { method, headers: req.headers ?? {}, authorization, timeoutMs, signal });
     const response = await send(upstreamAuthorization(upstream));
     const challenge = response.status === 401 ? response.headers.get("www-authenticate") : null;
     if (challenge === null || !req.onChallenge) return response;
@@ -232,14 +258,19 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
     return send(authorization);
   }
 
-  /** Asks the upstreams in order; the first answer other than 404, 5xx or a network error wins. */
+  /**
+   * Asks the upstreams in order. 404 tries the next one; 5xx, 429 and network errors count as
+   * failures and try the next one too. Any other status (2xx, 3xx left after redirects, 401, 403,
+   * other 4xx) wins and is passed through.
+   */
   async function askUpstreams(req: MirrorFetch, method: "GET" | "HEAD"): Promise<UpstreamOutcome> {
     const failures: string[] = [];
     for (const upstream of await deps.repos.upstreamsWithSecrets(req.repo.id)) {
       const url = upstreamUrl(upstream.url, req.path);
+      const abort = new AbortController();
       let response: Response;
       try {
-        response = await ask(req, method, upstream, url);
+        response = await ask(req, method, upstream, url, abort.signal);
       } catch (error) {
         if (!(error instanceof UpstreamFetchError)) throw error;
         failures.push(error.message);
@@ -249,39 +280,84 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
         await discardBody(response);
         continue;
       }
-      if (response.status >= 500) {
+      if (response.status >= 500 || response.status === 429) {
         await discardBody(response);
         failures.push(`${url} answered ${response.status}`);
         continue;
       }
-      return { kind: "response", response, url };
+      return { kind: "response", response, url: response.url || url, abort };
     }
     return failures.length > 0 ? { kind: "failed", failures } : { kind: "not_found" };
   }
 
-  /** Streams a 200 GET answer to the client and into the cache at once; the asset row appears once the store write completes. */
-  async function cacheThrough(req: MirrorFetch, config: MirrorConfig, response: Response, url: string): Promise<MirrorResponse> {
+  /**
+   * Streams a 200 GET answer to the client and into the cache at once; the asset row appears once
+   * the store write completes. The write, and with it the upstream request, is aborted when the
+   * client cancels its body or when no chunk reaches the store for `idleTimeoutMs`.
+   */
+  async function cacheThrough(
+    req: MirrorFetch,
+    config: MirrorConfig,
+    outcome: Extract<UpstreamOutcome, { kind: "response" }>,
+  ): Promise<MirrorResponse> {
+    const { response, url, abort } = outcome;
     const store = await cacheStore(config);
     const expiresAt = req.class === "metadata" ? new Date(Date.now() + config.cache.metadataTtlSeconds * 1000) : null;
-    const [client, toStore] = teeWithBackpressure(response.body!);
+    const decoded = bodyEncoding(response.headers, "GET", response.status) === "decoded";
+
+    let idle: ReturnType<typeof setTimeout> | undefined;
+    const armIdle = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => abort.abort(new Error(`no data for ${idleTimeoutMs} ms`)), idleTimeoutMs);
+    };
+    const [client, toStore] = teeWithBackpressure(response.body!, {
+      onCancel: (branch, reason) => {
+        if (branch === 0) abort.abort(reason ?? new Error("the client cancelled the body"));
+      },
+    });
+    const watched = toStore.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          armIdle();
+          controller.enqueue(chunk);
+        },
+      }),
+    );
+    const body = Readable.fromWeb(watched as unknown as NodeReadableStream<Uint8Array>);
+    // The store's pipeline sees the error too; this only keeps one that lands before it attaches from going uncaught.
+    body.on("error", () => undefined);
+    armIdle();
     const write = deps.assets
       .put({
         repo: req.repo,
         path: req.path,
-        body: Readable.fromWeb(toStore as unknown as NodeReadableStream<Uint8Array>),
+        body,
         contentType: response.headers.get("content-type"),
         origin: "cache",
         store,
         expiresAt,
         component: req.component,
-        contentLength: isDecoded(response.headers) ? undefined : parseLength(response.headers.get("content-length")),
+        contentLength: decoded ? undefined : parseLength(response.headers.get("content-length")),
+        signal: abort.signal,
       })
       .catch((error: unknown) => {
+        // Cancels the store branch (a put may fail before reading it), so the client keeps streaming without a cache entry.
+        body.destroy();
         console.warn(`weaver: caching ${req.repo.name}/${req.path} from ${url} failed`, error);
       })
-      .finally(() => pending.delete(write));
+      .finally(() => {
+        clearTimeout(idle);
+        pending.delete(write);
+      });
     pending.add(write);
-    return { status: response.status, headers: forwardableHeaders(response.headers), body: client, cache: "miss", asset: null, upstreamUrl: url };
+    return {
+      status: response.status,
+      headers: forwardableHeaders(response.headers, decoded ? "decoded" : "plain"),
+      body: client,
+      cache: "miss",
+      asset: null,
+      upstreamUrl: url,
+    };
   }
 
   return {
@@ -304,15 +380,17 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
       const outcome = await askUpstreams(req, method);
       if (outcome.kind === "response") {
         const { response, url } = outcome;
-        if (config.cache.enabled && method === "GET" && response.status === 200 && response.body !== null) {
-          return cacheThrough(req, config, response, url);
+        const encoding = bodyEncoding(response.headers, method, response.status);
+        // A body fetch could not decode is still encoded; it is passed through, never cached.
+        if (config.cache.enabled && method === "GET" && response.status === 200 && response.body !== null && encoding !== "encoded") {
+          return cacheThrough(req, config, outcome);
         }
         let body = response.body;
         if (method === "HEAD" && body !== null) {
           await discardBody(response);
           body = null;
         }
-        return { status: response.status, headers: forwardableHeaders(response.headers), body, cache: "bypass", asset: null, upstreamUrl: url };
+        return { status: response.status, headers: forwardableHeaders(response.headers, encoding), body, cache: "bypass", asset: null, upstreamUrl: url };
       }
       if (outcome.kind === "not_found") return null;
 
