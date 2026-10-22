@@ -212,6 +212,54 @@ test("a cleanup policy can be added, edited, toggled, previewed and run", async 
   await expect(page.getByRole("button", { name: "Run now" })).toBeEnabled();
 });
 
+test("a docker hosted repository offers only the docker cleanup kinds", async ({ page }) => {
+  const name = uniqueName("images");
+  await loginAs(page, USERS.admin.id);
+  await trpcMutation(page, "repositories.create", { name, format: "docker", kind: "hosted" });
+  await page.goto(`/repositories/${name}/settings`);
+
+  await page.getByRole("button", { name: "Add policy" }).click();
+  const add = page.getByRole("dialog", { name: "Add cleanup policy" });
+  await expect(add.getByRole("radio")).toHaveCount(3);
+  await expect(add.getByRole("radio", { name: "Delete untagged manifests" })).toBeVisible();
+  await expect(add.getByRole("radio", { name: "Keep last N tags" })).toBeVisible();
+  await expect(add.getByRole("radio", { name: "Delete tags not pulled" })).toBeVisible();
+  await expect(add.getByLabel("Image prefix")).toBeVisible();
+
+  // The tag pattern belongs to "Keep last N tags" only; "Include releases" never applies to docker.
+  await expect(add.getByLabel("Tag pattern")).toHaveCount(0);
+  await add.getByRole("radio", { name: "Delete tags not pulled" }).click();
+  await expect(add.getByLabel("Tag pattern")).toHaveCount(0);
+  await expect(add.getByRole("checkbox", { name: "Include releases" })).toHaveCount(0);
+  await add.getByRole("radio", { name: "Keep last N tags" }).click();
+  await expect(add.getByLabel("Tag pattern")).toBeVisible();
+  await expect(add.getByRole("checkbox", { name: "Include releases" })).toHaveCount(0);
+
+  await add.getByLabel("Tags to keep").fill("5");
+  await add.getByRole("button", { name: "Add policy" }).click();
+  await expect(add.getByText("Enter a tag pattern")).toBeVisible();
+  await add.getByLabel("Tag pattern").fill("v*");
+  await add.getByRole("button", { name: "Add policy" }).click();
+  await expect(add).toBeHidden();
+  await expect(page.getByRole("cell", { name: /Keep the last 5 tags matching v\*/ })).toBeVisible();
+});
+
+test("a mirror repository has no cleanup policies", async ({ page }) => {
+  const name = uniqueName("mirror");
+  await loginAs(page, USERS.admin.id);
+  await trpcMutation(page, "repositories.create", {
+    name,
+    format: "npm",
+    kind: "mirror",
+    upstreams: [{ url: "https://registry.npmjs.org", authType: "none" }],
+  });
+  await page.goto(`/repositories/${name}/settings`);
+  await expect(page.getByRole("region", { name: "Mirror" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Cleanup policies" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add policy" })).toHaveCount(0);
+  await expect(page.getByText("Mirror caches are cleaned up by the eviction settings above.")).toBeVisible();
+});
+
 test("an admin creates a key whose secret is shown exactly once", async ({ page }) => {
   const repo = uniqueName("keys");
   const keyName = uniqueName("ci").slice(0, 32);

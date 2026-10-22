@@ -139,6 +139,16 @@ async function publish(repository: string, coordinate: string, files: ProtoFile[
   });
 }
 
+/** The TRPCError `promise` rejects with; fails the test when it resolves. */
+async function errorOf(promise: Promise<unknown>): Promise<TRPCError> {
+  const error = await promise.then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect(error).toBeInstanceOf(TRPCError);
+  return error as TRPCError;
+}
+
 async function codeOf(promise: Promise<unknown>): Promise<string> {
   const error = await promise.then(
     () => null,
@@ -577,13 +587,6 @@ describe("repositories", () => {
     expect((await call(admin()).repositories.list()).map((r) => r.name)).toEqual(["shared"]);
   });
 
-  it("refuses cleanup policies on repositories that are not proto", async () => {
-    await call(admin()).repositories.create({ name: "libs", format: "maven", kind: "hosted" });
-    expect(await codeOf(call(admin()).policies.list({ repository: "libs" }))).toBe("BAD_REQUEST");
-    expect(await codeOf(call(admin()).policies.upsert({ repository: "libs", kind: "delete_stale_snapshots", value: 30 }))).toBe(
-      "BAD_REQUEST",
-    );
-  });
 });
 
 describe("browse by format", () => {
@@ -747,6 +750,138 @@ describe("policies", () => {
       }),
     ]);
     expect(await db.select().from(build)).toHaveLength(3);
+  });
+
+  it("preview returns label and reason from the format cleanup", async () => {
+    const caller = call(admin());
+    await caller.policies.upsert({ repository: "shared", kind: "keep_last_snapshot_builds", value: 2 });
+    expect(await caller.policies.preview({ repository: "shared" })).toEqual([
+      {
+        repository: "shared",
+        key: "proto:acme:money:1.0.0-SNAPSHOT#1",
+        label: "acme:money:1.0.0-SNAPSHOT build 1",
+        reason: "keep last 2 snapshot builds",
+      },
+    ]);
+  });
+
+  it("kinds returns the format's kinds", async () => {
+    const caller = call(admin());
+    await caller.repositories.create({ name: "images", format: "docker", kind: "hosted" });
+    await caller.repositories.create({ name: "pkgs", format: "npm", kind: "hosted" });
+    await caller.repositories.create({ name: "libs", format: "maven", kind: "hosted" });
+    expect(await caller.policies.kinds({ repository: "images" })).toEqual([
+      "delete_untagged_manifests",
+      "keep_last_tags",
+      "delete_not_downloaded",
+    ]);
+    expect(await caller.policies.kinds({ repository: "pkgs" })).toEqual(["delete_not_downloaded", "keep_last_versions"]);
+    for (const repository of ["libs", "shared"]) {
+      expect(await caller.policies.kinds({ repository })).toEqual([
+        "keep_last_snapshot_builds",
+        "delete_stale_snapshots",
+        "delete_not_downloaded",
+      ]);
+    }
+  });
+
+  it("upsert rejects a kind of another format", async () => {
+    await call(admin()).repositories.create({ name: "pkgs", format: "npm", kind: "hosted" });
+    const error = await errorOf(call(admin()).policies.upsert({ repository: "pkgs", kind: "keep_last_snapshot_builds", value: 3 }));
+    expect(error).toMatchObject({
+      code: "BAD_REQUEST",
+      message: "keep_last_snapshot_builds is not a cleanup kind for npm repositories",
+    });
+    const created = await call(admin()).policies.upsert({ repository: "pkgs", kind: "keep_last_versions", value: 3, groupPrefix: "@acme/" });
+    expect(created).toMatchObject({ kind: "keep_last_versions", value: 3, groupPrefix: "@acme/", pattern: null });
+    // A partial update is checked together with the stored values it keeps.
+    expect(await codeOf(call(admin()).policies.upsert({ repository: "pkgs", id: created.id, kind: "delete_stale_snapshots" }))).toBe(
+      "BAD_REQUEST",
+    );
+  });
+
+  it("upsert on a mirror or group repo is refused", async () => {
+    const caller = call(admin());
+    await caller.repositories.create({ name: "npmjs", format: "npm", kind: "mirror", upstreams: [{ url: "https://registry.npmjs.org", authType: "none" }] });
+    await caller.repositories.create({ name: "protos", format: "proto", kind: "group", members: ["shared"] });
+    const message = "Cleanup policies apply to hosted repositories; mirror caches are governed by eviction settings";
+    for (const repository of ["npmjs", "protos"]) {
+      expect(await errorOf(caller.policies.upsert({ repository, kind: "delete_not_downloaded", value: 30 }))).toMatchObject({
+        code: "BAD_REQUEST",
+        message,
+      });
+      expect(await errorOf(caller.policies.list({ repository }))).toMatchObject({ code: "BAD_REQUEST", message });
+      expect(await errorOf(caller.policies.preview({ repository }))).toMatchObject({ code: "BAD_REQUEST", message });
+    }
+    expect(await db.select().from(cleanupPolicy)).toEqual([]);
+  });
+
+  it("keep_last_tags without pattern and a pattern on another kind are refused", async () => {
+    const caller = call(admin());
+    await caller.repositories.create({ name: "images", format: "docker", kind: "hosted" });
+    expect(await codeOf(caller.policies.upsert({ repository: "images", kind: "keep_last_tags", value: 5 }))).toBe("BAD_REQUEST");
+    expect(
+      await codeOf(caller.policies.upsert({ repository: "images", kind: "delete_untagged_manifests", value: 7, pattern: "v*" })),
+    ).toBe("BAD_REQUEST");
+    expect(
+      await codeOf(caller.policies.upsert({ repository: "shared", kind: "delete_stale_snapshots", value: 7, pattern: "v*" })),
+    ).toBe("BAD_REQUEST");
+    const tags = await caller.policies.upsert({
+      repository: "images",
+      kind: "keep_last_tags",
+      value: 5,
+      pattern: "v*",
+      groupPrefix: "team/",
+    });
+    expect(tags).toMatchObject({ kind: "keep_last_tags", value: 5, pattern: "v*", groupPrefix: "team/" });
+    expect(await caller.policies.list({ repository: "images" })).toEqual([expect.objectContaining({ id: tags.id, pattern: "v*" })]);
+    // Dropping the pattern is refused, and so is switching kinds without clearing it.
+    expect(await codeOf(caller.policies.upsert({ repository: "images", id: tags.id, pattern: null }))).toBe("BAD_REQUEST");
+    expect(await codeOf(caller.policies.upsert({ repository: "images", id: tags.id, kind: "delete_untagged_manifests" }))).toBe(
+      "BAD_REQUEST",
+    );
+    const switched = await caller.policies.upsert({
+      repository: "images",
+      id: tags.id,
+      kind: "delete_untagged_manifests",
+      pattern: null,
+    });
+    expect(switched).toMatchObject({ kind: "delete_untagged_manifests", pattern: null });
+  });
+
+  it("includeReleases true is refused on npm and docker repositories", async () => {
+    const caller = call(admin());
+    await caller.repositories.create({ name: "images", format: "docker", kind: "hosted" });
+    await caller.repositories.create({ name: "pkgs", format: "npm", kind: "hosted" });
+    for (const repository of ["images", "pkgs"]) {
+      expect(
+        await codeOf(caller.policies.upsert({ repository, kind: "delete_not_downloaded", value: 30, includeReleases: true })),
+      ).toBe("BAD_REQUEST");
+      expect(
+        await caller.policies.upsert({ repository, kind: "delete_not_downloaded", value: 30, includeReleases: false }),
+      ).toMatchObject({ includeReleases: false });
+    }
+    await caller.repositories.create({ name: "libs", format: "maven", kind: "hosted" });
+    expect(
+      await caller.policies.upsert({
+        repository: "libs",
+        kind: "delete_not_downloaded",
+        value: 30,
+        includeReleases: true,
+        groupPrefix: "org.example",
+      }),
+    ).toMatchObject({ includeReleases: true, groupPrefix: "org.example" });
+  });
+
+  it("validates the scope prefix per format", async () => {
+    const caller = call(admin());
+    await caller.repositories.create({ name: "pkgs", format: "npm", kind: "hosted" });
+    expect(
+      await codeOf(caller.policies.upsert({ repository: "shared", kind: "delete_stale_snapshots", value: 7, groupPrefix: "@acme/" })),
+    ).toBe("BAD_REQUEST");
+    expect(
+      await codeOf(caller.policies.upsert({ repository: "pkgs", kind: "keep_last_versions", value: 7, groupPrefix: "has space" })),
+    ).toBe("BAD_REQUEST");
   });
 
   it("updates and deletes policies", async () => {
