@@ -652,6 +652,49 @@ describe("maven", () => {
     expect(files[0]).toMatchObject({ size: 10, sha1: "s1", url: `${BASE}/maven/releases/org/example/lib/1.0/lib-1.0.jar` });
   });
 
+  it("browse.repository hides config from non-admins and gives it to admins", async () => {
+    await call(admin()).repositories.create({
+      name: "central",
+      format: "maven",
+      kind: "mirror",
+      visibility: "public",
+      upstreams: [{ url: "https://repo.example.org/maven2/", authType: "none" }],
+      config: { rules: { deny: ["secret.*"] } },
+    });
+    for (const caller of [call(viewer()), call(anonymous, anonymousViewOn)]) {
+      const repo = await caller.browse.repository({ name: "central" });
+      expect(repo).toMatchObject({ name: "central", kind: "mirror", cacheEnabled: false });
+      expect(repo).not.toHaveProperty("config");
+      expect(repo).not.toHaveProperty("upstreams");
+      expect(JSON.stringify(repo)).not.toContain("secret.*");
+    }
+    const full = await call(admin()).browse.repository({ name: "central" });
+    expect(full.config).toMatchObject({ rules: { deny: ["secret.*"] } });
+  });
+
+  it("overview of a group lists only members the caller can browse", async () => {
+    await call(admin()).repositories.create({ name: "grp2", format: "maven", kind: "group", visibility: "public", members: ["pub", "releases"] });
+    const anon = call(anonymous, anonymousViewOn);
+    expect((await anon.maven.overview({ repository: "grp2" })).members).toEqual(["pub"]);
+    expect((await call(viewer()).maven.overview({ repository: "grp2" })).members).toEqual(["pub", "releases"]);
+  });
+
+  it("artifacts finds a permitted group past 500 other groups for a prefix-limited key", async () => {
+    const [row] = await db.select({ id: repository.id }).from(repository).where(eq(repository.name, "releases"));
+    await db.insert(component).values(
+      Array.from({ length: 510 }, (_, i) => ({ repositoryId: row!.id, namespace: `aaa.g${String(i).padStart(4, "0")}`, name: "x", version: "1" })),
+    );
+    await deploy("releases", "zzz.mine", "lib", "1", []);
+    const key: Principal = {
+      kind: "apikey",
+      keyId: "k",
+      userId: people.maintainer,
+      role: "admin",
+      permissions: [{ repositoryId: row!.id, repository: "releases", groupPrefix: "zzz", access: "read" }],
+    };
+    expect((await call(key).maven.artifacts({ repository: "releases" })).map((a) => a.groupId)).toEqual(["zzz.mine"]);
+  });
+
   it("anonymous cannot browse a private maven repo", async () => {
     await deploy("releases", "org.example", "lib", "1.0", ["lib-1.0.jar"]);
     expect(await codeOf(call(anonymous, anonymousViewOn).maven.artifacts({ repository: "releases" }))).toBe("NOT_FOUND");

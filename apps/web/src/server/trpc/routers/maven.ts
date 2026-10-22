@@ -4,7 +4,7 @@ import type { Kind } from "@weaver/core";
 import { asset, component, type Db } from "@weaver/db";
 import { compareMavenVersions, isSnapshotVersion } from "@weaver/maven";
 import { browseProcedure, router } from "../init";
-import { canReadGroup, escapeLike, notFound, repositoryName, requireBrowsableRepository, type RepositoryRow } from "../helpers";
+import { canBrowseRepository, canReadGroup, escapeLike, notFound, repositoryName, requireBrowsableRepository, type RepositoryRow } from "../helpers";
 
 /** Most artifacts `maven.artifacts` returns. */
 export const MAVEN_ARTIFACTS_MAX = 500;
@@ -75,7 +75,7 @@ export const mavenRouter = router({
         const row = await requireBrowsableRepository(ctx.db, ctx.principal, input.repository, { format: "maven" });
         const repo = await ctx.repos.get(input.repository);
         if (!repo) throw notFound(`Repository ${input.repository} was not found`);
-        const members = repo.kind === "group" ? (await ctx.repos.members(row.id)).map((m) => m.name) : [];
+        const members = repo.kind === "group" ? (await ctx.repos.members(row.id)).filter((m) => canBrowseRepository(ctx.principal, m)).map((m) => m.name) : [];
         const config = repo.config as { cache?: { enabled?: boolean }; versionPolicy?: "release" | "snapshot" | "mixed" };
         return {
           kind: repo.kind,
@@ -94,30 +94,38 @@ export const mavenRouter = router({
       const ids = await sourceIds(ctx, repo);
       if (ids.length === 0) return [];
       const prefix = input.groupPrefix ? like(component.namespace, `${escapeLike(input.groupPrefix)}%`) : undefined;
-      const rows = await ctx.db
-        .select({
-          groupId: component.namespace,
-          artifactId: component.name,
-          versions: sql<string[]>`array_agg(${component.version})`,
-          updatedAt: sql<string>`max(${component.updatedAt})`,
-        })
-        .from(component)
-        .where(and(inArray(component.repositoryId, ids), prefix))
-        .groupBy(component.namespace, component.name)
-        .orderBy(asc(component.namespace), asc(component.name))
-        .limit(MAVEN_ARTIFACTS_MAX);
-      return rows
-        .filter((row) => canReadGroup(ctx.principal, repo, row.groupId))
-        .map((row) => {
+      const out: MavenArtifactSummary[] = [];
+      // Page through the groups so the permission filter applies before the limit: a restricted key
+      // must not get an empty first page just because other groups sort first.
+      for (let offset = 0; out.length < MAVEN_ARTIFACTS_MAX; offset += MAVEN_ARTIFACTS_MAX) {
+        const rows = await ctx.db
+          .select({
+            groupId: component.namespace,
+            artifactId: component.name,
+            versions: sql<string[]>`array_agg(${component.version})`,
+            updatedAt: sql<string>`max(${component.updatedAt})`,
+          })
+          .from(component)
+          .where(and(inArray(component.repositoryId, ids), prefix))
+          .groupBy(component.namespace, component.name)
+          .orderBy(asc(component.namespace), asc(component.name))
+          .limit(MAVEN_ARTIFACTS_MAX)
+          .offset(offset);
+        for (const row of rows) {
+          if (out.length === MAVEN_ARTIFACTS_MAX) break;
+          if (!canReadGroup(ctx.principal, repo, row.groupId)) continue;
           const versions = [...new Set(row.versions)];
-          return {
+          out.push({
             groupId: row.groupId,
             artifactId: row.artifactId,
             latestVersion: newestVersion(versions),
             versionCount: versions.length,
             updatedAt: new Date(row.updatedAt),
-          };
-        });
+          });
+        }
+        if (rows.length < MAVEN_ARTIFACTS_MAX) break;
+      }
+      return out;
     }),
 
   /** The versions of an artifact, newest first by Maven version order. */

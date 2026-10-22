@@ -1,5 +1,6 @@
 import { Suspense, type ReactNode } from "react";
-import type { Format, Repo } from "@weaver/core";
+import type { Format } from "@weaver/core";
+import type { BrowseRepo as Repo } from "@/server/trpc/routers/browse";
 import { env } from "@/env";
 import { api } from "@/trpc/server";
 import { MavenView } from "./maven-view";
