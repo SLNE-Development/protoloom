@@ -34,12 +34,16 @@ export interface MirrorFetch {
   path: string;
   /** what rules match against */
   subject: string;
+  /** Asset path used for the cache lookup and write; defaults to `path`. Lets one upstream path cache several representations. */
+  cacheKey?: string;
   class: ContentClass;
   method?: "GET" | "HEAD";
   /** forwarded (accept, etc.) */
   headers?: Record<string, string>;
   /** Links a cached asset to this component. */
   component?: ComponentRef;
+  /** Called before the first request to each upstream; a non-null value is sent as Authorization instead of the upstream row's credentials. */
+  authorize?: (upstream: UpstreamView & { secret: string | null }) => Promise<string | null>;
   /** Called on a 401 with WWW-Authenticate; returns an Authorization header value to retry once with, or null. */
   onChallenge?: (challenge: string, upstream: UpstreamView & { secret: string | null }) => Promise<string | null>;
 }
@@ -51,6 +55,8 @@ export interface MirrorResponse {
   /**
    * The content; null for HEAD. Callers must read it to the end or cancel it: an unread body holds
    * the upstream connection and, on a cache miss, stalls the cache write until its idle timeout.
+   * A client that pauses reading for longer than that idle timeout (60 s) aborts the download
+   * together with the cache write.
    */
   body: ReadableStream<Uint8Array> | null;
   cache: CacheResult;
@@ -62,7 +68,7 @@ export interface MirrorResponse {
 
 /** Serves mirror repositories from their upstreams, optionally caching what they return. */
 export interface MirrorEngine {
-  /** null = not found: rules reject, offline without cache, or every upstream answered 404. Upstream 5xx/network errors with no usable cache throw RegistryError("upstream_unavailable"). */
+  /** null = not found: rules reject, offline without cache, or every upstream answered 404. Upstream 5xx, 429 and network errors with no usable cache throw RegistryError("upstream_unavailable"). */
   fetch(req: MirrorFetch): Promise<MirrorResponse | null>;
   /** Resolves once every cache write started so far has finished or failed. */
   drain(): Promise<void>;
@@ -249,7 +255,7 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
   ): Promise<Response> {
     const send = (authorization: string | null) =>
       requestUpstream(fetchImpl, url, { method, headers: req.headers ?? {}, authorization, timeoutMs, signal });
-    const response = await send(upstreamAuthorization(upstream));
+    const response = await send((await req.authorize?.(upstream)) ?? upstreamAuthorization(upstream));
     const challenge = response.status === 401 ? response.headers.get("www-authenticate") : null;
     if (challenge === null || !req.onChallenge) return response;
     const authorization = await req.onChallenge(challenge, upstream);
@@ -330,7 +336,7 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
     const write = deps.assets
       .put({
         repo: req.repo,
-        path: req.path,
+        path: req.cacheKey ?? req.path,
         body,
         contentType: response.headers.get("content-type"),
         origin: "cache",
@@ -368,7 +374,7 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
       if (!matchesRules(config.rules, req.subject)) return null;
       const method = req.method ?? "GET";
 
-      const existing = config.cache.enabled || config.offline ? await deps.assets.find(repo.id, req.path) : null;
+      const existing = config.cache.enabled || config.offline ? await deps.assets.find(repo.id, req.cacheKey ?? req.path) : null;
       if (config.offline) {
         return existing ? serveAsset(existing, method, isFresh(existing, req.class) ? "hit" : "stale") : null;
       }
@@ -381,6 +387,8 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
       if (outcome.kind === "response") {
         const { response, url } = outcome;
         const encoding = bodyEncoding(response.headers, method, response.status);
+        // A HEAD describes what the GET would return, so it drops the encoding headers when the GET body would be decoded.
+        const headerEncoding = method === "HEAD" ? bodyEncoding(response.headers, "GET", response.status) : encoding;
         // A body fetch could not decode is still encoded; it is passed through, never cached.
         if (config.cache.enabled && method === "GET" && response.status === 200 && response.body !== null && encoding !== "encoded") {
           return cacheThrough(req, config, outcome);
@@ -390,7 +398,7 @@ export function createMirrorEngine(deps: MirrorEngineDeps): MirrorEngine {
           await discardBody(response);
           body = null;
         }
-        return { status: response.status, headers: forwardableHeaders(response.headers, encoding), body, cache: "bypass", asset: null, upstreamUrl: url };
+        return { status: response.status, headers: forwardableHeaders(response.headers, headerEncoding), body, cache: "bypass", asset: null, upstreamUrl: url };
       }
       if (outcome.kind === "not_found") return null;
 
