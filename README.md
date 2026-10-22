@@ -50,10 +50,10 @@ All variables are validated at startup (`apps/web/src/env.ts`). Empty values cou
 | --- | --- | --- |
 | `DATABASE_URL` | yes | PostgreSQL connection string. |
 | `VALKEY_URL` | worker: yes; web: optional | Valkey/Redis URL used by BullMQ, e.g. `redis://localhost:6379`. The worker needs it; without it the web app runs but can't queue cleanup runs ("Run now"). |
-| `STORAGE_DRIVER` | yes | `local` or `s3`. |
-| `STORAGE_LOCAL_PATH` | with `local` | Directory for stored archives (the image uses `/data/storage`). |
+| `STORAGE_DRIVER` | yes | `local` or `s3`: the primary store, which receives hosted uploads. Both stores can be configured at once. |
+| `STORAGE_LOCAL_PATH` | with `local` | Directory for stored archives (the image uses `/data/storage`); setting it configures the local store. |
 | `S3_ENDPOINT` | with `s3` | S3 endpoint URL (empty for AWS). |
-| `S3_BUCKET` | with `s3` | Bucket name. |
+| `S3_BUCKET` | with `s3` | Bucket name; setting it configures the S3 store, which then needs the other `S3_*` values. |
 | `S3_REGION` | with `s3` | Region, e.g. `us-east-1`. |
 | `S3_ACCESS_KEY_ID` | with `s3` | S3 access key. |
 | `S3_SECRET_ACCESS_KEY` | with `s3` | S3 secret key. |

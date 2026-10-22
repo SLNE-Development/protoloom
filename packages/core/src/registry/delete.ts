@@ -134,5 +134,5 @@ export async function deleteVersion(
     return keys;
   });
 
-  await Promise.all(storageKeys.map((key) => deleteBlobLogged(ctx.blobs, key)));
+  await Promise.all(storageKeys.map((key) => deleteBlobLogged(ctx.stores.primary, key)));
 }

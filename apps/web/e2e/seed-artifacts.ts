@@ -1,4 +1,4 @@
-import { createLocalStore, createRegistry, packArchive, type Principal, type ProtoFile } from "@weaver/core";
+import { createRegistry, createStoreSetFromEnv, packArchive, type Principal, type ProtoFile } from "@weaver/core";
 import { repository, type Db } from "@weaver/db";
 import { ARTIFACTS, USERS, serverEnv } from "./fixtures";
 
@@ -20,7 +20,8 @@ export async function seedArtifacts(db: Db): Promise<void> {
     { name: ARTIFACTS.snapshots, description: "Snapshot builds", visibility: "private" },
   ]);
 
-  const registry = createRegistry({ db, blobs: createLocalStore(serverEnv().STORAGE_LOCAL_PATH!) });
+  const stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: serverEnv().STORAGE_LOCAL_PATH });
+  const registry = createRegistry({ db, stores });
   // Publishing needs a key with write access (users can't publish from the UI); this one is never stored.
   const publisher: Principal = {
     kind: "apikey",

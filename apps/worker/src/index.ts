@@ -1,4 +1,4 @@
-import { createBlobStoreFromEnv } from "@weaver/core";
+import { createStoreSetFromEnv } from "@weaver/core";
 import { createDb } from "@weaver/db";
 import { redisConnection } from "@weaver/jobs";
 import { loadEnv } from "./env.js";
@@ -6,8 +6,8 @@ import { startWorker } from "./worker.js";
 
 const env = loadEnv(process.env);
 const db = createDb(env.DATABASE_URL);
-const blobs = createBlobStoreFromEnv(env);
-const running = await startWorker({ db, blobs, connection: redisConnection(env.VALKEY_URL) });
+const stores = createStoreSetFromEnv(env);
+const running = await startWorker({ db, stores, connection: redisConnection(env.VALKEY_URL) });
 console.log("weaver-worker: processing cleanup jobs");
 
 let stopping = false;

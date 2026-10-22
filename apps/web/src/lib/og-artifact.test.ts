@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createRegistry, type BlobStore, type Registry } from "@weaver/core";
+import { createRegistry, type Registry, type StoreSet } from "@weaver/core";
 import { startTestDb } from "@weaver/db/testing";
 import { artifactCard, GENERIC_ARTIFACT_CARD } from "./og-artifact";
 import { insertRepository, insertVersion } from "@/test/catalog";
@@ -11,7 +11,7 @@ describe("artifact share card content", () => {
   beforeAll(async () => {
     testDb = await startTestDb();
     // Share cards read metadata only; the blob store is never touched.
-    registry = createRegistry({ db: testDb.db, blobs: {} as BlobStore });
+    registry = createRegistry({ db: testDb.db, stores: {} as StoreSet });
     const releases = await insertRepository(testDb.db, "releases", "public");
     const internal = await insertRepository(testDb.db, "internal", "private");
     await insertVersion(

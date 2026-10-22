@@ -8,8 +8,8 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { ValkeyContainer, type StartedValkeyContainer } from "@testcontainers/valkey";
 import { eq, sql } from "drizzle-orm";
 import {
-  createLocalStore,
   createRegistry,
+  createStoreSetFromEnv,
   packArchive,
   type Principal,
   type ProtoFile,
@@ -127,7 +127,7 @@ beforeAll(async () => {
   db = testDb.db;
   auth = createAuth(db, authEnv);
   blobDir = await mkdtemp(join(tmpdir(), "weaver-trpc-"));
-  registry = createRegistry({ db, blobs: createLocalStore(blobDir) });
+  registry = createRegistry({ db, stores: createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir }) });
   liveQueue = createQueue(producerConnection(valkey.getConnectionUrl()));
   deadQueue = createQueue(producerConnection("redis://127.0.0.1:1"), { onError: () => undefined });
 });

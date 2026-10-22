@@ -4,6 +4,7 @@ import { compareVersions, formatCoordinate, type Coordinate } from "../coordinat
 import { RegistryError } from "../errors.js";
 import { canAccess, canForce, type Principal } from "../permissions.js";
 import { resolveGraph, type Resolution, type ResolveOptions } from "../resolution.js";
+import { getBuffer } from "../storage/index.js";
 import {
   createLookup,
   findLatestBuild,
@@ -168,7 +169,7 @@ export async function download(
   select: BuildSelector = {},
 ): Promise<{ data: Buffer; sha256: string; filename: string }> {
   const { build: served } = await readableBuild(ctx.db, p, repositoryName, c, select);
-  const data = await ctx.blobs.get(served.storageKey);
+  const data = await getBuffer(ctx.stores.primary, served.storageKey);
   if (!data) throw new Error(`Archive blob ${served.storageKey} is missing from storage`);
   await ctx.db
     .update(build)

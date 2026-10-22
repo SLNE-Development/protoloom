@@ -4,13 +4,14 @@ import type { ProtoFile } from "../archive.js";
 import { formatCoordinate, type Coordinate } from "../coordinates.js";
 import { canAccess, type Principal } from "../permissions.js";
 import type { Lookup, ResolvedNode } from "../resolution.js";
-import type { BlobStore } from "../storage/index.js";
+import type { ObjectStore, StoreSet } from "../storage/index.js";
 import type { validateProtos } from "../validation.js";
 
 /** Dependencies shared by the registry operations. */
 export interface RegistryContext {
   db: Db;
-  blobs: BlobStore;
+  /** Proto archives are written to and read from `stores.primary`. */
+  stores: StoreSet;
   validate: typeof validateProtos;
 }
 
@@ -24,9 +25,9 @@ export type BuildRow = typeof build.$inferSelect;
  * Deletes a blob whose rows are already gone (or never committed). A failure only leaves an
  * orphaned blob behind, so it is logged with the key instead of failing the operation.
  */
-export async function deleteBlobLogged(blobs: BlobStore, key: string): Promise<void> {
+export async function deleteBlobLogged(store: ObjectStore, key: string): Promise<void> {
   try {
-    await blobs.delete(key);
+    await store.delete(key);
   } catch (error) {
     console.warn(`weaver: failed to delete orphaned blob ${key}`, error);
   }

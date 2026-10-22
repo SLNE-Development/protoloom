@@ -1,4 +1,4 @@
-import { createBlobStoreFromEnv, createRegistry, type BlobStore, type Registry } from "@weaver/core";
+import { createRegistry, createStoreSetFromEnv, type Registry, type StoreSet } from "@weaver/core";
 import { createDb, type Db } from "@weaver/db";
 import { env } from "../env";
 import { createAuth, type Auth } from "./auth";
@@ -6,9 +6,10 @@ import { createAuth, type Auth } from "./auth";
 /** Process-wide server dependencies. */
 export interface ServerContext {
   db: Db;
-  blobs: BlobStore;
+  /** The configured object stores; hosted writes go to `stores.primary`. */
+  stores: StoreSet;
   auth: Auth;
-  /** The registry service over `db` and `blobs`. */
+  /** The registry service over `db` and `stores`. */
   registry: Registry;
 }
 
@@ -19,15 +20,13 @@ const globalForContext = globalThis as typeof globalThis & { __weaverServerConte
 export function getServerContext(): ServerContext {
   if (!globalForContext.__weaverServerContext) {
     const db = createDb(env.DATABASE_URL);
-    // The blob store reads only the validated STORAGE_* / S3_* values; the cast bridges to the
-    // ProcessEnv parameter type (which Next.js augments with a required NODE_ENV).
-    const storageEnv: Record<string, string | undefined> = { ...env };
-    const blobs = createBlobStoreFromEnv(storageEnv as NodeJS.ProcessEnv);
+    // The object stores read only the validated STORAGE_* / S3_* values.
+    const stores = createStoreSetFromEnv(env);
     globalForContext.__weaverServerContext = {
       db,
-      blobs,
+      stores,
       auth: createAuth(db),
-      registry: createRegistry({ db, blobs }),
+      registry: createRegistry({ db, stores }),
     };
   }
   return globalForContext.__weaverServerContext;

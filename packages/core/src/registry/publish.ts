@@ -16,6 +16,7 @@ import {
 import { RegistryError } from "../errors.js";
 import { canAccess, type Principal } from "../permissions.js";
 import { findPathCollisions, resolveGraph, type Resolution } from "../resolution.js";
+import { putBuffer } from "../storage/index.js";
 import {
   createLookup,
   deleteBlobLogged,
@@ -225,7 +226,7 @@ export async function publish(ctx: RegistryContext, p: Principal, input: Publish
   if (issues.length > 0) throw validationFailed("Proto validation failed", { issues });
 
   const storageKey = `${repo.name}/${c.group}/${c.name}/${c.version}/${randomUUID()}.tar.gz`;
-  await ctx.blobs.put(storageKey, input.archive);
+  await putBuffer(ctx.stores.primary, storageKey, input.archive);
 
   let outcome: { buildNumber: number; replaced: BuildRow | null };
   try {
@@ -302,13 +303,13 @@ export async function publish(ctx: RegistryContext, p: Principal, input: Publish
       return { buildNumber, replaced: existing };
     });
   } catch (error) {
-    await deleteBlobLogged(ctx.blobs, storageKey);
+    await deleteBlobLogged(ctx.stores.primary, storageKey);
     throw error;
   }
 
   if (outcome.replaced) {
     // The new build is committed; a failure here only leaves an orphaned blob behind.
-    await deleteBlobLogged(ctx.blobs, outcome.replaced.storageKey);
+    await deleteBlobLogged(ctx.stores.primary, outcome.replaced.storageKey);
   }
   return { coordinate: c, buildNumber: outcome.buildNumber, sha256: digest, redeployed: outcome.replaced !== null };
 }

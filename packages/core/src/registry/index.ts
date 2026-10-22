@@ -2,7 +2,7 @@ import type { Db } from "@weaver/db";
 import type { Coordinate } from "../coordinates.js";
 import type { Principal } from "../permissions.js";
 import type { Resolution, ResolveOptions } from "../resolution.js";
-import type { BlobStore } from "../storage/index.js";
+import type { StoreSet } from "../storage/index.js";
 import { validateProtos } from "../validation.js";
 import { deleteVersion } from "./delete.js";
 import type { RegistryContext } from "./lookup.js";
@@ -44,9 +44,9 @@ export interface Registry {
   deleteVersion(p: Principal, repository: string, c: Coordinate, opts?: { force?: boolean }): Promise<void>;
 }
 
-/** Creates the registry over a database and a blob store; `validate` defaults to buf-backed {@link validateProtos}. */
-export function createRegistry(deps: { db: Db; blobs: BlobStore; validate?: typeof validateProtos }): Registry {
-  const ctx: RegistryContext = { db: deps.db, blobs: deps.blobs, validate: deps.validate ?? validateProtos };
+/** Creates the registry over a database and the object stores (archives go to `stores.primary`); `validate` defaults to buf-backed {@link validateProtos}. */
+export function createRegistry(deps: { db: Db; stores: StoreSet; validate?: typeof validateProtos }): Registry {
+  const ctx: RegistryContext = { db: deps.db, stores: deps.stores, validate: deps.validate ?? validateProtos };
   return {
     publish: (p, input) => publish(ctx, p, input),
     listVersions: (p, repository, group, name) => listVersions(ctx, p, repository, group, name),

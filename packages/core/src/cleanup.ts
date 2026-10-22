@@ -7,7 +7,7 @@ import { groupMatches } from "./permissions.js";
 import { deleteBuildRow, deleteVersionRows, findVersionTarget, lockVersion } from "./registry/delete.js";
 import { deleteBlobLogged, findRepository, type RepositoryRow } from "./registry/lookup.js";
 import { findDependents, type Dependent } from "./registry/read.js";
-import type { BlobStore } from "./storage/index.js";
+import type { StoreSet } from "./storage/index.js";
 
 /** Advisory lock key held by {@link runAllCleanups} so overlapping runs skip instead of racing. */
 const CLEANUP_LOCK_KEY = 727001;
@@ -247,7 +247,7 @@ async function applyOne(db: Db, repo: RepositoryRow, candidate: PlannedCandidate
  */
 export async function applyCleanup(
   db: Db,
-  blobs: BlobStore,
+  stores: StoreSet,
   repositoryName: string,
   now: Date,
 ): Promise<CleanupCandidate[]> {
@@ -265,7 +265,7 @@ export async function applyCleanup(
         continue;
       }
       applied.push(candidate);
-      await Promise.all(keys.map((key) => deleteBlobLogged(blobs, key)));
+      await Promise.all(keys.map((key) => deleteBlobLogged(stores.primary, key)));
     }
     if (retry.length === pending.length) break;
     pending = retry;
@@ -279,7 +279,7 @@ export async function applyCleanup(
  * returns 0 at once when another run holds it. A failing repository does not stop the others;
  * its error is rethrown (aggregated) after the rest ran.
  */
-export async function runAllCleanups(db: Db, blobs: BlobStore, now: Date): Promise<number> {
+export async function runAllCleanups(db: Db, stores: StoreSet, now: Date): Promise<number> {
   const lockClient = await db.$client.connect();
   // Set when unlocking fails: releasing with it destroys the connection, which drops the session lock.
   let unlockError: Error | undefined;
@@ -299,7 +299,7 @@ export async function runAllCleanups(db: Db, blobs: BlobStore, now: Date): Promi
       const errors: unknown[] = [];
       for (const { name } of repos) {
         try {
-          deleted += (await applyCleanup(db, blobs, name, now)).length;
+          deleted += (await applyCleanup(db, stores, name, now)).length;
         } catch (error) {
           errors.push(error);
         }

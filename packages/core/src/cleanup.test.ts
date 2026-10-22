@@ -19,7 +19,7 @@ import {
 import { startTestDb } from "@weaver/db/testing";
 import { applyCleanup, planCleanup, runAllCleanups, type CleanupCandidate } from "./cleanup.js";
 import type { Coordinate } from "./coordinates.js";
-import { createLocalStore, type BlobStore } from "./storage/index.js";
+import { createStoreSetFromEnv, getBuffer, putBuffer, type StoreSet } from "./storage/index.js";
 
 const DAY = 86_400_000;
 const NOW = new Date("2026-10-21T03:00:00Z");
@@ -38,7 +38,7 @@ interface SeedOptions {
 describe("cleanup", () => {
   let testDb: Awaited<ReturnType<typeof startTestDb>>;
   let blobDir: string;
-  let blobs: BlobStore;
+  let stores: StoreSet;
 
   const repoIds = new Map<string, string>();
 
@@ -72,7 +72,7 @@ describe("cleanup", () => {
     const keys: string[] = [];
     for (let n = 1; n <= (opts.builds ?? 1); n++) {
       const storageKey = `${repo}/${c.group}/${c.name}/${c.version}/${randomUUID()}.tar.gz`;
-      await blobs.put(storageKey, Buffer.from(`build ${n}`));
+      await putBuffer(stores.primary, storageKey, Buffer.from(`build ${n}`));
       keys.push(storageKey);
       const [b] = await testDb.db
         .insert(build)
@@ -131,7 +131,7 @@ describe("cleanup", () => {
   beforeAll(async () => {
     testDb = await startTestDb();
     blobDir = await mkdtemp(join(tmpdir(), "weaver-cleanup-"));
-    blobs = createLocalStore(blobDir);
+    stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir });
   }, 120_000);
 
   afterAll(async () => {
@@ -268,7 +268,7 @@ describe("cleanup", () => {
       "leaf:1.0.0-SNAPSHOT#all",
       "root:1.0.0-SNAPSHOT#all",
     ]);
-    const applied = await applyCleanup(testDb.db, blobs, "snapshots", NOW);
+    const applied = await applyCleanup(testDb.db, stores, "snapshots", NOW);
     expect(summary(applied)).toEqual(["leaf:1.0.0-SNAPSHOT#all", "root:1.0.0-SNAPSHOT#all"]);
     expect(await buildNumbers("snapshots", root)).toEqual([]);
     expect(await buildNumbers("snapshots", base)).toEqual([1]);
@@ -287,7 +287,7 @@ describe("cleanup", () => {
       await addPolicy("snapshots", { kind: "keep_last_snapshot_builds", value: 2 });
       await addPolicy("snapshots", { kind: "delete_stale_snapshots", value: 30 });
 
-      const applied = await applyCleanup(testDb.db, blobs, "snapshots", NOW);
+      const applied = await applyCleanup(testDb.db, stores, "snapshots", NOW);
       expect(summary(applied)).toEqual([
         "money:1.0.0-SNAPSHOT#1",
         "money:1.0.0-SNAPSHOT#2",
@@ -299,11 +299,11 @@ describe("cleanup", () => {
       const staleArtifact = await testDb.db.select().from(artifact).where(eq(artifact.name, "stale"));
       expect(staleArtifact).toEqual([]);
 
-      expect(await blobs.get(moneyKeys[0]!)).toBeNull();
-      expect(await blobs.get(moneyKeys[1]!)).toBeNull();
-      expect(await blobs.get(moneyKeys[2]!)).not.toBeNull();
-      expect(await blobs.get(moneyKeys[3]!)).not.toBeNull();
-      for (const k of staleKeys) expect(await blobs.get(k)).toBeNull();
+      expect(await getBuffer(stores.primary, moneyKeys[0]!)).toBeNull();
+      expect(await getBuffer(stores.primary, moneyKeys[1]!)).toBeNull();
+      expect(await getBuffer(stores.primary, moneyKeys[2]!)).not.toBeNull();
+      expect(await getBuffer(stores.primary, moneyKeys[3]!)).not.toBeNull();
+      for (const k of staleKeys) expect(await getBuffer(stores.primary, k)).toBeNull();
 
       const audits = await testDb.db
         .select({ actorType: auditEvent.actorType, action: auditEvent.action, target: auditEvent.target })
@@ -315,7 +315,7 @@ describe("cleanup", () => {
         { actorType: "system", action: "cleanup.delete", target: "snapshots/acme:stale:1.0.0-SNAPSHOT" },
       ]);
 
-      expect(await applyCleanup(testDb.db, blobs, "snapshots", NOW)).toEqual([]);
+      expect(await applyCleanup(testDb.db, stores, "snapshots", NOW)).toEqual([]);
     });
 
     it("records a tombstone for each release it deletes, and none for snapshots", async () => {
@@ -324,7 +324,7 @@ describe("cleanup", () => {
       await seed("snapshots", coord("acme", "unused", "1.0.0-SNAPSHOT"), { lastDownloadedAt: daysAgo(120) });
       await addPolicy("snapshots", { kind: "delete_not_downloaded", value: 90, includeReleases: true });
 
-      expect(summary(await applyCleanup(testDb.db, blobs, "snapshots", NOW))).toEqual([
+      expect(summary(await applyCleanup(testDb.db, stores, "snapshots", NOW))).toEqual([
         "release:1.0.0#all",
         "unused:1.0.0-SNAPSHOT#all",
       ]);
@@ -350,7 +350,7 @@ describe("cleanup", () => {
       const holder = await testDb.db.$client.connect();
       try {
         await holder.query("select pg_advisory_lock(hashtext($1))", ["snapshots:acme:money:1.0.0-SNAPSHOT"]);
-        const applying = applyCleanup(testDb.db, blobs, "snapshots", NOW);
+        const applying = applyCleanup(testDb.db, stores, "snapshots", NOW);
         await waitForLockWaiter();
         await testDb.db.update(version).set({ updatedAt: NOW });
         await holder.query("select pg_advisory_unlock(hashtext($1))", ["snapshots:acme:money:1.0.0-SNAPSHOT"]);
@@ -369,7 +369,7 @@ describe("cleanup", () => {
       const holder = await testDb.db.$client.connect();
       try {
         await holder.query("select pg_advisory_lock(hashtext($1))", ["snapshots:acme:money:1.0.0-SNAPSHOT"]);
-        const applying = applyCleanup(testDb.db, blobs, "snapshots", NOW);
+        const applying = applyCleanup(testDb.db, stores, "snapshots", NOW);
         await waitForLockWaiter();
         await seed("other", coord("acme", "order", "1.0.0"), { dependsOn: [money] });
         await holder.query("select pg_advisory_unlock(hashtext($1))", ["snapshots:acme:money:1.0.0-SNAPSHOT"]);
@@ -388,7 +388,7 @@ describe("cleanup", () => {
       await addPolicy("snapshots", { kind: "keep_last_snapshot_builds", value: 1 });
       await addPolicy("other", { kind: "keep_last_snapshot_builds", value: 1 });
 
-      expect(await runAllCleanups(testDb.db, blobs, NOW)).toBe(3);
+      expect(await runAllCleanups(testDb.db, stores, NOW)).toBe(3);
       expect(await buildNumbers("snapshots", coord("acme", "money", "1.0.0-SNAPSHOT"))).toEqual([3]);
       expect(await buildNumbers("other", coord("acme", "order", "1.0.0-SNAPSHOT"))).toEqual([2]);
     });
@@ -400,13 +400,13 @@ describe("cleanup", () => {
       const holder = await testDb.db.$client.connect();
       try {
         await holder.query("select pg_advisory_lock(727001)");
-        expect(await runAllCleanups(testDb.db, blobs, NOW)).toBe(0);
+        expect(await runAllCleanups(testDb.db, stores, NOW)).toBe(0);
         expect(await buildNumbers("snapshots", coord("acme", "money", "1.0.0-SNAPSHOT"))).toEqual([1, 2, 3]);
       } finally {
         await holder.query("select pg_advisory_unlock(727001)");
         holder.release();
       }
-      expect(await runAllCleanups(testDb.db, blobs, NOW)).toBe(2);
+      expect(await runAllCleanups(testDb.db, stores, NOW)).toBe(2);
     });
 
     it("destroys the lock connection when unlocking fails, so the session lock cannot leak", async () => {
@@ -432,7 +432,7 @@ describe("cleanup", () => {
       }) as typeof pool.connect);
       const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       try {
-        expect(await runAllCleanups(testDb.db, blobs, NOW)).toBe(1);
+        expect(await runAllCleanups(testDb.db, stores, NOW)).toBe(1);
         expect(warn).toHaveBeenCalledOnce();
       } finally {
         spy.mockRestore();
@@ -442,7 +442,7 @@ describe("cleanup", () => {
       // The destroyed connection took its session lock with it: the next run gets the lock.
       await seed("other", coord("acme", "order", "1.0.0-SNAPSHOT"), { builds: 2 });
       await addPolicy("other", { kind: "keep_last_snapshot_builds", value: 1 });
-      expect(await runAllCleanups(testDb.db, blobs, NOW)).toBe(1);
+      expect(await runAllCleanups(testDb.db, stores, NOW)).toBe(1);
     });
   });
 });

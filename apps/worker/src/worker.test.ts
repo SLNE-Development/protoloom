@@ -7,7 +7,7 @@ import { ValkeyContainer, type StartedValkeyContainer } from "@testcontainers/va
 import { asc, sql } from "drizzle-orm";
 import { artifact, build, cleanupPolicy, repository, version } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
-import { createLocalStore, type BlobStore } from "@weaver/core";
+import { createStoreSetFromEnv, putBuffer, type StoreSet } from "@weaver/core";
 import {
   createQueue,
   enqueueCleanup,
@@ -23,12 +23,12 @@ describe("worker", () => {
   let testDb: Awaited<ReturnType<typeof startTestDb>>;
   let valkey: StartedValkeyContainer;
   let blobDir: string;
-  let blobs: BlobStore;
+  let stores: StoreSet;
   let queue: CleanupQueue;
   const running: RunningWorker[] = [];
 
   async function start(): Promise<RunningWorker> {
-    const w = await startWorker({ db: testDb.db, blobs, connection: redisConnection(valkey.getConnectionUrl()) });
+    const w = await startWorker({ db: testDb.db, stores, connection: redisConnection(valkey.getConnectionUrl()) });
     running.push(w);
     return w;
   }
@@ -48,7 +48,7 @@ describe("worker", () => {
       new ValkeyContainer("valkey/valkey:9.1.2-alpine").start(),
     ]);
     blobDir = await mkdtemp(join(tmpdir(), "weaver-worker-"));
-    blobs = createLocalStore(blobDir);
+    stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir });
     queue = createQueue(redisConnection(valkey.getConnectionUrl()));
   });
 
@@ -81,7 +81,7 @@ describe("worker", () => {
       .returning();
     for (let n = 1; n <= 4; n++) {
       const storageKey = `snapshots/acme/money/1.0.0-SNAPSHOT/${randomUUID()}.tar.gz`;
-      await blobs.put(storageKey, Buffer.from(`build ${n}`));
+      await putBuffer(stores.primary, storageKey, Buffer.from(`build ${n}`));
       await testDb.db
         .insert(build)
         .values({ versionId: ver!.id, buildNumber: n, storageKey, sha256: "0".repeat(64), sizeBytes: 7 });

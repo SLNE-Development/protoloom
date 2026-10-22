@@ -32,18 +32,6 @@ importers:
       '@next/env':
         specifier: 16.4.2
         version: 16.4.2
-      '@weaver/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-      '@weaver/db':
-        specifier: workspace:*
-        version: link:../../packages/db
-      '@weaver/jobs':
-        specifier: workspace:*
-        version: link:../../packages/jobs
-      '@weaver/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
       '@t3-oss/env-nextjs':
         specifier: 0.13.11
         version: 0.13.11(typescript@6.0.3)(zod@4.6.7)
@@ -59,6 +47,18 @@ importers:
       '@trpc/tanstack-react-query':
         specifier: 11.19.0
         version: 11.19.0(@tanstack/react-query@5.104.5(@types/react@19.3.0)(react@19.3.1))(@trpc/client@11.19.0(@trpc/server@11.19.0(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.19.0(typescript@6.0.3))(react@19.3.1)(typescript@6.0.3)
+      '@weaver/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@weaver/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@weaver/jobs':
+        specifier: workspace:*
+        version: link:../../packages/jobs
+      '@weaver/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       better-auth:
         specifier: 1.7.12
         version: 1.7.12(drizzle-kit@0.31.11)(drizzle-orm@0.45.4(@types/pg@8.23.1)(kysely@0.29.7)(pg@8.23.1))(next@16.4.2(@playwright/test@1.64.1)(@types/node@26.6.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(pg@8.23.1)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(vitest@5.0.5(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)))
@@ -132,9 +132,6 @@ importers:
       '@playwright/test':
         specifier: 1.64.1
         version: 1.64.1
-      '@weaver/config':
-        specifier: workspace:*
-        version: link:../../packages/config
       '@tailwindcss/postcss':
         specifier: 4.3.3
         version: 4.3.3
@@ -156,6 +153,9 @@ importers:
       '@types/react-dom':
         specifier: 19.3.0
         version: 19.3.0(@types/react@19.3.0)
+      '@weaver/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       cross-env:
         specifier: 10.1.0
         version: 10.1.0
@@ -177,6 +177,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@t3-oss/env-core':
+        specifier: 0.13.11
+        version: 0.13.11(typescript@6.0.3)(zod@4.6.7)
       '@weaver/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -186,9 +189,6 @@ importers:
       '@weaver/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs
-      '@t3-oss/env-core':
-        specifier: 0.13.11
-        version: 0.13.11(typescript@6.0.3)(zod@4.6.7)
       bullmq:
         specifier: 6.3.19
         version: 6.3.19(ioredis@6.0.0)(pg@8.23.1)
@@ -199,15 +199,15 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
     devDependencies:
-      '@weaver/config':
-        specifier: workspace:*
-        version: link:../../packages/config
       '@testcontainers/valkey':
         specifier: 12.2.1
         version: 12.2.1
       '@types/node':
         specifier: 26.6.5
         version: 26.6.5
+      '@weaver/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       drizzle-orm:
         specifier: 0.45.4
         version: 0.45.4(@types/pg@8.23.1)(kysely@0.29.7)(pg@8.23.1)
@@ -226,15 +226,15 @@ importers:
 
   packages/cli:
     devDependencies:
+      '@types/node':
+        specifier: 26.6.5
+        version: 26.6.5
       '@weaver/config':
         specifier: workspace:*
         version: link:../config
       '@weaver/core':
         specifier: workspace:*
         version: link:../core
-      '@types/node':
-        specifier: 26.6.5
-        version: 26.6.5
       eslint:
         specifier: 10.13.0
         version: 10.13.0(jiti@2.7.0)
@@ -272,6 +272,9 @@ importers:
       '@aws-sdk/client-s3':
         specifier: 3.1154.0
         version: 3.1154.0
+      '@aws-sdk/lib-storage':
+        specifier: 3.1154.0
+        version: 3.1154.0(@aws-sdk/client-s3@3.1154.0)
       '@bufbuild/buf':
         specifier: 1.74.0
         version: 1.74.0
@@ -288,12 +291,12 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
     devDependencies:
-      '@weaver/config':
-        specifier: workspace:*
-        version: link:../config
       '@types/node':
         specifier: 26.6.5
         version: 26.6.5
+      '@weaver/config':
+        specifier: workspace:*
+        version: link:../config
       eslint:
         specifier: 10.13.0
         version: 10.13.0(jiti@2.7.0)
@@ -313,9 +316,6 @@ importers:
         specifier: 8.23.1
         version: 8.23.1
     devDependencies:
-      '@weaver/config':
-        specifier: workspace:*
-        version: link:../config
       '@testcontainers/postgresql':
         specifier: 12.2.1
         version: 12.2.1
@@ -325,6 +325,9 @@ importers:
       '@types/pg':
         specifier: 8.23.1
         version: 8.23.1
+      '@weaver/config':
+        specifier: workspace:*
+        version: link:../config
       drizzle-kit:
         specifier: 0.31.11
         version: 0.31.11
@@ -347,15 +350,15 @@ importers:
         specifier: 6.0.0
         version: 6.0.0
     devDependencies:
-      '@weaver/config':
-        specifier: workspace:*
-        version: link:../config
       '@testcontainers/valkey':
         specifier: 12.2.1
         version: 12.2.1
       '@types/node':
         specifier: 26.6.5
         version: 26.6.5
+      '@weaver/config':
+        specifier: workspace:*
+        version: link:../config
       eslint:
         specifier: 10.13.0
         version: 10.13.0(jiti@2.7.0)
@@ -438,9 +441,6 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
     devDependencies:
-      '@weaver/config':
-        specifier: workspace:*
-        version: link:../config
       '@tailwindcss/postcss':
         specifier: 4.3.3
         version: 4.3.3
@@ -453,6 +453,9 @@ importers:
       '@types/react-dom':
         specifier: 19.3.0
         version: 19.3.0(@types/react@19.3.0)
+      '@weaver/config':
+        specifier: workspace:*
+        version: link:../config
       eslint:
         specifier: 10.13.0
         version: 10.13.0(jiti@2.7.0)
@@ -524,6 +527,12 @@ packages:
   '@aws-sdk/credential-provider-web-identity@3.972.81':
     resolution: {integrity: sha512-nHkgkMIC6NHgqfI6UAQq5cCS4bUkNxkT+r9fXCq/X4IKfX/DHGZ8UM3T4b78OXpWK5OlzEzN4kxwyax0W/MUCA==}
     engines: {node: '>=20.0.0'}
+
+  '@aws-sdk/lib-storage@3.1154.0':
+    resolution: {integrity: sha512-Ch2eaJcctexApZ3FewxloCe80D8osEjJAN9gUGxRMyHMLYtcaAwoA4mxIEnM41pPvBTss75BDZ7vgTORBoZxXQ==}
+    engines: {node: '>=20.0.0'}
+    peerDependencies:
+      '@aws-sdk/client-s3': ^3.1154.0
 
   '@aws-sdk/middleware-sdk-s3@3.972.80':
     resolution: {integrity: sha512-zX3lXN/9XOUAuGpxgt3wXwZrXhTjQYEgRsqa856PbZWpOtleUWmCMbhlkLfusPuhW24cOC/8JYR8hnRalrrIkQ==}
@@ -3529,6 +3538,9 @@ packages:
   buffer-from@1.1.2:
     resolution: {integrity: sha512-E+XQCRwSbaaiChtv6k6Dwgc+bx+Bs6vuKJHHl5kox/BaKbhiXzqQOwK4cO22yElGp2OCmjwVhT3HmxgyPGnJfQ==}
 
+  buffer@5.6.0:
+    resolution: {integrity: sha512-/gDYp/UtU0eA1ys8bOs9J6a+E/KWIY+DZ+Q2WESNUA0jFRsJOc0SNUO6xJ5SGA1xueg3NL65W6s+NY5l9cunuw==}
+
   buffer@5.7.1:
     resolution: {integrity: sha512-EHcyIPBQ4BSGlvjB16k5KgAJ27CIsHY/2JBmCRReo48y9rQ3MaUzWX3KVlBa4U7MyX02HdVj0K7C3WaB3ju7FQ==}
 
@@ -5787,6 +5799,9 @@ packages:
     resolution: {integrity: sha512-UhDfHmA92YAlNnCfhmq0VeNL5bDbiZGg7sZ2IvPsXubGkiNa9EC+tUTsjBRsYUAz87btI6/1wf4XoVvQ3uRnmQ==}
     engines: {node: '>=18'}
 
+  stream-browserify@3.0.0:
+    resolution: {integrity: sha512-H73RAHsVBapbim0tU2JwwOiXUj+fikfiaoYAKHF3VJfA0pe2BCzkhAHBlLG6REzE+2WNZcxOXjK7lkso+9euLA==}
+
   streamx@2.28.1:
     resolution: {integrity: sha512-zEzXb0s5Cds7tqMH6rhZ05lcJydCWiQPEwiNngVqzsxCc962vLY4Uw+mW7od8kDH258k2Uz/JrOkdIAAhSh9VA==}
 
@@ -6420,6 +6435,16 @@ snapshots:
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.36.0
       '@smithy/types': 4.19.0
+      tslib: 2.8.1
+
+  '@aws-sdk/lib-storage@3.1154.0(@aws-sdk/client-s3@3.1154.0)':
+    dependencies:
+      '@aws-sdk/client-s3': 3.1154.0
+      '@smithy/core': 3.36.0
+      '@smithy/types': 4.19.0
+      buffer: 5.6.0
+      events: 3.3.0
+      stream-browserify: 3.0.0
       tslib: 2.8.1
 
   '@aws-sdk/middleware-sdk-s3@3.972.80':
@@ -9016,6 +9041,11 @@ snapshots:
 
   buffer-from@1.1.2: {}
 
+  buffer@5.6.0:
+    dependencies:
+      base64-js: 1.5.1
+      ieee754: 1.2.1
+
   buffer@5.7.1:
     dependencies:
       base64-js: 1.5.1
@@ -11477,6 +11507,11 @@ snapshots:
   std-env@4.3.0: {}
 
   stdin-discarder@0.2.2: {}
+
+  stream-browserify@3.0.0:
+    dependencies:
+      inherits: 2.0.4
+      readable-stream: 3.6.2
 
   streamx@2.28.1:
     dependencies:

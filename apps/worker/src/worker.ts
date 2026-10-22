@@ -1,5 +1,5 @@
 import { UnrecoverableError, Worker, type ConnectionOptions } from "bullmq";
-import { applyCleanup, RegistryError, runAllCleanups, type BlobStore } from "@weaver/core";
+import { applyCleanup, RegistryError, runAllCleanups, type StoreSet } from "@weaver/core";
 import type { Db } from "@weaver/db";
 import {
   CLEANUP_QUEUE,
@@ -9,10 +9,10 @@ import {
   type CleanupJobResult,
 } from "@weaver/jobs";
 
-/** What the worker needs: the database, the blob store and the Valkey connection. */
+/** What the worker needs: the database, the object stores and the Valkey connection. */
 export interface WorkerDeps {
   db: Db;
-  blobs: BlobStore;
+  stores: StoreSet;
   connection: ConnectionOptions;
 }
 
@@ -28,9 +28,9 @@ export interface RunningWorker {
  */
 export async function processCleanupJob(deps: WorkerDeps, data: CleanupJobData): Promise<CleanupJobResult> {
   const now = new Date();
-  if (data.kind === "cleanup:all") return { deleted: await runAllCleanups(deps.db, deps.blobs, now) };
+  if (data.kind === "cleanup:all") return { deleted: await runAllCleanups(deps.db, deps.stores, now) };
   try {
-    return { deleted: (await applyCleanup(deps.db, deps.blobs, data.repository, now)).length };
+    return { deleted: (await applyCleanup(deps.db, deps.stores, data.repository, now)).length };
   } catch (error) {
     if (error instanceof RegistryError && error.code === "not_found") throw new UnrecoverableError(error.message);
     throw error;

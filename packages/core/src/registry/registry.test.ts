@@ -9,7 +9,7 @@ import { packArchive, type ProtoFile } from "../archive.js";
 import type { Coordinate } from "../coordinates.js";
 import type { RegistryError } from "../errors.js";
 import type { KeyPermission, Principal, Role } from "../permissions.js";
-import { createLocalStore, type BlobStore } from "../storage/index.js";
+import { createStoreSetFromEnv, getBuffer, type StoreSet } from "../storage/index.js";
 import { validateProtos } from "../validation.js";
 import { createRegistry, type Manifest, type Registry } from "./index.js";
 
@@ -50,7 +50,7 @@ async function expectError(promise: Promise<unknown>, code: string): Promise<Reg
 describe("registry", () => {
   let testDb: Awaited<ReturnType<typeof startTestDb>>;
   let blobDir: string;
-  let blobs: BlobStore;
+  let stores: StoreSet;
   let registry: Registry;
 
   const moneyFiles = [proto("acme/money/v1/money.proto", "message Money { int64 cents = 1; }")];
@@ -97,8 +97,8 @@ describe("registry", () => {
   beforeAll(async () => {
     testDb = await startTestDb();
     blobDir = await mkdtemp(join(tmpdir(), "weaver-registry-"));
-    blobs = createLocalStore(blobDir);
-    registry = createRegistry({ db: testDb.db, blobs });
+    stores = createStoreSetFromEnv({ STORAGE_DRIVER: "local", STORAGE_LOCAL_PATH: blobDir });
+    registry = createRegistry({ db: testDb.db, stores });
   }, 120_000);
 
   afterAll(async () => {
@@ -166,8 +166,8 @@ describe("registry", () => {
     expect(file).toContain("currency");
     const builds = await testDb.db.select().from(build);
     expect(builds).toHaveLength(1);
-    expect(await blobs.get(before!.storageKey)).toBeNull();
-    expect(await blobs.get(builds[0]!.storageKey)).not.toBeNull();
+    expect(await getBuffer(stores.primary, before!.storageKey)).toBeNull();
+    expect(await getBuffer(stores.primary, builds[0]!.storageKey)).not.toBeNull();
   });
 
   it("blocks redeploying a release that has dependents unless an admin forces it", async () => {
@@ -235,7 +235,7 @@ describe("registry", () => {
     const together = new Promise<void>((r) => (release = r));
     return createRegistry({
       db: testDb.db,
-      blobs,
+      stores,
       validate: async () => {
         if (++arrived === 2) release();
         await together;
@@ -335,7 +335,7 @@ describe("registry", () => {
       dependencyFiles,
       registry: createRegistry({
         db: testDb.db,
-        blobs,
+        stores,
         validate: async (input) => {
           dependencyFiles.push(input.dependencyFiles);
           return validateProtos(input);
@@ -496,7 +496,7 @@ describe("registry", () => {
     expect(keysAfter).toHaveLength(1);
     const removed = keysBefore.filter((k) => !keysAfter.includes(k));
     expect(removed).toHaveLength(1);
-    expect(await blobs.get(removed[0]!)).toBeNull();
+    expect(await getBuffer(stores.primary, removed[0]!)).toBeNull();
 
     // With its only dependent gone, money can be deleted too.
     await registry.deleteVersion(maintainer, "releases", coord("acme", "money", "1.0.0"));
