@@ -1,5 +1,7 @@
 import {
+  bodyEncoding,
   discardBody,
+  forwardableHeaders,
   RegistryError,
   UPSTREAM_TIMEOUT_MS,
   upstreamAuthorization,
@@ -9,15 +11,18 @@ import {
   type Repo,
 } from "@weaver/core";
 
-/** Client request headers never sent upstream: credentials, cookies and transport settings (`fetch` negotiates its own encoding). */
-const STRIPPED_REQUEST_HEADERS = ["accept-encoding", "authorization", "connection", "content-length", "cookie", "host", "proxy-authorization", "transfer-encoding"];
-
-/** Upstream response headers dropped: they describe the encoded transfer `fetch` already decoded, the connection, or upstream cookies. */
-const STRIPPED_RESPONSE_HEADERS = ["content-encoding", "content-length", "transfer-encoding", "connection", "keep-alive", "set-cookie"];
+/**
+ * The only client request headers sent upstream. Everything else (credentials, cookies, proxy and client-address
+ * headers, one-time passwords, `x-weaver-*`) stays here; `fetch` negotiates its own transfer encoding.
+ */
+const FORWARDED_REQUEST_HEADERS = ["accept", "content-type", "user-agent", "npm-command", "npm-session", "npm-scope", "npm-in-ci"];
 
 /**
  * Forwards one request to the mirror's upstreams in order (first non-404 wins), 30 s header timeout, upstream auth applied.
- * Returns null when offline or every upstream answered 404. Strips content-encoding, content-length, transfer-encoding, connection.
+ * Returns null when offline or every upstream answered 404. Only the allow-listed client headers (accept, content-type,
+ * user-agent, npm-command, npm-session, npm-scope, npm-in-ci) are sent. Response headers are filtered with core's
+ * `forwardableHeaders`: hop-by-hop headers are dropped, and content-encoding/content-length only when `fetch`
+ * decoded the body, so a body it could not decode keeps its encoding header.
  *
  * Network errors, timeouts, 5xx, 429, 401 and 403 count as failures and try the next upstream; when no upstream
  * answered usefully and at least one failed, this throws `RegistryError("upstream_unavailable")`, so an upstream
@@ -37,8 +42,11 @@ export async function forwardUpstream(
   const failures: string[] = [];
   for (const upstream of await deps.repos.upstreamsWithSecrets(repo.id)) {
     const url = `${upstreamUrl(upstream.url, path)}${query === "?" ? "" : query}`;
-    const headers = new Headers(init.headers);
-    for (const name of STRIPPED_REQUEST_HEADERS) headers.delete(name);
+    const headers = new Headers();
+    for (const name of FORWARDED_REQUEST_HEADERS) {
+      const value = init.headers.get(name);
+      if (value !== null) headers.set(name, value);
+    }
     const authorization = upstreamAuthorization(upstream);
     if (authorization !== null) headers.set("authorization", authorization);
     const controller = new AbortController();
@@ -67,8 +75,7 @@ export async function forwardUpstream(
       failures.push(`${url} answered ${response.status}`);
       continue;
     }
-    const out = new Headers(response.headers);
-    for (const name of STRIPPED_RESPONSE_HEADERS) out.delete(name);
+    const out = forwardableHeaders(response.headers, bodyEncoding(response.headers, method, response.status));
     return new Response(method === "HEAD" ? null : response.body, { status: response.status, headers: out });
   }
   if (failures.length === 0) return null;

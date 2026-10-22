@@ -23,6 +23,8 @@ let locked: Server;
 let lockedUrl: string;
 let lockedHits = 0;
 let lockedAuth: string | undefined;
+let echo: Server;
+let echoHeaders: Record<string, string | string[] | undefined> = {};
 const repos: Record<string, Repo> = {};
 
 /** Number of assets stored in `repo`. */
@@ -51,6 +53,19 @@ beforeAll(async () => {
   });
   await new Promise<void>((resolve) => locked.listen(0, "127.0.0.1", resolve));
   lockedUrl = `http://127.0.0.1:${(locked.address() as AddressInfo).port}`;
+  echo = createServer((req, res) => {
+    echoHeaders = req.headers;
+    req.resume();
+    res.writeHead(200, { "content-type": "application/octet-stream", "content-encoding": "x-weaver-unknown", "content-length": "5" });
+    res.end("plain");
+  });
+  await new Promise<void>((resolve) => echo.listen(0, "127.0.0.1", resolve));
+  repos["npm-echo"] = await h.createRepo({
+    name: "npm-echo",
+    format: "npm",
+    kind: "mirror",
+    upstreams: [{ url: `http://127.0.0.1:${(echo.address() as AddressInfo).port}`, authType: "none" }],
+  });
 
   const mirror = (name: string, url: string, config?: unknown) =>
     h.createRepo({ name, format: "npm", kind: "mirror", visibility: "public", upstreams: [{ url, authType: "none" }], config });
@@ -82,6 +97,7 @@ afterAll(async () => {
   await down?.close();
   await gzip?.close();
   await new Promise((resolve) => locked?.close(resolve));
+  await new Promise((resolve) => echo?.close(resolve));
 });
 
 describe("npm mirror", () => {
@@ -256,7 +272,6 @@ describe("forwardUpstream", () => {
     });
     expect(res).not.toBeNull();
     expect(res!.status).toBe(200);
-    expect(res!.headers.get("content-length")).toBeNull();
     const body = (await res!.json()) as { objects: Array<{ package: { name: string } }> };
     expect(body.objects.map((o) => o.package.name)).toEqual(["@acme/ui"]);
     expect(fake.hits.slice(before)).toEqual(["/-/v1/search?text=acme&size=5"]);
@@ -282,7 +297,51 @@ describe("forwardUpstream", () => {
   it("decodes gzip and drops the encoding headers", async () => {
     const res = await forwardUpstream(h.deps, repos["npm-gzip"]!, "-/v1/search", { method: "GET", headers: new Headers(), search: "text=left" });
     expect(res!.headers.get("content-encoding")).toBeNull();
+    expect(res!.headers.get("content-length")).toBeNull();
     expect(((await res!.json()) as { total: number }).total).toBe(1);
+  });
+
+  it("forwards only the allow-listed request headers", async () => {
+    const res = await forwardUpstream(h.deps, repos["npm-echo"]!, "-/v1/search", {
+      method: "GET",
+      headers: new Headers({
+        accept: "application/json",
+        "content-type": "application/json",
+        "user-agent": "npm/11.0.0",
+        "npm-command": "search",
+        "npm-session": "abc",
+        "npm-scope": "@acme",
+        "npm-in-ci": "false",
+        "x-forwarded-for": "10.0.0.1",
+        forwarded: "for=10.0.0.1",
+        "x-real-ip": "10.0.0.1",
+        "npm-otp": "123456",
+        referer: "search",
+        "x-weaver-trace": "t",
+        authorization: "Bearer client-token",
+        cookie: "a=b",
+      }),
+    });
+    await res!.arrayBuffer();
+    expect(echoHeaders).toMatchObject({
+      accept: "application/json",
+      "content-type": "application/json",
+      "user-agent": "npm/11.0.0",
+      "npm-command": "search",
+      "npm-session": "abc",
+      "npm-scope": "@acme",
+      "npm-in-ci": "false",
+    });
+    for (const name of ["x-forwarded-for", "forwarded", "x-real-ip", "npm-otp", "referer", "x-weaver-trace", "authorization", "cookie"]) {
+      expect(echoHeaders).not.toHaveProperty(name);
+    }
+  });
+
+  it("keeps the content-encoding of a body fetch could not decode", async () => {
+    const res = await forwardUpstream(h.deps, repos["npm-echo"]!, "-/v1/search", { method: "GET", headers: new Headers() });
+    expect(res!.headers.get("content-encoding")).toBe("x-weaver-unknown");
+    expect(res!.headers.get("content-length")).toBe("5");
+    expect(await res!.text()).toBe("plain");
   });
 
   it("returns null when every upstream answers 404 and when offline", async () => {
