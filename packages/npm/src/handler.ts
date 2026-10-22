@@ -12,6 +12,7 @@ import {
   unpublishPackage,
   type HostedContext,
 } from "./hosted.js";
+import { serveMirror } from "./mirror.js";
 import { parseNpmPath, type NpmRoute } from "./route.js";
 import { createNpmStore } from "./store.js";
 
@@ -63,7 +64,8 @@ async function serveHosted(ctx: HostedContext, route: NpmRoute, req: Request, me
 
 /**
  * Creates the handler of the `/npm` mount: parses the path, loads the repository (format `npm`, else 404), refuses
- * package writes to mirrors and groups with 405 before authentication, authorizes, then dispatches by route kind.
+ * package writes to mirrors and groups with 405 before authentication, authorizes, then dispatches by repository and
+ * route kind (hosted or mirror; groups answer 404 for now).
  */
 export const createNpmHandler: FormatFactory = (deps) => {
   const store = createNpmStore(deps.db);
@@ -84,6 +86,7 @@ export const createNpmHandler: FormatFactory = (deps) => {
 
       const principal = await deps.principal(req);
       authorize(principal, repo, read ? "read" : "write");
+      if (repo.kind === "mirror") return await serveMirror(deps, repo, principal, route, req);
       if (repo.kind !== "hosted") return npmError(404, "not found");
       return await serveHosted({ deps, store, repo, principal }, route, req, method);
     } catch (error) {
