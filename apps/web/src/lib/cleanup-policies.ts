@@ -1,10 +1,16 @@
 import { z } from "zod";
+import type { CleanupKind } from "@weaver/core/cleanup-kinds";
 import { isValidGroupPrefix } from "./names";
 
 /** The three kinds of cleanup rule a repository can have. */
 export const POLICY_KINDS = ["keep_last_snapshot_builds", "delete_stale_snapshots", "delete_not_downloaded"] as const;
 
 export type PolicyKind = (typeof POLICY_KINDS)[number];
+
+/** Whether `kind` is one of the {@link POLICY_KINDS} this form edits. */
+export function isPolicyKind(kind: CleanupKind): kind is PolicyKind {
+  return (POLICY_KINDS as readonly CleanupKind[]).includes(kind);
+}
 
 /** Labels and help text per kind, for the policy dialog. */
 export const POLICY_KIND_INFO: Record<PolicyKind, { title: string; description: string; unit: "builds" | "days" }> = {
@@ -30,8 +36,8 @@ export const POLICY_VALUE_MAX = 36_500;
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-/** One-line, human description of a rule, e.g. "Keep the last 5 builds of each snapshot". */
-export function describePolicy(policy: { kind: PolicyKind; value: number; includeReleases: boolean }): string {
+/** One-line, human description of a rule, e.g. "Keep the last 5 builds of each snapshot"; other kinds show their name. */
+export function describePolicy(policy: { kind: CleanupKind; value: number; includeReleases: boolean }): string {
   switch (policy.kind) {
     case "keep_last_snapshot_builds":
       return policy.value === 1
@@ -41,6 +47,8 @@ export function describePolicy(policy: { kind: PolicyKind; value: number; includ
       return `Delete snapshots not published to for ${plural(policy.value, "day")}`;
     case "delete_not_downloaded":
       return `Delete ${policy.includeReleases ? "snapshots and releases" : "snapshots"} not downloaded for ${plural(policy.value, "day")}`;
+    default:
+      return `${policy.kind} (${policy.value})`;
   }
 }
 

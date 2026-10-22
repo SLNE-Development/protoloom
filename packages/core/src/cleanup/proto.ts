@@ -1,28 +1,28 @@
-import { and, asc, eq, inArray, max } from "drizzle-orm";
-import { cleanupPolicy, protoArtifact, protoBuild, protoVersion, repository, type Db } from "@weaver/db";
-import { recordAudit } from "./audit.js";
-import { formatCoordinate, type Coordinate } from "./coordinates.js";
-import { RegistryError } from "./errors.js";
-import { groupMatches } from "./permissions.js";
-import { deleteBuildRow, deleteVersionRows, findVersionTarget, lockVersion } from "./registry/delete.js";
-import { deleteBlobLogged, findRepository, type BlobRef, type RepositoryRow } from "./registry/lookup.js";
-import { findDependents, type Dependent } from "./registry/read.js";
-import type { StoreSet } from "./storage/index.js";
+import { asc, eq, inArray, max } from "drizzle-orm";
+import { protoArtifact, protoBuild, protoVersion, type Db } from "@weaver/db";
+import { recordAudit } from "../audit.js";
+import { formatCoordinate, type Coordinate } from "../coordinates.js";
+import { groupMatches } from "../permissions.js";
+import { deleteBuildRow, deleteVersionRows, findVersionTarget, lockVersion } from "../registry/delete.js";
+import { deleteBlobLogged, type BlobRef } from "../registry/lookup.js";
+import { findDependents, type Dependent } from "../registry/read.js";
+import type { Repo } from "../repos/service.js";
+import type { StoreSet } from "../storage/index.js";
+import type { CleanupCandidate, CleanupPolicyRow, FormatCleanup } from "./types.js";
 
-/** Advisory lock key held by {@link runAllCleanups} so overlapping runs skip instead of racing. */
-const CLEANUP_LOCK_KEY = 727001;
 const DAY_MS = 86_400_000;
 
-/** One thing a cleanup run deletes: a single snapshot build, or a whole version when `buildNumber` is null. */
-export interface CleanupCandidate {
+/** The repository fields the proto cleanup needs. */
+type ProtoRepo = Pick<Repo, "id" | "name">;
+
+/** One thing a proto cleanup deletes: a single snapshot build, or a whole version when `buildNumber` is null. */
+interface ProtoCandidate {
   repository: string;
   coordinate: Coordinate;
   /** null = the whole version. */
   buildNumber: number | null;
   reason: string;
 }
-
-type PolicyRow = typeof cleanupPolicy.$inferSelect;
 
 interface VersionRow {
   versionId: string;
@@ -34,13 +34,13 @@ interface VersionRow {
 }
 
 /** A candidate plus the row state it was planned against, re-checked under the version lock. */
-interface PlannedCandidate extends CleanupCandidate {
+interface PlannedCandidate extends ProtoCandidate {
   updatedAt: Date;
 }
 
 const coordinateKey = (c: Coordinate) => formatCoordinate(c);
 
-function compareCandidates(a: CleanupCandidate, b: CleanupCandidate): number {
+function compareCandidates(a: ProtoCandidate, b: ProtoCandidate): number {
   const byCoordinate = coordinateKey(a.coordinate).localeCompare(coordinateKey(b.coordinate));
   if (byCoordinate !== 0) return byCoordinate;
   return (a.buildNumber ?? Number.MAX_SAFE_INTEGER) - (b.buildNumber ?? Number.MAX_SAFE_INTEGER);
@@ -94,7 +94,7 @@ async function loadBuildNumbers(db: Db, versionIds: string[]): Promise<Map<strin
 const cutoff = (now: Date, days: number) => new Date(now.getTime() - Math.max(1, days) * DAY_MS);
 
 /** Whole versions a single days-based rule targets, with the rule's reason. Releases only via an explicit `includeReleases`. */
-function wholeVersionTargets(policy: PolicyRow, versions: VersionRow[], now: Date): { v: VersionRow; reason: string }[] {
+function wholeVersionTargets(policy: CleanupPolicyRow, versions: VersionRow[], now: Date): { v: VersionRow; reason: string }[] {
   const before = cutoff(now, policy.value);
   switch (policy.kind) {
     case "delete_stale_snapshots":
@@ -105,9 +105,18 @@ function wholeVersionTargets(policy: PolicyRow, versions: VersionRow[], now: Dat
       return versions
         .filter((v) => (v.isSnapshot || policy.includeReleases) && (v.lastDownloadedAt ?? v.createdAt) < before)
         .map((v) => ({ v, reason: `not downloaded for ${policy.value} days` }));
-    default:
-      // keep_last_snapshot_builds plans builds, and the npm/docker kinds are not proto rules.
+    case "keep_last_snapshot_builds":
+      // Plans single builds, not whole versions; see planFor.
       return [];
+    case "keep_last_versions":
+    case "delete_untagged_manifests":
+    case "keep_last_tags":
+      // npm and docker kinds; the policy API never stores them on a proto repository.
+      return [];
+    default: {
+      const unknown: never = policy.kind;
+      throw new Error(`Unknown cleanup kind ${String(unknown)}`);
+    }
   }
 }
 
@@ -117,7 +126,7 @@ function wholeVersionTargets(policy: PolicyRow, versions: VersionRow[], now: Dat
  */
 async function excludeDepended(
   db: Db,
-  repo: RepositoryRow,
+  repo: ProtoRepo,
   wholes: Map<string, PlannedCandidate>,
 ): Promise<void> {
   const dependentsOf = new Map<string, Dependent[]>();
@@ -136,16 +145,16 @@ async function excludeDepended(
   }
 }
 
-async function planFor(db: Db, repo: RepositoryRow, now: Date): Promise<PlannedCandidate[]> {
-  const policies = await db
-    .select()
-    .from(cleanupPolicy)
-    .where(and(eq(cleanupPolicy.repositoryId, repo.id), eq(cleanupPolicy.enabled, true)))
-    .orderBy(asc(cleanupPolicy.createdAt), asc(cleanupPolicy.id));
+/**
+ * What `policies` would delete at `now`. Releases are only planned by a `delete_not_downloaded` rule
+ * with `includeReleases`; the newest build of a snapshot is never planned on its own; and a version
+ * that a retained version in any repository depends on is never planned.
+ */
+async function planFor(db: Db, repo: ProtoRepo, policies: CleanupPolicyRow[], now: Date): Promise<PlannedCandidate[]> {
   if (policies.length === 0) return [];
 
   const versions = await loadVersions(db, repo.id);
-  const inScope = (p: PolicyRow) => versions.filter((v) => groupMatches(p.groupPrefix, v.coordinate.group));
+  const inScope = (p: CleanupPolicyRow) => versions.filter((v) => groupMatches(p.groupPrefix, v.coordinate.group));
 
   const wholes = new Map<string, PlannedCandidate>();
   for (const policy of policies) {
@@ -185,36 +194,12 @@ async function planFor(db: Db, repo: RepositoryRow, now: Date): Promise<PlannedC
   return [...wholes.values(), ...builds].sort(compareCandidates);
 }
 
-async function requireRepository(db: Db, name: string): Promise<RepositoryRow> {
-  const repo = await findRepository(db, name);
-  if (!repo) throw new RegistryError("not_found", `Repository ${name} was not found`);
-  return repo;
-}
-
-const publicCandidate = ({ repository: r, coordinate, buildNumber, reason }: PlannedCandidate): CleanupCandidate => ({
-  repository: r,
-  coordinate,
-  buildNumber,
-  reason,
-});
-
-/**
- * Lists what the repository's enabled cleanup policies would delete at `now` (a dry run).
- * Releases are only planned by a `delete_not_downloaded` rule with `includeReleases`; the newest
- * build of a snapshot is never planned on its own; and a version that a retained version in any
- * repository depends on is never planned. Throws `not_found` for an unknown repository.
- */
-export async function planCleanup(db: Db, repositoryName: string, now: Date): Promise<CleanupCandidate[]> {
-  const repo = await requireRepository(db, repositoryName);
-  return (await planFor(db, repo, now)).map(publicCandidate);
-}
-
 /**
  * Deletes one planned candidate under its version lock, re-checking that the version was not
  * published again since planning and, for whole versions, that nothing depends on it now.
  * Returns the blobs to remove after commit, or null when the candidate was skipped.
  */
-async function applyOne(db: Db, repo: RepositoryRow, candidate: PlannedCandidate): Promise<BlobRef[] | null> {
+async function applyOne(db: Db, repo: ProtoRepo, candidate: PlannedCandidate): Promise<BlobRef[] | null> {
   return db.transaction(async (tx) => {
     await lockVersion(tx, repo.name, candidate.coordinate);
     const target = await findVersionTarget(tx, repo.id, candidate.coordinate);
@@ -241,22 +226,22 @@ async function applyOne(db: Db, repo: RepositoryRow, candidate: PlannedCandidate
 }
 
 /**
- * Runs the repository's cleanup policies: plans as {@link planCleanup}, then deletes each
- * candidate in its own transaction (rows, then blobs after commit) with a `cleanup.delete` audit
- * entry by the system. Dependents are deleted before what they depend on; a candidate that changed
- * since planning is skipped. Returns the candidates actually deleted.
+ * Plans as {@link planFor}, then deletes each candidate in its own transaction (rows, then blobs
+ * after commit) with a `cleanup.delete` audit entry by the system. Dependents are deleted before
+ * what they depend on; a candidate that changed since planning is skipped. Returns the candidates
+ * actually deleted.
  */
-export async function applyCleanup(
+async function applyFor(
   db: Db,
   stores: StoreSet,
-  repositoryName: string,
+  repo: ProtoRepo,
+  policies: CleanupPolicyRow[],
   now: Date,
-): Promise<CleanupCandidate[]> {
-  const repo = await requireRepository(db, repositoryName);
+): Promise<PlannedCandidate[]> {
   const applied: PlannedCandidate[] = [];
   // Whole versions blocked only by another candidate become deletable once that one is gone,
   // so retry them while each pass makes progress.
-  let pending = await planFor(db, repo, now);
+  let pending = await planFor(db, repo, policies, now);
   while (pending.length > 0) {
     const retry: PlannedCandidate[] = [];
     for (const candidate of pending) {
@@ -271,51 +256,33 @@ export async function applyCleanup(
     if (retry.length === pending.length) break;
     pending = retry;
   }
-  return applied.sort(compareCandidates).map(publicCandidate);
+  return applied.sort(compareCandidates);
+}
+
+/** A proto candidate as the runner reports it: key `proto:<coordinate>#<build|all>`, label `<coordinate>[ build <n>]`. */
+function toCleanupCandidate({ repository, coordinate, buildNumber, reason }: ProtoCandidate): CleanupCandidate {
+  const text = formatCoordinate(coordinate);
+  return {
+    repository,
+    key: `proto:${text}#${buildNumber ?? "all"}`,
+    label: buildNumber === null ? text : `${text} build ${buildNumber}`,
+    reason,
+  };
 }
 
 /**
- * Applies the cleanup policies of every repository that has an enabled policy and returns the
- * number of deletions. Holds the session advisory lock {@link CLEANUP_LOCK_KEY} for the run and
- * returns 0 at once when another run holds it. A failing repository does not stop the others;
- * its error is rethrown (aggregated) after the rest ran.
+ * The proto cleanup: `keep_last_snapshot_builds` deletes single snapshot builds, and
+ * `delete_stale_snapshots` / `delete_not_downloaded` delete whole versions (releases only with
+ * `includeReleases`), never one that a retained version in any repository depends on. When not a
+ * dry run, each deletion re-checks under the version lock that the version was not published again
+ * and gained no dependent since planning, and is audited as `cleanup.delete`.
  */
-export async function runAllCleanups(db: Db, stores: StoreSet, now: Date): Promise<number> {
-  const lockClient = await db.$client.connect();
-  // Set when unlocking fails: releasing with it destroys the connection, which drops the session lock.
-  let unlockError: Error | undefined;
-  try {
-    const { rows } = await lockClient.query<{ locked: boolean }>("select pg_try_advisory_lock($1) as locked", [
-      CLEANUP_LOCK_KEY,
-    ]);
-    if (!rows[0]?.locked) return 0;
-    try {
-      const repos = await db
-        .selectDistinct({ name: repository.name })
-        .from(repository)
-        .innerJoin(cleanupPolicy, eq(cleanupPolicy.repositoryId, repository.id))
-        .where(eq(cleanupPolicy.enabled, true))
-        .orderBy(asc(repository.name));
-      let deleted = 0;
-      const errors: unknown[] = [];
-      for (const { name } of repos) {
-        try {
-          deleted += (await applyCleanup(db, stores, name, now)).length;
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      if (errors.length > 0) throw new AggregateError(errors, `Cleanup failed for ${errors.length} repositories`);
-      return deleted;
-    } finally {
-      try {
-        await lockClient.query("select pg_advisory_unlock($1)", [CLEANUP_LOCK_KEY]);
-      } catch (error) {
-        unlockError = error instanceof Error ? error : new Error(String(error));
-        console.warn("weaver: releasing the cleanup lock failed; discarding its connection", unlockError);
-      }
-    }
-  } finally {
-    lockClient.release(unlockError);
-  }
-}
+export const protoCleanup: FormatCleanup = {
+  format: "proto",
+  async run(deps, repo, policies, now, opts) {
+    const candidates = opts.dryRun
+      ? await planFor(deps.db, repo, policies, now)
+      : await applyFor(deps.db, deps.stores, repo, policies, now);
+    return candidates.map(toCleanupCandidate);
+  },
+};

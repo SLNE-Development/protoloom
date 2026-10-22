@@ -14,7 +14,7 @@ import {
   repository,
 } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
-import { createStoreSetFromEnv, putBuffer, type StoreSet } from "@weaver/core";
+import { createStoreSetFromEnv, deriveSecretKey, putBuffer, type StoreSet } from "@weaver/core";
 import {
   createQueue,
   enqueueCleanup,
@@ -35,7 +35,12 @@ describe("worker", () => {
   const running: RunningWorker[] = [];
 
   async function start(): Promise<RunningWorker> {
-    const w = await startWorker({ db: testDb.db, stores, connection: redisConnection(valkey.getConnectionUrl()) });
+    const w = await startWorker({
+      db: testDb.db,
+      stores,
+      secretKey: deriveSecretKey("worker-test-secret"),
+      connection: redisConnection(valkey.getConnectionUrl()),
+    });
     running.push(w);
     return w;
   }
@@ -101,6 +106,29 @@ describe("worker", () => {
 
     const remaining = await testDb.db.select({ n: build.buildNumber }).from(build).orderBy(asc(build.buildNumber));
     expect(remaining.map((r) => r.n)).toEqual([3, 4]);
+  });
+
+  it("completes a cleanup:repo job for a proto repo with keep_last_snapshot_builds 1 and 3 builds", async () => {
+    const [repo] = await testDb.db.insert(repository).values({ name: "protos", format: "proto", kind: "hosted" }).returning();
+    await testDb.db.insert(cleanupPolicy).values({ repositoryId: repo!.id, kind: "keep_last_snapshot_builds", value: 1 });
+    const [art] = await testDb.db.insert(artifact).values({ repositoryId: repo!.id, group: "acme", name: "order" }).returning();
+    const [ver] = await testDb.db
+      .insert(version)
+      .values({ artifactId: art!.id, version: "2.0.0-SNAPSHOT", isSnapshot: true })
+      .returning();
+    for (let n = 1; n <= 3; n++) {
+      const storageKey = `protos/acme/order/2.0.0-SNAPSHOT/${randomUUID()}.tar.gz`;
+      await putBuffer(stores.primary, storageKey, Buffer.from(`build ${n}`));
+      await testDb.db
+        .insert(build)
+        .values({ versionId: ver!.id, buildNumber: n, store: stores.primary.id, storageKey, sha256: "0".repeat(64), sizeBytes: 7 });
+    }
+
+    await start();
+    const jobId = await enqueueCleanup(queue, "protos");
+    expect(await waitForFinish(jobId)).toEqual({ state: "completed", result: { deleted: 2 }, failedReason: null });
+    const remaining = await testDb.db.select({ n: build.buildNumber }).from(build);
+    expect(remaining.map((r) => r.n)).toEqual([3]);
   });
 
   it("registers one daily cleanup and one hourly eviction scheduler when started twice", async () => {

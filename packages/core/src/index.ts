@@ -8,7 +8,7 @@ export * from "./archive.js";
 export * from "./validation.js";
 export * from "./registry/index.js";
 export * from "./audit.js";
-export * from "./cleanup.js";
+export * from "./cleanup/index.js";
 export * from "./settings.js";
 export * from "./crypto.js";
 export * from "./repos/index.js";

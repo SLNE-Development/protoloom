@@ -22,7 +22,7 @@ import { Skeleton } from "@weaver/ui/components/skeleton";
 import { Spinner } from "@weaver/ui/components/spinner";
 import { Switch } from "@weaver/ui/components/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@weaver/ui/components/table";
-import { describePolicy, toPolicyInput, type PolicyFormValues } from "@/lib/cleanup-policies";
+import { describePolicy, isPolicyKind, POLICY_KINDS, toPolicyInput, type PolicyFormValues } from "@/lib/cleanup-policies";
 import { errorMessage, runNowErrorMessage } from "@/lib/trpc-error";
 import { useTRPC, type RouterOutputs } from "@/trpc/client";
 import { PolicyDialog } from "./policy-dialog";
@@ -30,7 +30,8 @@ import { PolicyDialog } from "./policy-dialog";
 type Policy = RouterOutputs["policies"]["list"][number];
 
 const toFormValues = (p: Policy): PolicyFormValues => ({
-  kind: p.kind,
+  // Proto repositories only store the form's kinds; the fallback only keeps the type honest.
+  kind: isPolicyKind(p.kind) ? p.kind : POLICY_KINDS[0],
   value: p.value,
   groupPrefix: p.groupPrefix ?? "",
   includeReleases: p.includeReleases,
@@ -237,22 +238,14 @@ function PreviewDialog({ repository, open, onOpenChange }: { repository: string;
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="pl-3">Coordinate</TableHead>
-                      <TableHead>Deletes</TableHead>
+                      <TableHead className="pl-3">Deletes</TableHead>
                       <TableHead className="pr-3">Reason</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {preview.data.map((item) => (
-                      <TableRow key={`${item.coordinate}#${item.buildNumber ?? "all"}`}>
-                        <TableCell className="pl-3 font-mono text-xs">{item.coordinate}</TableCell>
-                        <TableCell className="text-xs">
-                          {item.buildNumber === null ? (
-                            <span className="font-medium text-destructive">whole version</span>
-                          ) : (
-                            <span className="font-mono">build #{item.buildNumber}</span>
-                          )}
-                        </TableCell>
+                      <TableRow key={item.key}>
+                        <TableCell className="pl-3 font-mono text-xs">{item.label}</TableCell>
                         <TableCell className="pr-3 text-xs text-muted-foreground">{item.reason}</TableCell>
                       </TableRow>
                     ))}

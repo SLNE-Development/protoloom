@@ -735,8 +735,16 @@ describe("policies", () => {
 
     const candidates = await caller.policies.preview({ repository: "shared" });
     expect(candidates).toEqual([
-      expect.objectContaining({ repository: "shared", coordinate: "acme:money:1.0.0-SNAPSHOT", buildNumber: 1 }),
-      expect.objectContaining({ repository: "shared", coordinate: "acme:money:1.0.0-SNAPSHOT", buildNumber: 2 }),
+      expect.objectContaining({
+        repository: "shared",
+        key: "proto:acme:money:1.0.0-SNAPSHOT#1",
+        label: "acme:money:1.0.0-SNAPSHOT build 1",
+      }),
+      expect.objectContaining({
+        repository: "shared",
+        key: "proto:acme:money:1.0.0-SNAPSHOT#2",
+        label: "acme:money:1.0.0-SNAPSHOT build 2",
+      }),
     ]);
     expect(await db.select().from(build)).toHaveLength(3);
   });
