@@ -105,12 +105,12 @@ export async function serveVersion(ctx: HostedContext, name: PackageName, spec: 
 }
 
 /** `GET/HEAD <name>/-/<file>`: streams a hosted tarball; GET records a download. */
-export async function serveTarball(ctx: HostedContext, name: PackageName, file: string, req: Request): Promise<Response> {
+export async function serveTarball(ctx: HostedContext, name: PackageName, file: string, method: "GET" | "HEAD"): Promise<Response> {
   const path = tarballPath(name, file);
   const row = await ctx.deps.assets.find(ctx.repo.id, path);
   if (!row || row.origin !== "hosted") return npmError(404, "not found");
   const headers = { "content-type": "application/octet-stream", "content-length": String(row.size) };
-  if (req.method.toUpperCase() === "HEAD") return new Response(null, { status: 200, headers });
+  if (method === "HEAD") return new Response(null, { status: 200, headers });
   const read = await ctx.deps.assets.open(row);
   if (!read) return npmError(404, "not found");
   await ctx.deps.usage({ repositoryId: ctx.repo.id, assetId: row.id, path, action: "download", bytes: row.size, principal: ctx.principal });

@@ -161,8 +161,8 @@ function forMethod(method: string, res: Response): Response {
   return method === "HEAD" ? new Response(null, { status: res.status, headers: res.headers }) : res;
 }
 
-/** Streams a mirrored tarball to the client; a GET records a download with the engine's cache result. */
-async function serveMirrorTarball(deps: FormatDeps, repo: Repo, principal: Principal, name: PackageName, file: string, method: "GET" | "HEAD"): Promise<Response> {
+/** Streams a mirrored tarball to the client (404 when the mirror has none); a GET records a download with the engine's cache result. */
+export async function serveMirrorTarball(deps: FormatDeps, repo: Repo, principal: Principal, name: PackageName, file: string, method: "GET" | "HEAD"): Promise<Response> {
   const res = await mirrorTarball(deps, repo, name, file, method);
   if (res === null) return npmError(404, "not found");
   const headers = new Headers();
