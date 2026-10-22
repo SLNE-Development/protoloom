@@ -14,3 +14,13 @@ export {
 } from "./auth/jwt.js";
 export { handleToken, grantAccess } from "./auth/token-endpoint.js";
 export { challenge, identify, requireAccess, type Caller } from "./auth/authorize.js";
+export {
+  deleteHostedBlob,
+  findLinkedBlob,
+  linkBlob,
+  serveHostedBlob,
+  type BlobRef,
+  type HostedCtx,
+} from "./hosted/blobs.js";
+export { cancelUpload, finishUpload, patchUpload, startUpload, uploadStatus } from "./hosted/uploads.js";
+export { appendToSpool } from "./hosted/spool.js";

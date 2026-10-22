@@ -110,7 +110,10 @@ export const dockerManifestRef = pgTable(
     size: bigint("size", { mode: "number" }).notNull(),
     position: integer("position").notNull(),
   },
-  (t) => [primaryKey({ columns: [t.manifestId, t.digest] })],
+  (t) => [
+    primaryKey({ columns: [t.manifestId, t.digest] }),
+    index("docker_manifest_ref_digest_idx").on(t.digest),
+  ],
 );
 
 /** A mutable tag pointing at a manifest of an image. */
@@ -128,17 +131,24 @@ export const dockerTag = pgTable(
     updatedAt: updatedAt(),
     lastPulledAt: timestamp("last_pulled_at", { withTimezone: true }),
   },
-  (t) => [primaryKey({ columns: [t.repositoryId, t.image, t.tag] })],
+  (t) => [
+    primaryKey({ columns: [t.repositoryId, t.image, t.tag] }),
+    index("docker_tag_manifest_id_idx").on(t.manifestId),
+  ],
 );
 
 /** An in-progress chunked blob upload; `offset` is the number of bytes received so far. */
-export const dockerUpload = pgTable("docker_upload", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  repositoryId: uuid("repository_id")
-    .notNull()
-    .references(() => repository.id, { onDelete: "cascade" }),
-  image: text("image").notNull(),
-  offset: bigint("offset", { mode: "number" }).notNull().default(0),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
-});
+export const dockerUpload = pgTable(
+  "docker_upload",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    repositoryId: uuid("repository_id")
+      .notNull()
+      .references(() => repository.id, { onDelete: "cascade" }),
+    image: text("image").notNull(),
+    offset: bigint("offset", { mode: "number" }).notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("docker_upload_updated_at_idx").on(t.updatedAt)],
+);
