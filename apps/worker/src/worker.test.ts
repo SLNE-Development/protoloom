@@ -8,6 +8,8 @@ import { asc, eq, sql } from "drizzle-orm";
 import {
   asset,
   cleanupPolicy,
+  dockerBlob,
+  dockerUpload,
   npmLoginSession,
   protoArtifact as artifact,
   protoBuild as build,
@@ -75,7 +77,7 @@ describe("worker", () => {
 
   beforeEach(async () => {
     await queue.obliterate({ force: true });
-    await testDb.db.execute(sql`TRUNCATE repository, audit_event CASCADE`);
+    await testDb.db.execute(sql`TRUNCATE repository, audit_event, docker_blob CASCADE`);
   });
 
   afterEach(async () => {
@@ -132,17 +134,18 @@ describe("worker", () => {
     expect(remaining.map((r) => r.n)).toEqual([3]);
   });
 
-  it("registers the daily cleanup, hourly eviction and npm login sweep schedulers once when started twice", async () => {
+  it("registers the daily cleanup, hourly eviction, npm login sweep and docker gc schedulers once when started twice", async () => {
     await start();
     await start();
 
     const schedulers = await queue.getJobSchedulers();
-    expect(schedulers).toHaveLength(3);
+    expect(schedulers).toHaveLength(4);
     expect(schedulers).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: "cleanup-daily", pattern: "0 3 * * *" }),
         expect.objectContaining({ key: "evict-hourly", pattern: "17 * * * *" }),
         expect.objectContaining({ key: "npm-login-sweep", pattern: "*/5 * * * *" }),
+        expect.objectContaining({ key: "docker-gc-daily", pattern: "30 3 * * *" }),
       ]),
     );
   });
@@ -193,11 +196,29 @@ describe("worker", () => {
     expect((await testDb.db.select({ id: npmLoginSession.id }).from(npmLoginSession)).map((r) => r.id)).toEqual(["live"]);
   });
 
-  it("completes a docker:gc job as a no-op until the docker format handles it", async () => {
+  it('a docker:gc job runs runDockerGc and docker-gc-daily is scheduled at "30 3 * * *"', async () => {
+    const [repo] = await testDb.db.insert(repository).values({ name: "images", format: "docker", kind: "hosted" }).returning();
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    const storageKey = `docker/blobs/sha256/ab/${randomUUID()}`;
+    await putBuffer(stores.primary, storageKey, Buffer.from("layer"));
+    await testDb.db
+      .insert(dockerBlob)
+      .values({ store: stores.primary.id, digest: `sha256:${"ab".repeat(32)}`, size: 5, storageKey, lastLinkedAt: old });
+    await testDb.db.insert(dockerUpload).values({ repositoryId: repo!.id, image: "app", updatedAt: old });
+
     await start();
+    const schedulers = await queue.getJobSchedulers();
+    expect(schedulers).toEqual(expect.arrayContaining([expect.objectContaining({ key: "docker-gc-daily", pattern: "30 3 * * *" })]));
     const job = await queue.add("docker:gc", { kind: "docker:gc" });
     const status = await waitForFinish(job.id!);
-    expect(status.state).toBe("completed");
+
+    expect(status).toEqual({
+      state: "completed",
+      result: { linksDeleted: 0, blobsDeleted: 1, bytesFreed: 5, uploadsDeleted: 1 },
+      failedReason: null,
+    });
+    expect(await testDb.db.select().from(dockerBlob)).toHaveLength(0);
+    expect(await stores.primary.head(storageKey)).toBeNull();
   });
 
   it("fails a job for an unknown repository at once instead of retrying it", { timeout: 60_000 }, async () => {

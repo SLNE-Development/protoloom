@@ -8,6 +8,7 @@ import { DockerError } from "../errors.js";
 import { isDigest } from "../media-types.js";
 import { resolveTarget, type Target } from "../target.js";
 import { API_VERSION, findLinkedBlob, linkBlob, type BlobRef, type HostedCtx } from "./blobs.js";
+import { maybeSweepUploads } from "../sweep.js";
 import { SpoolError, SpoolOffsetError, appendToSpool, createSpool, removeSpool, spoolPath } from "./spool.js";
 
 /** Tail of the operation chain per upload id: one upload is worked on by one request at a time. */
@@ -135,7 +136,7 @@ async function hashFile(path: string, algorithm: string): Promise<string> {
 
 /**
  * Turns the spool of upload `id` (holding `size` bytes) into the blob `digest` of the primary store and
- * links it into the target image. A blob row that already exists is reused after hashing the spool;
+ * links it into the target image. A blob row that already exists is reused (its `lastLinkedAt` touched) after hashing the spool;
  * otherwise the spool is streamed into `docker/blobs/<alg>/<hex[0..2]>/<hex>-<id>` and the row upserted,
  * deleting our object when a concurrent upload won. A mismatch is `400 DIGEST_INVALID` and keeps the upload.
  */
@@ -145,10 +146,12 @@ async function finalize(ctx: HostedCtx, id: string, digest: string, size: number
   const store = deps.stores.primary;
   const path = spoolPath(ctx.opts.uploadDir, id);
 
+  // Touching `last_linked_at` here keeps garbage collection from deleting the row before it is linked again.
   const [existing] = await deps.db
-    .select()
-    .from(dockerBlob)
-    .where(and(eq(dockerBlob.store, store.id), eq(dockerBlob.digest, digest)));
+    .update(dockerBlob)
+    .set({ lastLinkedAt: sql`now()` })
+    .where(and(eq(dockerBlob.store, store.id), eq(dockerBlob.digest, digest)))
+    .returning();
   let blob: BlobRef;
   if (existing) {
     if ((await hashFile(path, algorithm)) !== hex) throw digestInvalid(digest);
@@ -212,7 +215,8 @@ async function tryMount(ctx: HostedCtx, digest: string, from: string): Promise<R
 
 /**
  * `POST .../blobs/uploads/`: mounts with `?mount=&from=` when allowed, stores a monolithic upload with
- * `?digest=` and a body (`201`), and otherwise opens an upload session (`202`).
+ * `?digest=` and a body (`201`), and otherwise opens an upload session (`202`). Before a new upload the
+ * upload directory is swept of stale spool files, at most every ten minutes per process.
  */
 export async function startUpload(ctx: HostedCtx, req: Request): Promise<Response> {
   const { deps, target } = ctx;
@@ -226,6 +230,7 @@ export async function startUpload(ctx: HostedCtx, req: Request): Promise<Respons
   const digest = params.get("digest");
   if (digest !== null && !isDigest(digest)) throw digestInvalid(digest);
 
+  await maybeSweepUploads(deps.db, ctx.opts.uploadDir);
   const id = randomUUID();
   await createSpool(spoolPath(ctx.opts.uploadDir, id));
   await deps.db.insert(dockerUpload).values({ id, repositoryId: target.repo.id, image: target.image });
