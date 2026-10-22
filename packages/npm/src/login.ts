@@ -47,11 +47,12 @@ function randomToken(): string {
 }
 
 /**
- * The client address of a request: the first `x-forwarded-for` entry (set by the reverse proxy in front of Weaver),
+ * The client address of a request: the rightmost `x-forwarded-for` entry (the one appended by the reverse proxy directly in front of Weaver; earlier
+ * entries are client-controlled),
  * else `remote` (the socket address, where the runtime exposes one), else null. At most 64 characters.
  */
 export function requestIp(headers: Headers, remote: string | null = null): string | null {
-  const first = headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  const first = headers.get("x-forwarded-for")?.split(",").at(-1)?.trim();
   const ip = first || remote?.trim() || null;
   return ip ? ip.slice(0, 64) : null;
 }
