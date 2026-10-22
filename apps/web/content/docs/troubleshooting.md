@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Fix the common failures, including 401 and 403 from Gradle or the CLI, invites that don't work, OAuth callback mismatches and storage errors.
+description: Fix the common failures, including 401 and 403, 413 from a proxy, Docker without TLS, 502 from mirrors, invites that don't work, OAuth callback mismatches and storage errors.
 section: Help
 order: 1
 ---
@@ -68,16 +68,37 @@ Gradle couldn't find a URL. Set `WEAVER_URL={{url}}`, or `weaver { url = "…" }
 
 Mirrors forward requests to each other and the hop count (`x-weaver-hops`) passed 4. Weaver then answers `404 not_found` with the message `Mirror loop detected`, so clients report the artifact as missing. Check the upstream URLs for a cycle, such as A mirroring B while B mirrors A, and point one of them at a hosted repository.
 
-### upstream_unavailable
+### 502 upstream_unavailable
 
-`upstream_unavailable: Upstream of <mirror> did not answer` (Gradle) or `error: Upstream of <mirror> did not answer` (CLI), with HTTP status `502`. The mirror's upstream is down, unreachable or answered with an error, and the mirror has no cached copy. Check the upstream URL and token in the mirror's settings and that the other instance is up. Turn on caching to keep serving what was fetched once.
+A mirror answers HTTP `502` when no upstream gave a usable answer (network errors, timeouts, `5xx` or `429`) and it has no cached copy. A Docker mirror whose upstreams only answered `429` passes that on as `429 TOOMANYREQUESTS` instead. With caching on, content the mirror already cached is still served, even after its metadata TTL expired.
+
+The Gradle plugin prints `upstream_unavailable: Upstream of <mirror> did not answer`, the `weaver` CLI `error: Upstream of <mirror> did not answer`. Maven, npm and Docker clients report the HTTP status `502` (Docker with the code `UNAVAILABLE`).
+
+Check the upstream URL and credentials in the mirror's settings, and that the upstream is up. Turn on caching to keep serving what was fetched once. A group answers `502` too when a member failed and no other member has the item, because the item may exist on the member that could not answer.
 
 ### Other mirror and group messages
 
 | Message | Cause | Fix |
 | --- | --- | --- |
 | `method_not_allowed` when publishing | The target is a group or a mirror, which are read only. | Publish to a hosted repository. |
+| `npm ERR! code E405` (newer npm: `npm error code E405`) on `npm publish` | The registry in `.npmrc` or `publishConfig` is a group or a mirror. | Publish to a hosted repository: set `publishConfig.registry` to `{{url}}/npm/<hosted repo>/`. See [npm](/docs/npm#publish-dist-tags-deprecate-and-unpublish). |
+| `405` from `mvn deploy` or Gradle `publish` | The repository URL is a group or a mirror. | Deploy to a hosted repository. See [Maven and Gradle](/docs/maven#errors). |
 | `validation_failed: Dependency not found: …` although a mirror has it | Publishing never consults mirrors. | Publish the dependency into a hosted repository first. |
+
+## Uploads and the reverse proxy
+
+### 413 Request Entity Too Large
+
+`docker push` retries and fails, `mvn deploy` reports `status code: 413`, or `npm publish` fails with `E413`. The `413` comes from your reverse proxy, not from Weaver: its request body limit is smaller than the upload. nginx allows 1 MB by default and Cloudflare 100 MB.
+
+- nginx: set `client_max_body_size 0;` and `proxy_request_buffering off;`.
+- Cloudflare: push large Docker layers through a DNS-only (unproxied) hostname.
+
+See [Put a reverse proxy in front](/docs/self-host/compose#put-a-reverse-proxy-in-front). An npm publish is also limited by Weaver itself to 256 MiB per request.
+
+### http: server gave HTTP response to HTTPS client
+
+Docker, podman or containerd talk to a registry over HTTPS only, except on `localhost`, and Weaver answered on plain http. Put an https reverse proxy in front of Weaver, or add the host to `insecure-registries` in `/etc/docker/daemon.json` on every client and restart the daemon. A plain-http entry in `registry-mirrors` needs the same `insecure-registries` entry. See [Docker needs HTTPS](/docs/self-host/compose#docker-needs-https).
 
 ## Invite not working
 
