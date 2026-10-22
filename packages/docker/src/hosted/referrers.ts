@@ -1,7 +1,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import { dockerManifest, type Db } from "@weaver/db";
 import type { Descriptor } from "../manifest-parse.js";
-import { API_VERSION, type HostedCtx } from "./blobs.js";
+import { API_VERSION, type HostedReadCtx } from "./blobs.js";
 
 /** The media type of a referrers response. */
 const OCI_INDEX = "application/vnd.oci.image.index.v1+json";
@@ -48,7 +48,7 @@ export async function listReferrers(
  * `GET .../referrers/<digest>?artifactType=`: an OCI image index of the manifests referring to `digest`
  * (empty when none, never 404), with `OCI-Filters-Applied: artifactType` when filtered.
  */
-export async function serveReferrers(ctx: HostedCtx, req: Request, digest: string): Promise<Response> {
+export async function serveReferrers(ctx: HostedReadCtx, req: Request, digest: string): Promise<Response> {
   const { deps, target } = ctx;
   const artifactType = new URL(req.url).searchParams.get("artifactType") || null;
   const manifests = await listReferrers(deps.db, target.repo.id, target.image, digest, artifactType);

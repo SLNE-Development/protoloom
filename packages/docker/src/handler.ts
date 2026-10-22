@@ -5,6 +5,7 @@ import { challenge, identify, requireAccess, scopeChallenge, scopeFor } from "./
 import type { DockerAction } from "./auth/jwt.js";
 import { handleToken } from "./auth/token-endpoint.js";
 import { DockerError, errorResponse } from "./errors.js";
+import { fromGroup, type GroupOp } from "./group.js";
 import { deleteHostedBlob, serveHostedBlob, type HostedCtx } from "./hosted/blobs.js";
 import { blobUnknown } from "./hosted/blobs.js";
 import { deleteManifest, manifestUnknown, putManifest, serveManifest } from "./hosted/manifests.js";
@@ -145,16 +146,38 @@ function notFound(route: NamedRoute): DockerError {
   }
 }
 
-/** Serves the read routes of a mirror repository (writes were refused by `requireAccess`). */
-async function dispatchMirror(ctx: MirrorCtx, req: Request, route: NamedRoute): Promise<Response> {
-  const { method } = req;
+/** The group operation and its argument for a read route, or null when the route and method are not a read. */
+function readOf(method: string, route: NamedRoute): { op: GroupOp; arg: string } | null {
   const read = method === "GET" || method === "HEAD";
-  let served: Response | null;
-  if (route.kind === "manifest" && read) served = await mirrorManifest(ctx, req, route.reference);
-  else if (route.kind === "blob" && read) served = await mirrorBlob(ctx, req, route.digest);
-  else if (route.kind === "tags" && method === "GET") served = await mirrorTags(ctx, req);
-  else if (route.kind === "referrers" && method === "GET") served = await mirrorReferrers(ctx, req, route.digest);
-  else throw methodNotAllowed(method);
+  if (route.kind === "manifest" && read) return { op: "manifest", arg: route.reference };
+  if (route.kind === "blob" && read) return { op: "blob", arg: route.digest };
+  if (route.kind === "tags" && method === "GET") return { op: "tags", arg: "" };
+  if (route.kind === "referrers" && method === "GET") return { op: "referrers", arg: route.digest };
+  return null;
+}
+
+/** Serves one read of a mirror repository. */
+function fromMirror(ctx: MirrorCtx, op: GroupOp, req: Request, arg: string): Promise<Response | null> {
+  switch (op) {
+    case "manifest":
+      return mirrorManifest(ctx, req, arg);
+    case "blob":
+      return mirrorBlob(ctx, req, arg);
+    case "tags":
+      return mirrorTags(ctx, req);
+    case "referrers":
+      return mirrorReferrers(ctx, req, arg);
+  }
+}
+
+/** Serves the read routes of a mirror or group repository (writes were refused by `requireAccess`); a miss is the route's `404`. */
+async function dispatchReadOnly(ctx: MirrorCtx, req: Request, route: NamedRoute): Promise<Response> {
+  const read = readOf(req.method, route);
+  if (!read) throw methodNotAllowed(req.method);
+  const served =
+    ctx.target.repo.kind === "group"
+      ? await fromGroup(ctx, read.op, req, read.arg)
+      : await fromMirror(ctx, read.op, req, read.arg);
   if (!served) throw notFound(route);
   return served;
 }
@@ -199,9 +222,9 @@ export function createDockerHandlerWith(deps: FormatDeps, opts: DockerOptions): 
     if (target.repo.kind === "hosted") {
       const served = dispatchHosted({ deps, opts, caller, target }, req, route);
       if (served) return served;
+      throw methodNotAllowed(req.method);
     }
-    if (target.repo.kind === "mirror") return dispatchMirror({ deps, caller, target, hub }, req, route);
-    throw new DockerError(501, "UNSUPPORTED", `${route.kind} is not implemented yet`);
+    return dispatchReadOnly({ deps, caller, target, hub }, req, route);
   }
 
   return async (req, rest) => {

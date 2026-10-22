@@ -21,8 +21,10 @@ export {
   serveHostedBlob,
   type BlobRef,
   type HostedCtx,
+  type HostedReadCtx,
 } from "./hosted/blobs.js";
 export { cancelUpload, finishUpload, patchUpload, startUpload, uploadStatus } from "./hosted/uploads.js";
 export { appendToSpool } from "./hosted/spool.js";
 export { createHubAuth, parseChallenge, type BearerChallenge, type HubAuth } from "./mirror/hub-auth.js";
 export { mirrorBlob, mirrorManifest, mirrorReferrers, mirrorTags, upstreamImage, type MirrorCtx } from "./mirror/mirror.js";
+export { fromGroup, type GroupCtx, type GroupOp } from "./group.js";
