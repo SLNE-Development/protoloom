@@ -1,4 +1,4 @@
-import { createBlobStoreFromEnv, createRegistry, type BlobStore, type Registry } from "@weaver/core";
+import { createBlobStoreFromEnv, createRegistry, deriveSecretKey, type BlobStore, type Registry } from "@weaver/core";
 import { createDb, type Db } from "@weaver/db";
 import { env } from "../env";
 import { createAuth, type Auth } from "./auth";
@@ -10,6 +10,8 @@ export interface ServerContext {
   auth: Auth;
   /** The registry service over `db` and `blobs`. */
   registry: Registry;
+  /** AES key for upstream credentials, derived once from `BETTER_AUTH_SECRET`. */
+  secretKey: Buffer;
 }
 
 // Kept on globalThis so dev-mode module reloads reuse the same pool instead of leaking one per reload.
@@ -28,6 +30,7 @@ export function getServerContext(): ServerContext {
       blobs,
       auth: createAuth(db),
       registry: createRegistry({ db, blobs }),
+      secretKey: deriveSecretKey(env.BETTER_AUTH_SECRET),
     };
   }
   return globalForContext.__weaverServerContext;

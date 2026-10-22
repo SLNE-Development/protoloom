@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
-import { createLocalStore, createRegistry, packArchive, RegistryError, type ProtoFile } from "@weaver/core";
+import { createLocalStore, createRegistry, deriveSecretKey, packArchive, RegistryError, type ProtoFile } from "@weaver/core";
 import { apiKeyPermission, repository, user, type Db } from "@weaver/db";
 import { startTestDb } from "@weaver/db/testing";
 import { createAuth, type Auth, type AuthEnv } from "@/server/auth";
@@ -121,7 +121,7 @@ beforeAll(async () => {
   auth = createAuth(db, authEnv);
   blobDir = await mkdtemp(join(tmpdir(), "weaver-api-"));
   const blobs = createLocalStore(blobDir);
-  holder.ctx = { db, blobs, auth, registry: createRegistry({ db, blobs }) };
+  holder.ctx = { db, blobs, auth, registry: createRegistry({ db, blobs }), secretKey: deriveSecretKey(authEnv.BETTER_AUTH_SECRET) };
   keys.maintainer = await createKey("maintainer", [
     { repository: "releases", access: "write" },
     { repository: "private", access: "write" },

@@ -1,4 +1,4 @@
-import { createBlobStoreFromEnv } from "@weaver/core";
+import { createBlobStoreFromEnv, deriveSecretKey } from "@weaver/core";
 import { createDb } from "@weaver/db";
 import { redisConnection } from "@weaver/jobs";
 import { loadEnv } from "./env.js";
@@ -7,6 +7,8 @@ import { startWorker } from "./worker.js";
 const env = loadEnv(process.env);
 const db = createDb(env.DATABASE_URL);
 const blobs = createBlobStoreFromEnv(env);
+// Derived once at startup; nothing consumes it yet (upstream credential decryption lands with mirror repos).
+export const secretKey = deriveSecretKey(env.BETTER_AUTH_SECRET);
 const running = await startWorker({ db, blobs, connection: redisConnection(env.VALKEY_URL) });
 console.log("weaver-worker: processing cleanup jobs");
 

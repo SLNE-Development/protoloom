@@ -2,7 +2,7 @@ import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
 
 /**
- * Validates the worker's environment: the database, Valkey, and the blob storage settings.
+ * Validates the worker's environment: the database, Valkey, the server secret, and the blob storage settings.
  * Empty strings count as unset. Per-driver storage requirements (a path for `local`, bucket and
  * credentials for `s3`) are enforced by `createBlobStoreFromEnv`.
  */
@@ -11,6 +11,7 @@ export function loadEnv(runtimeEnv: Record<string, string | undefined>) {
     server: {
       DATABASE_URL: z.url(),
       VALKEY_URL: z.url(),
+      BETTER_AUTH_SECRET: z.string().min(32),
       STORAGE_DRIVER: z.enum(["local", "s3"]),
       STORAGE_LOCAL_PATH: z.string().optional(),
       S3_ENDPOINT: z.url().optional(),
