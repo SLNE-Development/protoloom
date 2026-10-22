@@ -39,11 +39,6 @@ export function kindUsesIncludeReleases(format: Format, kind: CleanupKind): bool
   return kind === "delete_not_downloaded" && RELEASE_FORMATS.has(format);
 }
 
-/** Whether `includeReleases` may be set at all on a policy of a `format` repository. */
-export function formatHasReleases(format: Format): boolean {
-  return RELEASE_FORMATS.has(format);
-}
-
 /** The cleanup kinds a repository of `format` can have, in the order the dialog offers them. */
 export function policyKinds(format: Format): readonly CleanupKind[] {
   return CLEANUP_KINDS_BY_FORMAT[format];

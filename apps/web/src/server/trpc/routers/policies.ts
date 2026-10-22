@@ -12,7 +12,7 @@ import {
 } from "@weaver/core";
 import { cleanupPolicy, type Db, type Tx } from "@weaver/db";
 import { enqueueCleanup, getJobState, type CleanupJobStatus } from "@weaver/jobs";
-import { formatHasReleases, isValidScopePrefix, isValidTagPattern, POLICY_TEXT_MAX, POLICY_VALUE_MAX } from "@/lib/cleanup-policies";
+import { isValidScopePrefix, kindUsesIncludeReleases, isValidTagPattern, POLICY_TEXT_MAX, POLICY_VALUE_MAX } from "@/lib/cleanup-policies";
 import { cleanupRegistry } from "../../cleanups";
 import { adminProcedure, router, type TrpcContext } from "../init";
 import { audited, notFound, repositoryName, requireRepository, type RepositoryRow } from "../helpers";
@@ -84,7 +84,7 @@ async function requireHosted(db: Db | Tx, name: string): Promise<RepositoryRow> 
 /**
  * Throws `BAD_REQUEST` unless `policy` fits a repository of `repo.format`: a kind of the format, a
  * scope prefix valid for it, a pattern exactly when the kind uses one, and `includeReleases` only
- * where the format has releases (proto and maven).
+ * on `delete_not_downloaded` of a format with releases (proto and maven).
  */
 function checkPolicy(
   repo: RepositoryRow,
@@ -103,8 +103,8 @@ function checkPolicy(
   } else if (policy.pattern !== null) {
     throw badRequest(`A ${policy.kind} policy takes no pattern`);
   }
-  if (policy.includeReleases && !formatHasReleases(format)) {
-    throw badRequest(`includeReleases does not apply to ${format} repositories`);
+  if (policy.includeReleases && !kindUsesIncludeReleases(format, policy.kind)) {
+    throw badRequest(`includeReleases does not apply to ${policy.kind} on ${format} repositories`);
   }
 }
 

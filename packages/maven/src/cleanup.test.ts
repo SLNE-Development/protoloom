@@ -9,8 +9,11 @@ import { startMavenFixture, type MavenFixture } from "./testing/fixture.js";
 
 const DAY = 86_400_000;
 
-/** `lib-1.0-<timestamp>-<n>` file names of a build of org.example:lib:1.0-SNAPSHOT. */
-const stamp = (n: number) => `20261001.12000${n}-${n}`;
+/** The `yyyyMMdd.HHmmss` UTC timestamp Maven puts in snapshot file names. */
+const mavenTimestamp = (at: Date) => at.toISOString().replace(/[-:]/g, "").replace("T", ".").slice(0, 15);
+
+/** The `<timestamp>-<n>` of build `n`, deployed `n` seconds after 2026-10-01 12:00 UTC unless `at` is given. */
+const stamp = (n: number, at = new Date(Date.UTC(2026, 9, 1, 12, 0, n))) => `${mavenTimestamp(at)}-${n}`;
 
 describe("maven cleanup", () => {
   let fx: MavenFixture;
@@ -48,14 +51,28 @@ describe("maven cleanup", () => {
     await put(repo, `${dir}/${artifactId}-${version}.pom`);
   }
 
-  /** Publishes build `n` of `g:a:<base>-SNAPSHOT` as timestamped jar + jar.sha1 + pom (+ sources jar). */
-  async function publishSnapshotBuild(repo: Repo, groupId: string, artifactId: string, base: string, n: number, sources = false) {
+  /**
+   * Publishes build `n` of `g:a:<base>-SNAPSHOT` as timestamped jar + jar.sha1 + pom, plus a sources
+   * jar and a signed jar (`.asc`, `.asc.sha1`) when asked; `at` is the deploy time in the file names.
+   */
+  async function publishSnapshotBuild(
+    repo: Repo,
+    groupId: string,
+    artifactId: string,
+    base: string,
+    n: number,
+    opts: { sources?: boolean; signed?: boolean; at?: Date } = {},
+  ) {
     const dir = `${groupId.replaceAll(".", "/")}/${artifactId}/${base}-SNAPSHOT`;
-    const file = `${artifactId}-${base}-${stamp(n)}`;
+    const file = `${artifactId}-${base}-${stamp(n, opts.at)}`;
     await put(repo, `${dir}/${file}.jar`);
     await put(repo, `${dir}/${file}.jar.sha1`, "0123");
     await put(repo, `${dir}/${file}.pom`);
-    if (sources) await put(repo, `${dir}/${file}-sources.jar`);
+    if (opts.sources) await put(repo, `${dir}/${file}-sources.jar`);
+    if (opts.signed) {
+      await put(repo, `${dir}/${file}.jar.asc`, "-----BEGIN PGP SIGNATURE-----");
+      await put(repo, `${dir}/${file}.jar.asc.sha1`, "4567");
+    }
   }
 
   /** A cleanup policy row for `repo` (not stored; the format cleanup takes rows). */
@@ -90,7 +107,7 @@ describe("maven cleanup", () => {
         and(eq(component.repositoryId, repo.id), eq(component.namespace, namespace), eq(component.name, name), eq(component.version, version)),
       )
       .returning({ id: component.id });
-    await fx.deps.db.update(asset).set({ createdAt: published }).where(eq(asset.componentId, row!.id));
+    await fx.deps.db.update(asset).set({ createdAt: published, updatedAt: published }).where(eq(asset.componentId, row!.id));
   }
 
   const later = (days: number) => new Date(Date.now() + days * DAY);
@@ -117,7 +134,7 @@ describe("maven cleanup", () => {
 
   it("keep_last_snapshot_builds 2 deletes all files of older builds and their checksums", async () => {
     const repo = await hostedRepo();
-    for (let n = 1; n <= 4; n++) await publishSnapshotBuild(repo, "org.example", "lib", "1.0", n, n <= 3);
+    for (let n = 1; n <= 4; n++) await publishSnapshotBuild(repo, "org.example", "lib", "1.0", n, { sources: n <= 3 });
     await publishRelease(repo, "org.example", "lib", "0.9");
     const dir = "org/example/lib/1.0-SNAPSHOT";
 
@@ -170,11 +187,11 @@ describe("maven cleanup", () => {
 
   it("delete_stale_snapshots 30 deletes a snapshot version not published to for 30 days and keeps releases", async () => {
     const repo = await hostedRepo();
-    await publishSnapshotBuild(repo, "org.example", "lib", "1.0", 1);
-    await publishSnapshotBuild(repo, "org.example", "lib", "1.0", 2);
-    await publishSnapshotBuild(repo, "org.example", "lib", "2.0", 1);
-    await publishRelease(repo, "org.example", "lib", "0.9");
     const now = later(0);
+    await publishSnapshotBuild(repo, "org.example", "lib", "1.0", 1, { at: new Date(now.getTime() - 32 * DAY) });
+    await publishSnapshotBuild(repo, "org.example", "lib", "1.0", 2, { at: new Date(now.getTime() - 31 * DAY) });
+    await publishSnapshotBuild(repo, "org.example", "lib", "2.0", 1, { at: new Date(now.getTime() - 10 * DAY) });
+    await publishRelease(repo, "org.example", "lib", "0.9");
     await age(repo, "org.example:lib:1.0-SNAPSHOT", now, 31);
     await age(repo, "org.example:lib:2.0-SNAPSHOT", now, 10);
     await age(repo, "org.example:lib:0.9", now, 400);
@@ -198,6 +215,58 @@ describe("maven cleanup", () => {
     expect(xml).toContain("<version>0.9</version>");
     expect(xml).toContain("<version>2.0-SNAPSHOT</version>");
     expect((await get(repo, "org/example/lib/1.0-SNAPSHOT/maven-metadata.xml")).status).toBe(404);
+  });
+
+  it("a timestamped snapshot is aged by its newest build stamp, not by when its rows were written", async () => {
+    const repo = await hostedRepo();
+    const now = later(0);
+    // Uploaded just now, but stamped 40 days ago (e.g. copied in from another repository).
+    await publishSnapshotBuild(repo, "org.example", "lib", "1.0", 1, { at: new Date(now.getTime() - 40 * DAY) });
+    // Rows aged 40 days, but the newest build is stamped yesterday.
+    await publishSnapshotBuild(repo, "org.example", "lib", "2.0", 1, { at: new Date(now.getTime() - 41 * DAY) });
+    await publishSnapshotBuild(repo, "org.example", "lib", "2.0", 2, { at: new Date(now.getTime() - DAY) });
+    await age(repo, "org.example:lib:2.0-SNAPSHOT", now, 40);
+
+    const planned = await mavenCleanup.run(deps, repo, [policy(repo, { kind: "delete_stale_snapshots", value: 30 })], now, {
+      dryRun: true,
+    });
+    expect(planned.map((c) => c.key)).toEqual(["maven:org.example:lib:1.0-SNAPSHOT#all"]);
+  });
+
+  it("a fixed-name snapshot re-deployed in place survives delete_stale_snapshots", async () => {
+    const repo = await hostedRepo();
+    const dir = "org/example/lib/1.0-SNAPSHOT";
+    await put(repo, `${dir}/lib-1.0-SNAPSHOT.jar`, "first");
+    await put(repo, `${dir}/lib-1.0-SNAPSHOT.pom`, "first");
+    const now = later(0);
+    await age(repo, "org.example:lib:1.0-SNAPSHOT", now, 40);
+    const stale = [policy(repo, { kind: "delete_stale_snapshots", value: 30 })];
+    // Not deployed for 40 days: planned.
+    expect((await mavenCleanup.run(deps, repo, stale, now, { dryRun: true })).map((c) => c.key)).toEqual([
+      "maven:org.example:lib:1.0-SNAPSHOT#all",
+    ]);
+
+    // Re-deployed in place today: the upsert keeps createdAt, so the deploy time comes from updatedAt.
+    await put(repo, `${dir}/lib-1.0-SNAPSHOT.jar`, "second");
+    expect(await mavenCleanup.run(deps, repo, stale, now, { dryRun: false })).toEqual([]);
+    expect(await pathsOf(repo)).toEqual([`${dir}/lib-1.0-SNAPSHOT.jar`, `${dir}/lib-1.0-SNAPSHOT.pom`]);
+    expect(await (await get(repo, `${dir}/lib-1.0-SNAPSHOT.jar`)).text()).toBe("second");
+  });
+
+  it("signatures and their checksums go with their build", async () => {
+    const repo = await hostedRepo();
+    for (let n = 1; n <= 2; n++) await publishSnapshotBuild(repo, "org.example", "lib", "1.0", n, { signed: true });
+    const dir = "org/example/lib/1.0-SNAPSHOT";
+
+    const deleted = await mavenCleanup.run(deps, repo, [policy(repo, { kind: "keep_last_snapshot_builds", value: 1 })], new Date(), {
+      dryRun: false,
+    });
+    expect(deleted.map((c) => c.key)).toEqual(["maven:org.example:lib:1.0-SNAPSHOT#1"]);
+    expect((await pathsOf(repo)).sort()).toEqual(
+      [`lib-1.0-${stamp(2)}.jar`, `lib-1.0-${stamp(2)}.jar.asc`, `lib-1.0-${stamp(2)}.jar.asc.sha1`, `lib-1.0-${stamp(2)}.jar.sha1`, `lib-1.0-${stamp(2)}.pom`].map(
+        (f) => `${dir}/${f}`,
+      ),
+    );
   });
 
   it("delete_not_downloaded 30 spares releases unless includeReleases, and keeps what was downloaded recently", async () => {

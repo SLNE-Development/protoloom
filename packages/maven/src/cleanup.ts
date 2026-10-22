@@ -10,7 +10,7 @@ import {
 } from "@weaver/core";
 import { asset, component, type Db, type Tx } from "@weaver/db";
 import { lockMavenArtifact } from "./hosted.js";
-import { classifyStoredPath } from "./path.js";
+import { classifyStoredPath, type SnapshotStamp } from "./path.js";
 
 const DAY_MS = 86_400_000;
 const SNAPSHOT_SUFFIX = "-SNAPSHOT";
@@ -22,6 +22,8 @@ type MavenRepo = Pick<Repo, "id" | "name">;
 interface VersionFile {
   asset: AssetRow;
   buildNumber: number | null;
+  /** When the file was last deployed; see {@link deployedAt}. */
+  deployedAt: Date;
 }
 
 /** A hosted version (one component) with its files and the times the rules look at. */
@@ -33,7 +35,7 @@ interface VersionState {
   isSnapshot: boolean;
   createdAt: Date;
   lastDownloadedAt: Date | null;
-  /** When a file was last published to the version: the newest file creation time. */
+  /** When a file was last deployed to the version: the newest {@link VersionFile.deployedAt}. */
   lastPublishedAt: Date;
   files: VersionFile[];
 }
@@ -65,10 +67,31 @@ const cutoff = (now: Date, days: number) => new Date(now.getTime() - Math.max(1,
 /** Whether a policy scoped to `prefix` (a plain groupId prefix; null = everything) covers `groupId`. */
 const inScope = (prefix: string | null, groupId: string) => prefix === null || groupId.startsWith(prefix);
 
-/** The snapshot build number in a stored file name, or null when the file is not a timestamped snapshot file. */
-function buildNumberOf(path: string): number | null {
+/** The stamp in a stored file name, or null when the file is not a timestamped snapshot file. */
+function stampOf(path: string): SnapshotStamp | null {
   const parsed = classifyStoredPath(path);
-  return parsed.type === "file" && parsed.snapshot && parsed.stamp !== null ? parsed.stamp.buildNumber : null;
+  return parsed.type === "file" && parsed.snapshot ? parsed.stamp : null;
+}
+
+/** A Maven `yyyyMMdd.HHmmss` UTC timestamp as a date, or null when it is not a valid time. */
+function parseMavenTimestamp(text: string): Date | null {
+  const m = /^(\d{4})(\d{2})(\d{2})\.(\d{2})(\d{2})(\d{2})$/.exec(text);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, se] = m.map(Number) as [number, number, number, number, number, number, number];
+  const date = new Date(Date.UTC(y, mo - 1, d, h, mi, se));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/**
+ * When a file was last deployed. A timestamped snapshot file is deployed once under its unique
+ * name, so its stamp tells; for any other file the newer of `createdAt` and `updatedAt`, because a
+ * file re-deployed in place (e.g. `lib-1.0-SNAPSHOT.jar`) keeps its row and only `updatedAt`
+ * moves. `updatedAt` also moves on downloads, which can only keep a version longer, never shorter.
+ */
+function deployedAt(a: AssetRow, stamp: SnapshotStamp | null): Date {
+  const stamped = stamp === null ? null : parseMavenTimestamp(stamp.timestamp);
+  if (stamped) return stamped;
+  return a.updatedAt > a.createdAt ? a.updatedAt : a.createdAt;
 }
 
 /**
@@ -96,13 +119,15 @@ async function loadVersions(q: Db | Tx, repositoryId: string, artifact?: { group
         isSnapshot: c.version.endsWith(SNAPSHOT_SUFFIX),
         createdAt: c.createdAt,
         lastDownloadedAt: c.lastDownloadedAt,
-        lastPublishedAt: a.createdAt,
+        lastPublishedAt: new Date(0),
         files: [],
       };
       byComponent.set(c.id, state);
     }
-    if (a.createdAt > state.lastPublishedAt) state.lastPublishedAt = a.createdAt;
-    state.files.push({ asset: a, buildNumber: state.isSnapshot ? buildNumberOf(a.path) : null });
+    const stamp = state.isSnapshot ? stampOf(a.path) : null;
+    const file: VersionFile = { asset: a, buildNumber: stamp?.buildNumber ?? null, deployedAt: deployedAt(a, stamp) };
+    if (file.deployedAt > state.lastPublishedAt) state.lastPublishedAt = file.deployedAt;
+    state.files.push(file);
   }
   return [...byComponent.values()];
 }

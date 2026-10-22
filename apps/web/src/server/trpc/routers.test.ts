@@ -970,7 +970,7 @@ describe("policies", () => {
     expect(switched).toMatchObject({ kind: "delete_untagged_manifests", pattern: null });
   });
 
-  it("includeReleases true is refused on npm and docker repositories", async () => {
+  it("includeReleases true is refused on npm and docker repositories and on kinds that ignore it", async () => {
     const caller = call(admin());
     await caller.repositories.create({ name: "images", format: "docker", kind: "hosted" });
     await caller.repositories.create({ name: "pkgs", format: "npm", kind: "hosted" });
@@ -992,6 +992,11 @@ describe("policies", () => {
         groupPrefix: "org.example",
       }),
     ).toMatchObject({ includeReleases: true, groupPrefix: "org.example" });
+    // Only delete_not_downloaded reads includeReleases; every other kind refuses it.
+    for (const kind of ["keep_last_snapshot_builds", "delete_stale_snapshots"] as const) {
+      expect(await codeOf(caller.policies.upsert({ repository: "libs", kind, value: 3, includeReleases: true }))).toBe("BAD_REQUEST");
+      expect(await codeOf(caller.policies.upsert({ repository: "shared", kind, value: 3, includeReleases: true }))).toBe("BAD_REQUEST");
+    }
   });
 
   it("validates the scope prefix per format", async () => {
