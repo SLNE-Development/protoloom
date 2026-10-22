@@ -89,7 +89,12 @@ export async function serveFormatHandler(handler: FormatHandler, mount = "/api/v
       .handler(toRequest(req, origin), pathname.slice(mount.length))
       .then((response) => writeResponse(response, res))
       .catch((error: unknown) => {
-        if (!res.headersSent) res.writeHead(500);
+        // A body that fails after the headers went out breaks the connection off, as a crashed upstream would.
+        if (res.headersSent) {
+          res.destroy(error instanceof Error ? error : new Error(String(error)));
+          return;
+        }
+        res.writeHead(500);
         res.end(String(error));
       });
   });

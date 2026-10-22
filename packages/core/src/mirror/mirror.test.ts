@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { Readable } from "node:stream";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
@@ -191,6 +192,38 @@ describe("mirror engine", () => {
     expect(await assetRows()).toHaveLength(0);
     // Nothing cached under the key is not an error.
     await engine.evict(repo, "a/b.json");
+  });
+
+  it("evict keeps a good write that replaced the bad asset after evict looked it up", async () => {
+    up.handler = serve({ "a/b.json": "<html>login</html>" }, "text/html");
+    const repo = await mirror(cached);
+    await readText((await engine.fetch({ repo, path: "a/b.json", subject: "a/b.json", class: "metadata" }))!);
+    await engine.drain();
+    const [bad] = await assetRows();
+
+    // Between evict's lookup and its delete, a concurrent write stores a good body under the same key.
+    const racing: AssetService = {
+      ...assets,
+      async find(repoId, path) {
+        const row = await assets.find(repoId, path);
+        await assets.put({ repo, path, body: Readable.from([Buffer.from("{}")]), contentType: "application/json", origin: "cache", store: "local" });
+        return row;
+      },
+    };
+    const racingEngine = createMirrorEngine({ db: testDb.db, stores, repos, assets: racing, settings });
+    await racingEngine.evict(repo, "a/b.json");
+
+    const rows = await assetRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(bad!.id);
+    expect(rows[0]!.storageKey).not.toBe(bad!.storageKey);
+    expect(rows[0]!.contentType).toBe("application/json");
+    // The good object is still stored; the bad one went with the write that replaced it.
+    const good = await assets.find(repo.id, "a/b.json");
+    const read = await assets.open(good!);
+    expect(read).not.toBeNull();
+    expect(Buffer.concat(await read!.body.toArray()).toString()).toBe("{}");
+    expect(await filesIn(blobDir)).toHaveLength(1);
   });
 
   it("evict deletes the asset of a custom cache key only", async () => {

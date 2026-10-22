@@ -5,7 +5,6 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@w
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@weaver/ui/components/table";
 import { KindBadge, PageContainer, PageHeader, Panel, RelativeTime, SectionTitle } from "@/components/browse-ui";
 import { UsageSnippet } from "@/components/usage-snippet";
-import { env } from "@/env";
 import { artifactHref, listingMetadataInput, repositoryHref } from "@/lib/browse";
 import { pageMetadata } from "@/lib/seo";
 import { visibleRepository } from "@/server/browse-metadata";
@@ -106,7 +105,6 @@ export default async function ArtifactPage({ params }: { params: Promise<Params>
               </SectionTitle>
               <UsageSnippet
                 stacked
-                url={env.BETTER_AUTH_URL}
                 repository={repo}
                 coordinate={`${group}:${name}:${usageVersion.version}`}
               />

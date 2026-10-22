@@ -345,7 +345,7 @@ export default async function VersionPage({
         </TabsContent>
 
         <TabsContent value="usage">
-          <UsageSnippet {...snippet} />
+          <UsageSnippet repository={repo} coordinate={coordinate} />
         </TabsContent>
       </Tabs>
     </PageContainer>

@@ -603,6 +603,122 @@ describe("browse by format", () => {
   });
 });
 
+describe("proto browse by kind", () => {
+  const upstreamUrl = "https://protos.example.com/api/v1";
+
+  /** Creates the public proto mirror `upstream-protos`, caching or not, and returns its id. */
+  async function createMirror(caching: boolean) {
+    await call(admin()).repositories.create({
+      name: "upstream-protos",
+      format: "proto",
+      kind: "mirror",
+      visibility: "public",
+      upstreams: [
+        { url: upstreamUrl, authType: "none" },
+        { url: "https://fallback.example.com/api/v1", authType: "none" },
+      ],
+      config: { cache: { enabled: caching }, rules: { deny: ["secret.*"] } },
+    });
+    const [row] = await db.select({ id: repository.id }).from(repository).where(eq(repository.name, "upstream-protos"));
+    return row!.id;
+  }
+
+  /** Inserts a cached asset of the mirror at `path`, linked to the component of `coordinate`. */
+  async function cached(
+    repoId: string,
+    path: string,
+    coordinate: string,
+    opts: { lastAccessedAt: Date | null; expiresAt?: Date | null; size?: number },
+  ) {
+    const [namespace, name, version] = coordinate.split(":") as [string, string, string];
+    const [comp] = await db.insert(component).values({ repositoryId: repoId, namespace, name, version }).onConflictDoNothing().returning();
+    await db.insert(asset).values({
+      repositoryId: repoId,
+      componentId: comp?.id ?? null,
+      path,
+      store: "local",
+      storageKey: `k/${randomUUID()}`,
+      size: opts.size ?? 100,
+      md5: "m",
+      sha1: "s1",
+      sha256: "s256",
+      sha512: "s512",
+      origin: "cache",
+      expiresAt: opts.expiresAt ?? null,
+      lastAccessedAt: opts.lastAccessedAt,
+    });
+  }
+
+  it("protoCache lists cached archives of a caching mirror", async () => {
+    const id = await createMirror(true);
+    await cached(id, "artifacts/acme/money/1.0.0/archive", "acme:money:1.0.0", { lastAccessedAt: new Date("2026-10-01T00:00:00Z"), size: 321 });
+    await cached(id, "artifacts/acme/money/1.1.0-SNAPSHOT/archive?build=2", "acme:money:1.1.0-SNAPSHOT", {
+      lastAccessedAt: new Date("2026-10-20T00:00:00Z"),
+      expiresAt: new Date("2026-10-20T00:30:00Z"),
+    });
+    // Manifests and version lists are cached too, but only archives are listed.
+    await cached(id, "artifacts/acme/money/1.0.0", "acme:money:1.0.0", { lastAccessedAt: new Date("2026-10-21T00:00:00Z"), expiresAt: new Date() });
+    await cached(id, "artifacts/acme/money", "acme:money:", { lastAccessedAt: new Date("2026-10-21T00:00:00Z"), expiresAt: new Date() });
+    await cached(id, "artifacts/acme/order/2.0.0/archive", "acme:order:2.0.0", { lastAccessedAt: null });
+
+    const listing = await call(viewer()).browse.protoCache({ repository: "upstream-protos" });
+    expect(listing).toEqual({
+      caching: true,
+      upstream: null,
+      items: [
+        { coordinate: "acme:money:1.1.0-SNAPSHOT", buildNumber: 2, size: 100, lastAccessedAt: new Date("2026-10-20T00:00:00Z"), cache: "metadata" },
+        { coordinate: "acme:money:1.0.0", buildNumber: null, size: 321, lastAccessedAt: new Date("2026-10-01T00:00:00Z"), cache: "immutable" },
+        { coordinate: "acme:order:2.0.0", buildNumber: null, size: 100, lastAccessedAt: null, cache: "immutable" },
+      ],
+    });
+    expect(JSON.stringify(listing)).not.toContain("secret.*");
+    expect(await codeOf(call(viewer()).browse.protoCache({ repository: "shared" }))).toBe("BAD_REQUEST");
+  });
+
+  it("protoCache reports caching false and the first upstream url when caching is off", async () => {
+    await createMirror(false);
+    expect(await call(admin()).browse.protoCache({ repository: "upstream-protos" })).toEqual({ caching: false, upstream: upstreamUrl, items: [] });
+    // Upstream URLs are admin-only, like the rest of the mirror config.
+    for (const caller of [call(viewer()), call(anonymous, anonymousViewOn)]) {
+      expect(await caller.browse.protoCache({ repository: "upstream-protos" })).toEqual({ caching: false, upstream: null, items: [] });
+    }
+  });
+
+  it("protoMembers returns members in group order", async () => {
+    await createMirror(false);
+    await call(admin()).repositories.create({
+      name: "all",
+      format: "proto",
+      kind: "group",
+      visibility: "public",
+      members: ["upstream-protos", "internal", "shared"],
+    });
+    expect(await call(viewer()).browse.protoMembers({ repository: "all" })).toEqual([
+      { name: "upstream-protos", kind: "mirror", visibility: "public" },
+      { name: "internal", kind: "hosted", visibility: "private" },
+      { name: "shared", kind: "hosted", visibility: "public" },
+    ]);
+    // Visitors only see the members they could browse themselves.
+    expect((await call(anonymous, anonymousViewOn).browse.protoMembers({ repository: "all" })).map((m) => m.name)).toEqual([
+      "upstream-protos",
+      "shared",
+    ]);
+    expect(await codeOf(call(viewer()).browse.protoMembers({ repository: "shared" }))).toBe("BAD_REQUEST");
+  });
+
+  it("browse.versions on a proto mirror is NOT_FOUND", async () => {
+    await createMirror(true);
+    await call(admin()).repositories.create({ name: "all", format: "proto", kind: "group", members: ["shared"] });
+    const caller = call(admin());
+    for (const repository of ["upstream-protos", "all"]) {
+      expect(await codeOf(caller.browse.versions({ repository, group: "acme", name: "money" }))).toBe("NOT_FOUND");
+      expect(await codeOf(caller.browse.artifacts({ repository }))).toBe("NOT_FOUND");
+      expect(await codeOf(caller.browse.version({ repository, coordinate: "acme:money:1.0.0" }))).toBe("NOT_FOUND");
+      expect(await codeOf(caller.browse.file({ repository, coordinate: "acme:money:1.0.0", path: "a.proto" }))).toBe("NOT_FOUND");
+    }
+  });
+});
+
 describe("maven", () => {
   /** Inserts a component with one asset per file name below its version directory. */
   async function deploy(repo: string, groupId: string, artifactId: string, version: string, files: string[]) {

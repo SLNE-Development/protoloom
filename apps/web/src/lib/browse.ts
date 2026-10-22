@@ -17,14 +17,18 @@ export function archiveHref(repository: string, group: string, name: string, ver
   return `/api/v1/repos/${r}/artifacts/${g}/${n}/${v}/archive`;
 }
 
-/** What a usage snippet needs: the public base URL, the repository and the `group:name:version`. */
+/**
+ * What a usage snippet needs: the public base URL, the repository (hosted, mirror or group) and,
+ * for a version's snippet, the `group:name:version`. Without a coordinate the snippet sets up the
+ * repository only.
+ */
 export interface SnippetInput {
   url: string;
   repository: string;
-  coordinate: string;
+  coordinate?: string;
 }
 
-/** Gradle (Kotlin DSL) setup that fetches the artifact with the Weaver plugin. */
+/** Gradle (Kotlin DSL) setup with the Weaver plugin: the repository, and the artifact or a commented template. */
 export function gradleSnippet({ url, repository, coordinate }: SnippetInput): string {
   return [
     "weaver {",
@@ -34,14 +38,14 @@ export function gradleSnippet({ url, repository, coordinate }: SnippetInput): st
     "}",
     "",
     "dependencies {",
-    `    weaver("${coordinate}")`,
+    coordinate === undefined ? '    // weaver("group:name:version")' : `    weaver("${coordinate}")`,
     "}",
   ].join("\n");
 }
 
-/** A `weaver.json` for `weaver fetch` that fetches the artifact into `./protos`. */
+/** A `weaver.json` for `weaver fetch` that fetches into `./protos`: the artifact, or no dependencies yet. */
 export function weaverJsonSnippet({ url, repository, coordinate }: SnippetInput): string {
-  return JSON.stringify({ url, repositories: [repository], dependencies: [coordinate], outDir: "./protos" }, null, 2);
+  return JSON.stringify({ url, repositories: [repository], dependencies: coordinate === undefined ? [] : [coordinate], outDir: "./protos" }, null, 2);
 }
 
 /** A node of a version's file tree. Folder names may span several path segments (collapsed chains). */

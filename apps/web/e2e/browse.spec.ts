@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { count, eq } from "drizzle-orm";
 import { createDb, protoArtifact as artifact, protoVersion as version, repository, setting } from "@weaver/db";
-import { STATE_FILE, USERS } from "./fixtures";
+import { ARTIFACTS, MIRROR_UPSTREAM, STATE_FILE, USERS } from "./fixtures";
 import { loginAs } from "./helpers";
 
 const VERSION_PAGE = "/browse/releases/dev.example/demo/1.0.0";
@@ -225,6 +225,33 @@ test.describe("artifact browser", () => {
     await expect(dialog.getByRole("option", { name: "Theme: Dark" })).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("Enter");
     await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+  });
+
+  test("proto mirror without caching shows the upstream note", async ({ page }) => {
+    await loginAs(page, USERS.admin.id);
+    await page.goto(`/browse/${ARTIFACTS.mirror}`);
+    const note = page.getByText("This mirror does not cache; its content lives upstream at");
+    await expect(note).toBeVisible();
+    await expect(note).toContainText(MIRROR_UPSTREAM);
+    await expect(page.getByText("weaver.json")).toBeVisible();
+
+    // The upstream URL is mirror config, which only admins see.
+    await loginAs(page, USERS.viewer.id);
+    await page.goto(`/browse/${ARTIFACTS.mirror}`);
+    await expect(page.getByText("This mirror does not cache")).toBeVisible();
+    await expect(page.getByText(MIRROR_UPSTREAM)).toHaveCount(0);
+  });
+
+  test("proto group page links each member", async ({ page }) => {
+    await loginAs(page, USERS.viewer.id);
+    await page.goto(`/browse/${ARTIFACTS.group}`);
+    const members = page.getByTestId("group-members");
+    await expect(members.getByRole("link")).toHaveCount(2);
+    await members.getByRole("link", { name: ARTIFACTS.releases, exact: true }).click();
+    await expect(page).toHaveURL(`/browse/${ARTIFACTS.releases}`);
+    await page.goto(`/browse/${ARTIFACTS.group}`);
+    await page.getByTestId("group-members").getByRole("link", { name: ARTIFACTS.mirror, exact: true }).click();
+    await expect(page).toHaveURL(`/browse/${ARTIFACTS.mirror}`);
   });
 
   test("version pages register Copy coordinate in the command dialog", async ({ page, context }) => {
