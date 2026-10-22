@@ -8,7 +8,7 @@ const SAMPLE = [
 ] as const;
 
 /**
- * Page frame of the signed-out screens (login, invite): a dark brand panel with the logo, the
+ * Page frame of the signed-out screens (login, invite) and the npm login authorization: a dark brand panel with the logo, the
  * product's purpose and a sample of what it serves, next to the actual form. On narrow screens the
  * panel shrinks to a header above the form.
  */
@@ -17,11 +17,14 @@ export function AuthFrame({
   description,
   children,
   footer,
+  wide = false,
 }: {
   title: string;
   description: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
+  /** Gives the form column room for wider forms (the npm login key form). */
+  wide?: boolean;
 }) {
   return (
     <div className="grid min-h-svh grid-rows-[auto_1fr] bg-background lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:grid-rows-1">
@@ -54,7 +57,7 @@ export function AuthFrame({
       </aside>
 
       <main className="flex items-start justify-center px-4 py-12 sm:px-10 lg:items-center">
-        <div className="flex w-full max-w-sm flex-col gap-8">
+        <div className={wide ? "flex w-full max-w-2xl flex-col gap-8" : "flex w-full max-w-sm flex-col gap-8"}>
           <div className="flex flex-col gap-2">
             <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
             <div className="text-sm text-muted-foreground">{description}</div>
