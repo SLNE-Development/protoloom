@@ -3,6 +3,7 @@ import { createCallerFactory, router } from "./init";
 import { auditRouter } from "./routers/audit";
 import { browseRouter } from "./routers/browse";
 import { dashboardRouter } from "./routers/dashboard";
+import { dockerRouter } from "./routers/docker";
 import { invitesRouter } from "./routers/invites";
 import { keysRouter } from "./routers/keys";
 import { mavenRouter } from "./routers/maven";
@@ -17,6 +18,7 @@ import { versionsRouter } from "./routers/versions";
 export const appRouter = router({
   browse: browseRouter,
   dashboard: dashboardRouter,
+  docker: dockerRouter,
   maven: mavenRouter,
   repositories: repositoriesRouter,
   policies: policiesRouter,

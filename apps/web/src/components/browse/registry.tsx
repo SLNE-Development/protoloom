@@ -3,6 +3,7 @@ import type { Format } from "@weaver/core";
 import type { BrowseRepo as Repo } from "@/server/trpc/routers/browse";
 import { env } from "@/env";
 import { api } from "@/trpc/server";
+import { DockerRepoView } from "./docker/docker-repo-view";
 import { MavenView } from "./maven-view";
 import { ProtoArtifactList } from "./proto-artifact-list";
 
@@ -31,11 +32,22 @@ async function MavenRepositoryView({ repo }: { repo: Repo }) {
   );
 }
 
+/** The docker browse view: the server fetches the overview, the client view browses by the image and digest search params. */
+async function DockerRepositoryView({ repo }: { repo: Repo }) {
+  const overview = await api.docker.overview({ repo: repo.name });
+  return (
+    <Suspense>
+      <DockerRepoView repo={{ name: repo.name, kind: repo.kind, dockerRoot: repo.dockerRoot }} url={env.BETTER_AUTH_URL.replace(/\/+$/, "")} overview={overview} />
+    </Suspense>
+  );
+}
+
 /**
  * The browse view of each format, rendered by `/browse/[repo]` below the common header. A format
  * without an entry shows a "not available yet" empty state; each format plan adds its entry.
  */
 export const BROWSE_VIEWS: Partial<Record<Format, (props: { repo: Repo }) => ReactNode>> = {
+  docker: DockerRepositoryView,
   maven: MavenRepositoryView,
   proto: ProtoRepositoryView,
 };

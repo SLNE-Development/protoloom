@@ -117,6 +117,25 @@ S3_SECRET_ACCESS_KEY=<secret key>
 
 With `S3_ENDPOINT` set, path-style addressing is used, which works with MinIO, SeaweedFS, Garage and most other providers. Create the bucket before you start. To run SeaweedFS next to Weaver, copy the `seaweedfs` and `seaweedfs-init` services from `docker-compose.coolify.yml`.
 
+## Docker registry uploads
+
+Docker layers are spooled to a temporary file on the `app` container before they are stored, so the upload directory needs room for the largest layers you push. Mount a volume there and point `WEAVER_DOCKER_UPLOAD_DIR` at it:
+
+```yaml title="compose.override.yml"
+services:
+  app:
+    environment:
+      WEAVER_DOCKER_UPLOAD_DIR: /uploads
+    volumes:
+      - docker-uploads:/uploads
+volumes:
+  docker-uploads:
+```
+
+Without it, uploads go to `weaver-uploads` in the container's temp directory. Leftover files of abandoned uploads are removed automatically. See [Docker and OCI](/docs/docker) for the clients.
+
+Your reverse proxy must let large request bodies through, or `docker push` fails with `413`. Caddy and Traefik have no limit by default. For nginx, set `client_max_body_size 0;` and `proxy_request_buffering off;` (so uploads stream) in the server block. Cloudflare limits request bodies to 100 MB on most plans, so push larger layers around it.
+
 ## Back up
 
 Back up two things:

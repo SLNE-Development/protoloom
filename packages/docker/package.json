@@ -10,6 +10,14 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./browse": {
+      "types": "./dist/browse.d.ts",
+      "default": "./dist/browse.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
     "./gc": {
       "types": "./dist/gc.d.ts",
       "default": "./dist/gc.js"
