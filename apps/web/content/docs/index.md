@@ -62,5 +62,6 @@ Weaver has three roles for people: `admin`, `maintainer` and `viewer`. Signed-in
 
 - New to this instance? Start with [Join an instance](/docs/join).
 - Ready to ship protos? Read [Publish your first artifact](/docs/publish).
+- Using Maven or Gradle for Java artifacts? Read [Maven and Gradle](/docs/maven).
 - Need protos from another team? Read [Use protos in a project](/docs/consume).
 - Running your own instance? Read [Docker Compose](/docs/self-host/compose).

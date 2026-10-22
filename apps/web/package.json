@@ -23,6 +23,7 @@
     "@weaver/db": "workspace:*",
     "@weaver/docker": "workspace:*",
     "@weaver/jobs": "workspace:*",
+    "@weaver/maven": "workspace:*",
     "@weaver/npm": "workspace:*",
     "@weaver/proto": "workspace:*",
     "@weaver/ui": "workspace:*",

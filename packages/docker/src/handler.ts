@@ -5,6 +5,8 @@ import { challenge, identify, requireAccess, scopeChallenge, scopeFor } from "./
 import type { DockerAction } from "./auth/jwt.js";
 import { handleToken } from "./auth/token-endpoint.js";
 import { DockerError, errorResponse } from "./errors.js";
+import { deleteHostedBlob, serveHostedBlob, type HostedCtx } from "./hosted/blobs.js";
+import { cancelUpload, finishUpload, patchUpload, startUpload, uploadStatus } from "./hosted/uploads.js";
 import { isDigest } from "./media-types.js";
 import { parseRoute, type Route } from "./route.js";
 import { resolveTarget, type Target } from "./target.js";
@@ -15,6 +17,8 @@ export interface DockerOptions {
   uploadDir: string;
   /** The clock, for tests. */
   now?: () => Date;
+  /** Test hook: awaited after a finished upload's object is stored and before its blob row is upserted. */
+  beforeBlobUpsert?: (digest: string, storageKey: string) => Promise<void>;
 }
 
 const UPLOAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -62,10 +66,37 @@ function invalidReference(rest: string): DockerError | null {
     : new DockerError(400, "MANIFEST_INVALID", "invalid manifest reference", { reference });
 }
 
-/** The docker action a request method needs: reads pull, DELETE deletes, everything else pushes. */
-function actionOf(method: string): DockerAction {
+/** The docker action a request needs: every upload request pushes; otherwise reads pull, DELETE deletes, the rest pushes. */
+function actionOf(method: string, route: Route): DockerAction {
+  if (route.kind === "upload" || route.kind === "upload-start") return "push";
   if (method === "GET" || method === "HEAD") return "pull";
   return method === "DELETE" ? "delete" : "push";
+}
+
+function methodNotAllowed(method: string): DockerError {
+  return new DockerError(405, "UNSUPPORTED", `method ${method} not allowed here`);
+}
+
+/** Serves blob and upload routes of a hosted repository; null for routes it does not handle (yet). */
+function dispatchHosted(ctx: HostedCtx, req: Request, route: Route): Promise<Response> | null {
+  const { method } = req;
+  switch (route.kind) {
+    case "blob":
+      if (method === "GET" || method === "HEAD") return serveHostedBlob(ctx, req, route.digest);
+      if (method === "DELETE") return deleteHostedBlob(ctx, route.digest);
+      throw methodNotAllowed(method);
+    case "upload-start":
+      if (method === "POST") return startUpload(ctx, req);
+      throw methodNotAllowed(method);
+    case "upload":
+      if (method === "PATCH") return patchUpload(ctx, req, route.uploadId);
+      if (method === "PUT") return finishUpload(ctx, req, route.uploadId);
+      if (method === "GET") return uploadStatus(ctx, route.uploadId);
+      if (method === "DELETE") return cancelUpload(ctx, route.uploadId);
+      throw methodNotAllowed(method);
+    default:
+      return null;
+  }
 }
 
 /** Builds the docker handler for the `/v2` mount: routing, token endpoint, authentication challenge, authorization and error mapping. */
@@ -88,7 +119,7 @@ export function createDockerHandlerWith(deps: FormatDeps, opts: DockerOptions): 
       });
     }
 
-    const action = actionOf(req.method);
+    const action = actionOf(req.method, route);
     const scope = scopeFor(route.name, action);
     const caller = await identify(deps, req, { now, scope });
     const anonymous = caller.principal.kind === "anonymous";
@@ -104,6 +135,10 @@ export function createDockerHandlerWith(deps: FormatDeps, opts: DockerOptions): 
       throw new DockerError(404, "NAME_UNKNOWN", "repository name not known to registry", { name: route.name });
     }
     requireAccess(deps, caller, target, action);
+    if (target.repo.kind === "hosted") {
+      const served = dispatchHosted({ deps, opts, caller, target }, req, route);
+      if (served) return served;
+    }
     throw new DockerError(501, "UNSUPPORTED", `${route.kind} is not implemented yet`);
   }
 

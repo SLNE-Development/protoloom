@@ -160,8 +160,8 @@ async function resolveDependencies(
     const snapshot = declared.find((d) => isSnapshot(d.version));
     if (snapshot) throw validationFailed(`A release may not depend on snapshot ${formatCoordinate(snapshot)}`);
   }
-  const sources = await publishSources(ctx.db, ctx.repos, p, repo);
-  const { lookup, buildIds } = createLookup(ctx.db, p, sources.repositories, sources.groupGranted);
+  const sources = await publishSources(ctx.db, p, repo);
+  const { lookup, buildIds } = createLookup(ctx.db, p, sources.repositories, sources.viaGroups);
   let resolution: Resolution;
   try {
     resolution = await resolveGraph(declared, lookup);

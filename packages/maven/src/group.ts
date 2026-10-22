@@ -48,8 +48,8 @@ function renderMerged(docs: ParsedMetadata[]): string {
 
 /**
  * Merged metadata XML across the members of a group for a directory, or null when no member has
- * any. Members whose upstream fails are skipped (and logged); when every member that was asked
- * failed, `upstream_unavailable` is thrown.
+ * any. Members whose upstream fails are skipped (and logged); when no member has metadata and at
+ * least one failed, `upstream_unavailable` is thrown, because clients cache a 404 negatively.
  */
 export async function groupMetadataXml(ctx: MavenContext, group: Repo, dir: string): Promise<string | null> {
   const docs: ParsedMetadata[] = [];
@@ -70,7 +70,7 @@ export async function groupMetadataXml(ctx: MavenContext, group: Repo, dir: stri
     if (parsed) docs.push(parsed);
   }
   if (docs.length === 0) {
-    if (asked > 0 && failed === asked) throw new RegistryError("upstream_unavailable", `Every member of ${group.name} is unavailable`);
+    if (failed > 0) throw new RegistryError("upstream_unavailable", `${failed} of ${asked} members of ${group.name} are unavailable and none has this metadata`);
     return null;
   }
   return renderMerged(docs.filter((d) => d.kind === docs[0]!.kind));

@@ -57,6 +57,13 @@
       "when": 1792674996851,
       "tag": "0007_talented_argent",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792679289339,
+      "tag": "0008_dapper_hulk",
+      "breakpoints": true
     }
   ]
 }
