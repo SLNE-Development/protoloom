@@ -18,7 +18,6 @@ allowed_protoloom=(
   "apps/web/content/docs/self-host/coolify.md"
   "apps/web/src/lib/docs.test.ts"
   "scripts/e2e/repo.selftest.sh"
-  "scripts/e2e/workflows.selftest.sh"
 )
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue
