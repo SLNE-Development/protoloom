@@ -306,7 +306,8 @@ describe("the real docs", () => {
     }
   });
 
-  it("have no broken internal /docs links or anchors", async () => {
+  // Renders every page with syntax highlighting; on a busy CI runner that alone nears 30s.
+  it("have no broken internal /docs links or anchors", { timeout: 120_000 }, async () => {
     expect(await findBrokenDocLinks()).toEqual([]);
   });
 
